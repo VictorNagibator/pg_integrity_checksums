@@ -768,3 +768,12 @@ Released under the [MIT License](LICENSE).
 
 * Source code and issue tracker: <https://github.com/VictorNagibator/pg_checksums>
 * Distribution page on PGXN: <https://pgxn.org/dist/pg_checksums/>
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for build and test instructions, coding
+conventions, and pull request requirements. By participating in this project,
+you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+Please report security issues privately according to [SECURITY.md](SECURITY.md),
+not in a public issue.

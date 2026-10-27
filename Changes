@@ -1,5 +1,17 @@
 Revision history for pg_checksums
 
+1.3.2   2026-10-28
+
+    - Performance-only release: all checksum values and SQL APIs are
+      unchanged.
+    - Cache base type, element type and type I/O metadata once per type
+      instead of performing syscache lookups for every cell.
+    - Iterate array elements with array_iter (no intermediate Datum/bool
+      arrays) and keep small composite arguments on the stack.
+    - Avoid duplicate page and tuple validation during physical table scans.
+    - Reuse one BufferAccessStrategy per scan worker, scan 64 blocks per
+      atomic work item, and do not start more workers than there are chunks.
+
 1.3.1   2026-10-24
 
     - Parallelize pg_index_logical_checksum(): the heap scan and index

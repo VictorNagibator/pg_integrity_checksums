@@ -754,8 +754,8 @@ So bump the version in `pg_checksums.control`, `META.json` and `Changes`, add
 the new SQL script (and an upgrade script if needed), and only then tag:
 
 ```bash
-git tag -a v1.3.1 -m "pg_checksums 1.3.1"
-git push origin v1.3.1
+git tag -a v1.3.2 -m "pg_checksums 1.3.2"
+git push origin v1.3.2
 ```
 
 ---

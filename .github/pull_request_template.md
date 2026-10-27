@@ -25,7 +25,7 @@
 - [ ] `README.md` updated if user-visible behavior changed
 - [ ] `Changes` updated
 - [ ] SQL install/upgrade scripts added if the API changed
-- [ ] `pg_checksums.control` / `META.json` updated if needed
+- [ ] `pg_integrity_checksums.control` / `META.json` updated if needed
 - [ ] No build artifacts or secrets committed
 - [ ] No new compiler warnings
 

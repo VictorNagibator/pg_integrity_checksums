@@ -5,9 +5,9 @@
 # environment, so PGXS must be the default (there is no in-tree contrib build
 # path any more).
 
-EXTENSION = pg_checksums
-MODULE_big = pg_checksums
-OBJS = pg_checksums.o
+EXTENSION = pg_integrity_checksums
+MODULE_big = pg_integrity_checksums
+OBJS = pg_integrity_checksums.o
 
 # The control file is the single source of truth for the extension version;
 # the distribution archive name derives from it.
@@ -19,7 +19,7 @@ DATA = $(wildcard $(EXTENSION)--*.sql)
 REGRESS = checksum_basic checksum_database checksum_index checksum_table checksum_stability checksum_parallel checksum_partition checksum_safety checksum_logical
 REGRESS_OPTS = \
     --inputdir=./ \
-    --load-extension=pg_checksums
+    --load-extension=pg_integrity_checksums
 
 # TAP tests are opt-in: they need the PostgreSQL test modules and IPC::Run.
 # Run "make installcheck enable_tap_tests=yes PROVE=prove" to include them.

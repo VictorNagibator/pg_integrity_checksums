@@ -1,4 +1,4 @@
--- Safety, validation and privilege tests for pg_checksums
+-- Safety, validation and privilege tests for pg_integrity_checksums
 
 -- Test A: non-B-tree logical index checksums return NULL and do not crash,
 -- while physical checksums remain available for every supported AM.

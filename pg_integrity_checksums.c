@@ -1,10 +1,10 @@
 /*-------------------------------------------------------------------------
  *
- * pg_checksums.c
+ * pg_integrity_checksums.c
  *    Implementation of multi-level checksum functionality for PostgreSQL
  *
  * This module provides checksum computation at six distinct levels,
- * each with both physical and logical variants (except column level):
+ * each with both physical and logical variants (except cell level):
  *
  * 1. PAGE LEVEL (pg_page_checksum):
  *    - Physical only (wraps PostgreSQL's built-in checksums)
@@ -142,7 +142,7 @@
 #include "miscadmin.h"              
 #include "storage/checksum.h" 
 
-#include "pg_checksums.h"
+#include "pg_integrity_checksums.h"
 
 PG_MODULE_MAGIC;
 
@@ -152,7 +152,7 @@ PG_MODULE_MAGIC;
  */
 
 /*
- * pg_checksums_workers - GUC controlling the number of parallel workers
+ * pg_integrity_checksums_workers - GUC controlling the number of parallel workers
  *
  * A value of 0 (the default) disables parallelism, preserving the original
  * single-backend behavior. A positive value requests a specific number of
@@ -160,16 +160,16 @@ PG_MODULE_MAGIC;
  * relations) being scanned. Parallelism is also skipped when we are already
  * running inside a parallel worker, since workers cannot be nested.
  */
-static int pg_checksums_workers = 0;
+static int pg_integrity_checksums_workers = 0;
 
 /*
- * pg_checksums_strict - GUC controlling database-scan skip behavior
+ * pg_integrity_checksums_strict - GUC controlling database-scan skip behavior
  *
  * When true, a relation that cannot be checksummed (invalid index,
  * unsupported relation kind, or a scan error) aborts the database checksum
  * instead of being skipped with a warning or silently omitted.
  */
-static bool pg_checksums_strict = false;
+static bool pg_integrity_checksums_strict = false;
 
 /*
  * Cached type metadata for canonical logical encoding.  Type names and I/O
@@ -200,10 +200,10 @@ static void logical_type_cache_invalidate(Datum arg, int cacheid,
                                           uint32 hashvalue);
 
 /* Upper bound for the GUC; mirrors the sanity limit of parallel workers. */
-#define PG_CHECKSUMS_MAX_WORKERS 1024
+#define PG_INTEGRITY_CHECKSUMS_MAX_WORKERS 1024
 
 /* Number of blocks claimed per atomic fetch during a parallel scan. */
-#define PG_CHECKSUMS_BLOCK_CHUNK 64
+#define PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK 64
 
 /*
  * _PG_init - extension load-time initialization
@@ -213,21 +213,21 @@ static void logical_type_cache_invalidate(Datum arg, int cacheid,
 void
 _PG_init(void)
 {
-    DefineCustomIntVariable("pg_checksums.workers",
+    DefineCustomIntVariable("pg_integrity_checksums.workers",
                             "Number of parallel workers for checksum computation.",
                             "Zero disables parallelism, a positive value "
                             "requests a specific number of workers.",
-                            &pg_checksums_workers,
-                            0, 0, PG_CHECKSUMS_MAX_WORKERS,
+                            &pg_integrity_checksums_workers,
+                            0, 0, PG_INTEGRITY_CHECKSUMS_MAX_WORKERS,
                             PGC_USERSET, 0,
                             NULL, NULL, NULL);
 
-    DefineCustomBoolVariable("pg_checksums.strict",
+    DefineCustomBoolVariable("pg_integrity_checksums.strict",
                              "Fail instead of skipping relations.",
                              "When enabled, database checksum functions abort "
                              "if a relation cannot be checksummed (invalid "
                              "index, unsupported relation kind, or error).",
-                             &pg_checksums_strict,
+                             &pg_integrity_checksums_strict,
                              false,
                              PGC_USERSET, 0,
                              NULL, NULL, NULL);
@@ -236,7 +236,7 @@ _PG_init(void)
 }
 
 /*
- * pg_checksums_worker_count - determine how many parallel workers to use
+ * pg_integrity_checksums_worker_count - determine how many parallel workers to use
  *
  * Returns 0 when the scan should run in a single backend. This happens
  * when the GUC is non-positive and max_parallel_workers is zero, when we
@@ -244,9 +244,9 @@ _PG_init(void)
  * there is nothing to parallelize.
  */
 static int
-pg_checksums_worker_count(void)
+pg_integrity_checksums_worker_count(void)
 {
-    int         workers = pg_checksums_workers;
+    int         workers = pg_integrity_checksums_workers;
 
     if (workers <= 0)
         return 0;
@@ -269,14 +269,14 @@ pg_checksums_worker_count(void)
 }
 
 /*
- * pg_checksums_get_snapshot - return the snapshot used for heap scans
+ * pg_integrity_checksums_get_snapshot - return the snapshot used for heap scans
  *
  * Uses the active snapshot when one is available and falls back to the
  * transaction snapshot otherwise. Both the serial and parallel code
  * paths use this so that they observe identical tuple sets.
  */
 static Snapshot
-pg_checksums_get_snapshot(void)
+pg_integrity_checksums_get_snapshot(void)
 {
     Snapshot    snapshot = GetActiveSnapshot();
 
@@ -437,14 +437,14 @@ static uint32 pg_tuple_physical_checksum_internal(Relation rel, Page page,
 static uint32 combine_checksums(uint32 current, uint32 new_val);
 
 /* Privilege, relkind and storage validation helpers */
-static void pg_checksums_require_select(Oid reloid);
-static void pg_checksums_check_relation_kind(Relation rel, bool allow_toast,
+static void pg_integrity_checksums_require_select(Oid reloid);
+static void pg_integrity_checksums_check_relation_kind(Relation rel, bool allow_toast,
                                              bool allow_partitioned);
-static bool pg_checksums_relation_has_storage(Relation rel);
-static bool pg_checksums_page_header_sane(Page page);
-static void pg_checksums_check_page(Relation rel, BlockNumber blkno, Page page);
-static bool pg_checksums_item_is_sane(Page page, ItemId lp);
-static void pg_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
+static bool pg_integrity_checksums_relation_has_storage(Relation rel);
+static bool pg_integrity_checksums_page_header_sane(Page page);
+static void pg_integrity_checksums_check_page(Relation rel, BlockNumber blkno, Page page);
+static bool pg_integrity_checksums_item_is_sane(Page page, ItemId lp);
+static void pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
                                          OffsetNumber offnum,
                                          HeapTupleHeader tuple, Size len);
 static void scan_relation_raw_pages(Relation rel, BlockNumber start,
@@ -505,19 +505,19 @@ static void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
                                        BufferAccessStrategy bstrategy);
 static void compute_database_item(Oid relid, char relkind, bool physical,
                                   uint64 *rel_checksum, bool *skip);
-static void pg_checksums_report_skipped_relation(Oid relid);
+static void pg_integrity_checksums_report_skipped_relation(Oid relid);
 static void compute_database_items(ChecksumRelationItem *items, uint32 start,
                                    uint32 end, bool physical,
                                    ChecksumAccum64 *acc,
                                    ChecksumLogicalAccum *logical_acc,
                                    bool *had_error);
 
-static void pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type,
+static void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type,
                                               Oid reloid, bool include_header,
                                               uint32 nblocks, int workers,
                                               ChecksumAccum *acc,
                                               ChecksumLogicalAccum *logical_acc);
-static void pg_checksums_parallel_scan_database(bool physical,
+static void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                 ChecksumRelationItem *items,
                                                 uint32 nitems, int workers,
                                                 ChecksumAccum64 *acc,
@@ -525,7 +525,7 @@ static void pg_checksums_parallel_scan_database(bool physical,
                                                 bool *had_error);
 
 /* Parallel worker entry point (must be a globally visible symbol). */
-PGDLLEXPORT void pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
+PGDLLEXPORT void pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 
 /*-------------------------------------------------------------------------
  * FNV-1a Hash Implementation
@@ -806,7 +806,7 @@ logical_accum_finalize(ChecksumLogicalAccum *acc)
  */
 
 /*
- * pg_checksums_require_select - enforce SELECT privilege and RLS
+ * pg_integrity_checksums_require_select - enforce SELECT privilege and RLS
  *
  * The checksum functions read relation storage directly, without going
  * through the executor.  They must therefore perform the same privilege
@@ -818,7 +818,7 @@ logical_accum_finalize(ChecksumLogicalAccum *acc)
  * is performed on the underlying heap relation.
  */
 static void
-pg_checksums_require_select(Oid reloid)
+pg_integrity_checksums_require_select(Oid reloid)
 {
     Oid         acl_relid = reloid;
     char        relkind = get_rel_relkind(reloid);
@@ -859,11 +859,11 @@ pg_checksums_require_select(Oid reloid)
 }
 
 /*
- * pg_checksums_check_relation_kind - reject relations we cannot checksum
+ * pg_integrity_checksums_check_relation_kind - reject relations we cannot checksum
  * with the heap tuple routines.
  */
 static void
-pg_checksums_check_relation_kind(Relation rel, bool allow_toast,
+pg_integrity_checksums_check_relation_kind(Relation rel, bool allow_toast,
                                  bool allow_partitioned)
 {
     char        relkind = rel->rd_rel->relkind;
@@ -918,10 +918,10 @@ pg_checksums_check_relation_kind(Relation rel, bool allow_toast,
 }
 
 /*
- * pg_checksums_relation_has_storage - can pg_page_checksum() read pages?
+ * pg_integrity_checksums_relation_has_storage - can pg_page_checksum() read pages?
  */
 static bool
-pg_checksums_relation_has_storage(Relation rel)
+pg_integrity_checksums_relation_has_storage(Relation rel)
 {
     switch (rel->rd_rel->relkind)
     {
@@ -937,7 +937,7 @@ pg_checksums_relation_has_storage(Relation rel)
 }
 
 /*
- * pg_checksums_page_header_sane - cheap structural validation of a page
+ * pg_integrity_checksums_page_header_sane - cheap structural validation of a page
  *
  * This mirrors the header checks of PageIsVerified(), without the checksum
  * part.  It is used before following line pointers, so that a corrupted
@@ -945,7 +945,7 @@ pg_checksums_relation_has_storage(Relation rel)
  * supposed to detect the corruption.
  */
 static bool
-pg_checksums_page_header_sane(Page page)
+pg_integrity_checksums_page_header_sane(Page page)
 {
     PageHeader  phdr = (PageHeader) page;
 
@@ -958,15 +958,15 @@ pg_checksums_page_header_sane(Page page)
 }
 
 /*
- * pg_checksums_check_page - raise a clean error for an insane page header
+ * pg_integrity_checksums_check_page - raise a clean error for an insane page header
  */
 static void
-pg_checksums_check_page(Relation rel, BlockNumber blkno, Page page)
+pg_integrity_checksums_check_page(Relation rel, BlockNumber blkno, Page page)
 {
     if (PageIsNew(page))
         return;
 
-    if (!pg_checksums_page_header_sane(page))
+    if (!pg_integrity_checksums_page_header_sane(page))
         ereport(ERROR,
                 (errcode(ERRCODE_DATA_CORRUPTED),
                  errmsg("corrupt page header in relation \"%s\" at block %u",
@@ -974,13 +974,13 @@ pg_checksums_check_page(Relation rel, BlockNumber blkno, Page page)
 }
 
 /*
- * pg_checksums_item_is_sane - validate an item pointer against the page
+ * pg_integrity_checksums_item_is_sane - validate an item pointer against the page
  *
  * Besides ItemIdIsNormal(), check that the tuple lies between pd_upper and
  * pd_special and that its length does not run past the end of that area.
  */
 static bool
-pg_checksums_item_is_sane(Page page, ItemId lp)
+pg_integrity_checksums_item_is_sane(Page page, ItemId lp)
 {
     PageHeader  phdr = (PageHeader) page;
     char       *item;
@@ -1001,11 +1001,11 @@ pg_checksums_item_is_sane(Page page, ItemId lp)
 }
 
 /*
- * pg_checksums_check_heap_tuple - validate the parts of a heap tuple header
+ * pg_integrity_checksums_check_heap_tuple - validate the parts of a heap tuple header
  * that the checksum routines are about to follow.
  */
 static void
-pg_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
+pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
                               OffsetNumber offnum, HeapTupleHeader tuple,
                               Size len)
 {
@@ -1089,9 +1089,9 @@ pg_page_checksum(PG_FUNCTION_ARGS)
     /* Open relation with AccessShareLock to prevent concurrent modifications */
     rel = relation_open(reloid, AccessShareLock);
 
-    pg_checksums_require_select(reloid);
+    pg_integrity_checksums_require_select(reloid);
 
-    if (!pg_checksums_relation_has_storage(rel))
+    if (!pg_integrity_checksums_relation_has_storage(rel))
     {
         char       *relname = pstrdup(RelationGetRelationName(rel));
 
@@ -1207,7 +1207,7 @@ logical_type_info(Oid typid)
         ctl.keysize = sizeof(Oid);
         ctl.entrysize = sizeof(LogicalTypeInfo);
         ctl.hcxt = TopMemoryContext;
-        logical_type_cache = hash_create("pg_checksums logical type cache",
+        logical_type_cache = hash_create("pg_integrity_checksums logical type cache",
                                          64, &ctl,
                                          HASH_ELEM | HASH_BLOBS);
     }
@@ -1694,8 +1694,8 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
     /* Open relation and get tuple descriptor */
     rel = relation_open(reloid, AccessShareLock);
 
-    pg_checksums_require_select(reloid);
-    pg_checksums_check_relation_kind(rel, false, false);
+    pg_integrity_checksums_require_select(reloid);
+    pg_integrity_checksums_check_relation_kind(rel, false, false);
 
     tupdesc = RelationGetDescr(rel);
 
@@ -1728,7 +1728,7 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
     }
 
-    pg_checksums_check_page(rel, blkno, page);
+    pg_integrity_checksums_check_page(rel, blkno, page);
 
     if (offnum < FirstOffsetNumber || offnum > PageGetMaxOffsetNumber(page))
     {
@@ -1747,7 +1747,7 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
     }
 
-    if (!pg_checksums_item_is_sane(page, lp))
+    if (!pg_integrity_checksums_item_is_sane(page, lp))
         ereport(ERROR,
                 (errcode(ERRCODE_DATA_CORRUPTED),
                  errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -1756,7 +1756,7 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
     tuple = (HeapTupleHeader) PageGetItem(page, lp);
     tuple_len = ItemIdGetLength(lp);
 
-    pg_checksums_check_heap_tuple(rel, blkno, offnum, tuple, tuple_len);
+    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple, tuple_len);
 
     /* Create temporary HeapTuple structure for heap_getattr */
     heapTuple.t_len = tuple_len;
@@ -1830,7 +1830,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
 
     if (validate)
     {
-        pg_checksums_check_page(rel, blkno, page);
+        pg_integrity_checksums_check_page(rel, blkno, page);
 
         /* Validate offset number range */
         if (offnum < FirstOffsetNumber ||
@@ -1843,7 +1843,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
         if (!ItemIdIsNormal(lp))
             return 0;
 
-        if (!pg_checksums_item_is_sane(page, lp))
+        if (!pg_integrity_checksums_item_is_sane(page, lp))
             ereport(ERROR,
                     (errcode(ERRCODE_DATA_CORRUPTED),
                      errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -1852,7 +1852,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
         tuple = (HeapTupleHeader) PageGetItem(page, lp);
         len = ItemIdGetLength(lp);
 
-        pg_checksums_check_heap_tuple(rel, blkno, offnum, tuple, len);
+        pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple, len);
     }
     else
     {
@@ -1962,8 +1962,8 @@ pg_tuple_physical_checksum(PG_FUNCTION_ARGS)
 
     rel = relation_open(reloid, AccessShareLock);
 
-    pg_checksums_require_select(reloid);
-    pg_checksums_check_relation_kind(rel, false, false);
+    pg_integrity_checksums_require_select(reloid);
+    pg_integrity_checksums_check_relation_kind(rel, false, false);
 
     blkno = ItemPointerGetBlockNumber(tid);
     offnum = ItemPointerGetOffsetNumber(tid);
@@ -2096,8 +2096,8 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
     /* Open relation */
     rel = relation_open(reloid, AccessShareLock);
 
-    pg_checksums_require_select(reloid);
-    pg_checksums_check_relation_kind(rel, true, false);
+    pg_integrity_checksums_require_select(reloid);
+    pg_integrity_checksums_check_relation_kind(rel, true, false);
 
     /*
      * TOAST tuples are not heap tuples; their logical content is already
@@ -2131,7 +2131,7 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
             missing = true;
         else
         {
-            pg_checksums_check_page(rel, blkno, page);
+            pg_integrity_checksums_check_page(rel, blkno, page);
 
             if (offnum < FirstOffsetNumber ||
                 offnum > PageGetMaxOffsetNumber(page))
@@ -2142,7 +2142,7 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
 
                 if (!ItemIdIsNormal(lp))
                     missing = true;
-                else if (!pg_checksums_item_is_sane(page, lp))
+                else if (!pg_integrity_checksums_item_is_sane(page, lp))
                     ereport(ERROR,
                             (errcode(ERRCODE_DATA_CORRUPTED),
                              errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -2152,7 +2152,7 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
                     tuple = (HeapTupleHeader) PageGetItem(page, lp);
                     tuple_len = ItemIdGetLength(lp);
 
-                    pg_checksums_check_heap_tuple(rel, blkno, offnum, tuple,
+                    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple,
                                                   tuple_len);
 
                     /* Create temporary HeapTuple structure */
@@ -2192,7 +2192,7 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
  */
 
 /*
- * pg_checksums_leaf_partitions - return the OIDs of all leaf partitions
+ * pg_integrity_checksums_leaf_partitions - return the OIDs of all leaf partitions
  * of a partitioned table
  *
  * Uses find_all_inheritors to collect every descendant of the given
@@ -2201,7 +2201,7 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
  * checksum. The list is empty for a partitioned table with no partitions.
  */
 static List *
-pg_checksums_leaf_partitions(Oid reloid)
+pg_integrity_checksums_leaf_partitions(Oid reloid)
 {
     List       *children;
     List       *leaves = NIL;
@@ -2226,7 +2226,7 @@ pg_checksums_leaf_partitions(Oid reloid)
 }
 
 /*
- * pg_checksums_leaf_indexes - return the OIDs of all leaf indexes of a
+ * pg_integrity_checksums_leaf_indexes - return the OIDs of all leaf indexes of a
  * partitioned index
  *
  * Intermediate partitioned indexes are skipped; only ordinary indexes have
@@ -2234,7 +2234,7 @@ pg_checksums_leaf_partitions(Oid reloid)
  * partitions.
  */
 static List *
-pg_checksums_leaf_indexes(Oid indexoid)
+pg_integrity_checksums_leaf_indexes(Oid indexoid)
 {
     List       *children;
     List       *leaves = NIL;
@@ -2318,9 +2318,9 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     rel = relation_open(reloid, AccessShareLock);
 
     if (check_privileges)
-        pg_checksums_require_select(reloid);
+        pg_integrity_checksums_require_select(reloid);
 
-    pg_checksums_check_relation_kind(rel, true, true);
+    pg_integrity_checksums_check_relation_kind(rel, true, true);
 
     /*
      * A partitioned table has no storage of its own: its data lives in the
@@ -2329,7 +2329,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
      */
     if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
     {
-        List       *parts = pg_checksums_leaf_partitions(reloid);
+        List       *parts = pg_integrity_checksums_leaf_partitions(reloid);
         ChecksumAccum64 acc64 = {0, 0};
         ListCell   *lc;
 
@@ -2398,13 +2398,13 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
                                       (uint32) rel->rd_rel->reltablespace);
 
     nblocks = RelationGetNumberOfBlocks(rel);
-    workers = pg_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count();
     if (nblocks < (uint32) workers)
         workers = (int) nblocks;
 
     if (workers < 1)
     {
-        Snapshot    snapshot = pg_checksums_get_snapshot();
+        Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
         scan_table_blocks_physical(rel, 0, nblocks, include_header,
@@ -2413,7 +2413,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     }
     else
     {
-        pg_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
                                           reloid, include_header, nblocks,
                                           workers, &acc, NULL);
     }
@@ -2513,9 +2513,9 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
     rel = relation_open(reloid, AccessShareLock);
 
     if (check_privileges)
-        pg_checksums_require_select(reloid);
+        pg_integrity_checksums_require_select(reloid);
 
-    pg_checksums_check_relation_kind(rel, true, true);
+    pg_integrity_checksums_check_relation_kind(rel, true, true);
 
     relkind = rel->rd_rel->relkind;
 
@@ -2532,7 +2532,7 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
         ListCell   *lc;
         bool        any_null = false;
 
-        parts = pg_checksums_leaf_partitions(reloid);
+        parts = pg_integrity_checksums_leaf_partitions(reloid);
 
         foreach(lc, parts)
         {
@@ -2553,9 +2553,9 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
     }
 
     {
-        Snapshot    snapshot = pg_checksums_get_snapshot();
+        Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
-        int         workers = pg_checksums_worker_count();
+        int         workers = pg_integrity_checksums_worker_count();
 
         if (nblocks < (BlockNumber) workers)
             workers = (int) nblocks;
@@ -2569,7 +2569,7 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
             FreeAccessStrategy(bstrategy);
         }
         else
-            pg_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
+            pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
                                               reloid, false, nblocks, workers,
                                               NULL, acc);
     }
@@ -2645,7 +2645,7 @@ pg_index_physical_checksum(PG_FUNCTION_ARGS)
 static uint32
 pg_index_physical_partitioned_checksum(Oid indexoid, bool *is_null)
 {
-    List       *parts = pg_checksums_leaf_indexes(indexoid);
+    List       *parts = pg_integrity_checksums_leaf_indexes(indexoid);
     ChecksumAccum acc = {0, 0};
     ListCell   *lc;
 
@@ -2700,7 +2700,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
 
     /* Indexes derive their ACL from the underlying heap relation. */
     if (check_privileges)
-        pg_checksums_require_select(indexoid);
+        pg_integrity_checksums_require_select(indexoid);
 
     /*
      * A partitioned index has no storage of its own; aggregate the checksums
@@ -2731,7 +2731,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
 
     is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
     nblocks = RelationGetNumberOfBlocks(idxRel);
-    workers = pg_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count();
     if (nblocks < (uint32) workers)
         workers = (int) nblocks;
 
@@ -2744,7 +2744,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
         FreeAccessStrategy(bstrategy);
     }
     else
-        pg_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
                                           indexoid, false, nblocks, workers,
                                           &acc, NULL);
 
@@ -2850,7 +2850,7 @@ pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
     }
 
     scanstate->context = AllocSetContextCreate(CurrentMemoryContext,
-                                               "pg_checksums index logical",
+                                               "pg_integrity_checksums index logical",
                                                ALLOCSET_SMALL_SIZES);
     scanstate->bstrategy = GetAccessStrategy(BAS_BULKREAD);
     oldcontext = MemoryContextSwitchTo(scanstate->context);
@@ -2902,7 +2902,7 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
             continue;
         }
 
-        pg_checksums_check_page(scanstate->heapRel, blkno, page);
+        pg_integrity_checksums_check_page(scanstate->heapRel, blkno, page);
 
         maxoff = PageGetMaxOffsetNumber(page);
         for (offnum = FirstOffsetNumber; offnum <= maxoff;
@@ -2916,7 +2916,7 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
             if (!ItemIdIsNormal(lp))
                 continue;
 
-            if (!pg_checksums_item_is_sane(page, lp))
+            if (!pg_integrity_checksums_item_is_sane(page, lp))
                 ereport(ERROR,
                         (errcode(ERRCODE_DATA_CORRUPTED),
                          errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -2926,7 +2926,7 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
             htup = (HeapTupleHeader) PageGetItem(page, lp);
             tuple_len = ItemIdGetLength(lp);
 
-            pg_checksums_check_heap_tuple(scanstate->heapRel, blkno, offnum,
+            pg_integrity_checksums_check_heap_tuple(scanstate->heapRel, blkno, offnum,
                                           htup, tuple_len);
 
             tuple.t_len = tuple_len;
@@ -3030,11 +3030,11 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     idxRel = index_open(indexoid, AccessShareLock);
 
     if (check_privileges)
-        pg_checksums_require_select(indexoid);
+        pg_integrity_checksums_require_select(indexoid);
 
     if (idxRel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
     {
-        List       *parts = pg_checksums_leaf_indexes(indexoid);
+        List       *parts = pg_integrity_checksums_leaf_indexes(indexoid);
         ListCell   *lc;
         bool        any_null = false;
 
@@ -3062,7 +3062,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
 
     index_close(idxRel, AccessShareLock);
 
-    snapshot = pg_checksums_get_snapshot();
+    snapshot = pg_integrity_checksums_get_snapshot();
 
     if (!pg_index_logical_scan_init(indexoid, snapshot, &scanstate))
     {
@@ -3071,7 +3071,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     }
 
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
-    workers = pg_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count();
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
 
@@ -3083,7 +3083,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     else
     {
         pg_index_logical_scan_end(&scanstate);
-        pg_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
                                           indexoid, false, nblocks, workers,
                                           NULL, acc);
     }
@@ -3120,7 +3120,7 @@ pg_index_logical_checksum_calc(Oid indexoid, bool check_privileges,
  */
 
 /*
- * pg_checksums_consume - claim the next range of items
+ * pg_integrity_checksums_consume - claim the next range of items
  *
  * Atomically advances the shared counter and returns the resulting range
  * [start, end). Returns false when all items have been claimed. This
@@ -3128,7 +3128,7 @@ pg_index_logical_checksum_calc(Oid indexoid, bool check_privileges,
  * workers actually started.
  */
 static bool
-pg_checksums_consume(ChecksumParallelState *state, uint32 chunk,
+pg_integrity_checksums_consume(ChecksumParallelState *state, uint32 chunk,
                      uint32 *start, uint32 *end)
 {
     uint32      first = pg_atomic_fetch_add_u32(&state->next_item, chunk);
@@ -3185,7 +3185,7 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
             continue;
         }
 
-        pg_checksums_check_page(rel, blkno, page);
+        pg_integrity_checksums_check_page(rel, blkno, page);
 
         maxoff = PageGetMaxOffsetNumber(page);
         for (offnum = FirstOffsetNumber; offnum <= maxoff;
@@ -3200,7 +3200,7 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
             if (!ItemIdIsNormal(lp))
                 continue;
 
-            if (!pg_checksums_item_is_sane(page, lp))
+            if (!pg_integrity_checksums_item_is_sane(page, lp))
                 ereport(ERROR,
                         (errcode(ERRCODE_DATA_CORRUPTED),
                          errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -3209,7 +3209,7 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
             htup = (HeapTupleHeader) PageGetItem(page, lp);
             tuple_len = ItemIdGetLength(lp);
 
-            pg_checksums_check_heap_tuple(rel, blkno, offnum, htup, tuple_len);
+            pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, htup, tuple_len);
 
             tuple.t_len = tuple_len;
             tuple.t_data = htup;
@@ -3265,7 +3265,7 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
             continue;
         }
 
-        pg_checksums_check_page(rel, blkno, page);
+        pg_integrity_checksums_check_page(rel, blkno, page);
 
         maxoff = PageGetMaxOffsetNumber(page);
         for (offnum = FirstOffsetNumber; offnum <= maxoff;
@@ -3280,7 +3280,7 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
             if (!ItemIdIsNormal(lp))
                 continue;
 
-            if (!pg_checksums_item_is_sane(page, lp))
+            if (!pg_integrity_checksums_item_is_sane(page, lp))
                 ereport(ERROR,
                         (errcode(ERRCODE_DATA_CORRUPTED),
                          errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
@@ -3289,7 +3289,7 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
             htup = (HeapTupleHeader) PageGetItem(page, lp);
             tuple_len = ItemIdGetLength(lp);
 
-            pg_checksums_check_heap_tuple(rel, blkno, offnum, htup, tuple_len);
+            pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, htup, tuple_len);
 
             tuple.t_len = tuple_len;
             tuple.t_data = htup;
@@ -3360,7 +3360,7 @@ scan_index_blocks_physical(Relation idxRel, BlockNumber start, BlockNumber end,
                  * The BRIN special area can only be inspected when the page
                  * header is sane; the raw page bytes are still hashed above.
                  */
-                if (pg_checksums_page_header_sane(page))
+                if (pg_integrity_checksums_page_header_sane(page))
                 {
                     special_space = (uint8 *) PageGetSpecialPointer(page);
                     special_size = PageGetSpecialSize(page);
@@ -3454,14 +3454,14 @@ compute_database_item(Oid relid, char relkind, bool physical,
 }
 
 /*
- * pg_checksums_report_skipped_relation - strict-mode error for skipped relation
+ * pg_integrity_checksums_report_skipped_relation - strict-mode error for skipped relation
  */
 static void
-pg_checksums_report_skipped_relation(Oid relid)
+pg_integrity_checksums_report_skipped_relation(Oid relid)
 {
     char       *relname;
 
-    if (!pg_checksums_strict)
+    if (!pg_integrity_checksums_strict)
         return;
 
     relname = get_rel_name(relid);
@@ -3471,7 +3471,7 @@ pg_checksums_report_skipped_relation(Oid relid)
              errmsg("relation \"%s\" cannot be checksummed",
                     relname ? relname : "?"),
              errdetail("The relation has no usable checksum (invalid index, unsupported relation kind, or a scan error)."),
-             errhint("Set pg_checksums.strict = false to skip relations without a usable checksum.")));
+             errhint("Set pg_integrity_checksums.strict = false to skip relations without a usable checksum.")));
 }
 
 /*
@@ -3507,7 +3507,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             compute_database_item(relid, relkind, physical, &rel_checksum,
                                   &skip);
             if (skip)
-                pg_checksums_report_skipped_relation(relid);
+                pg_integrity_checksums_report_skipped_relation(relid);
             else if (logical_acc != NULL)
                 logical_accum_add(logical_acc, (uint32) rel_checksum);
             else
@@ -3538,7 +3538,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
                                   &skip);
 
             if (skip)
-                pg_checksums_report_skipped_relation(relid);
+                pg_integrity_checksums_report_skipped_relation(relid);
             else if (logical_acc != NULL)
                 logical_accum_add(logical_acc, (uint32) rel_checksum);
             else
@@ -3587,7 +3587,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             if (had_error != NULL)
                 *had_error = true;
 
-            if (pg_checksums_strict || sqlerrcode == ERRCODE_QUERY_CANCELED)
+            if (pg_integrity_checksums_strict || sqlerrcode == ERRCODE_QUERY_CANCELED)
                 ReThrowError(edata);
 
             /*
@@ -3611,14 +3611,14 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
 }
 
 /*
- * pg_checksums_parallel_worker_main - entry point for parallel workers
+ * pg_integrity_checksums_parallel_worker_main - entry point for parallel workers
  *
  * Restores the shared scan state and snapshot, then consumes items from the
  * shared atomic counter until none remain, writing a fixed-size result back
  * to shared memory before exiting.
  */
 void
-pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
+pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 {
     ChecksumParallelState *state = shm_toc_lookup(toc, KEY_STATE, false);
     ChecksumWorkerResult *results = shm_toc_lookup(toc, KEY_RESULTS, false);
@@ -3649,7 +3649,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 ChecksumAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     scan_table_blocks_physical(rel, start, end,
                                                state->include_header, snapshot,
@@ -3667,7 +3667,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 ChecksumLogicalAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     scan_table_blocks_logical(rel, start, end, snapshot, &acc,
                                               bstrategy);
@@ -3685,7 +3685,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 ChecksumAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     scan_index_blocks_physical(idxRel, start, end, is_brin, &acc,
                                                bstrategy);
@@ -3707,7 +3707,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     elog(ERROR, "could not initialize logical index scan for index %u",
                          state->reloid);
 
-                while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     pg_index_logical_scan_blocks(&scanstate, start, end, &acc);
 
@@ -3736,7 +3736,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     pushed = true;
                 }
 
-                while (pg_checksums_consume(state, 1, &start, &end))
+                while (pg_integrity_checksums_consume(state, 1, &start, &end))
                     compute_database_items(items, start, end, physical, &acc64,
                                            physical ? NULL : &lacc,
                                            &myresult->had_error);
@@ -3763,7 +3763,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 }
 
 /*
- * pg_checksums_parallel_scan_blocks - run a block-based scan in parallel
+ * pg_integrity_checksums_parallel_scan_blocks - run a block-based scan in parallel
  *
  * Sets up the shared memory segment, launches the requested workers, lets the
  * leader participate in the scan, and folds the workers' results into the
@@ -3771,7 +3771,7 @@ pg_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
  * scans use logical_acc.
  */
 static void
-pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
+pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                                   bool include_header, uint32 nblocks,
                                   int workers, ChecksumAccum *acc,
                                   ChecksumLogicalAccum *logical_acc)
@@ -3798,8 +3798,8 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
         workers = 0;
     else
     {
-        uint32      chunks = nblocks / PG_CHECKSUMS_BLOCK_CHUNK +
-            (nblocks % PG_CHECKSUMS_BLOCK_CHUNK != 0);
+        uint32      chunks = nblocks / PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK +
+            (nblocks % PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK != 0);
 
         if ((uint32) workers > chunks)
             workers = (int) chunks;
@@ -3810,7 +3810,7 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
 
     if (needs_snapshot)
     {
-        snapshot = pg_checksums_get_snapshot();
+        snapshot = pg_integrity_checksums_get_snapshot();
         if (snapshot == NULL)
             ereport(ERROR,
                     (errcode(ERRCODE_INTERNAL_ERROR),
@@ -3828,8 +3828,8 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
 
     PG_TRY();
     {
-        pcxt = CreateParallelContext("pg_checksums",
-                                     "pg_checksums_parallel_worker_main",
+        pcxt = CreateParallelContext("pg_integrity_checksums",
+                                     "pg_integrity_checksums_parallel_worker_main",
                                      workers);
         pcxt_cleanup = pcxt;
 
@@ -3877,7 +3877,7 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                     Relation    rel = relation_open(reloid, AccessShareLock);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                 &start, &end))
                         scan_table_blocks_physical(rel, start, end, include_header,
                                                    snapshot, acc, bstrategy);
@@ -3891,7 +3891,7 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                     Relation    rel = relation_open(reloid, AccessShareLock);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                 &start, &end))
                         scan_table_blocks_logical(rel, start, end, snapshot,
                                                   logical_acc, bstrategy);
@@ -3906,7 +3906,7 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                     bool        is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                 &start, &end))
                         scan_index_blocks_physical(idxRel, start, end, is_brin,
                                                    acc, bstrategy);
@@ -3924,7 +3924,7 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                         elog(ERROR, "could not initialize logical index scan for index %u",
                              reloid);
 
-                    while (pg_checksums_consume(state, PG_CHECKSUMS_BLOCK_CHUNK,
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                 &start, &end))
                         pg_index_logical_scan_blocks(&scanstate, start, end,
                                                      logical_acc);
@@ -3970,10 +3970,10 @@ pg_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
 }
 
 /*
- * pg_checksums_parallel_scan_database - run a database scan in parallel
+ * pg_integrity_checksums_parallel_scan_database - run a database scan in parallel
  */
 static void
-pg_checksums_parallel_scan_database(bool physical,
+pg_integrity_checksums_parallel_scan_database(bool physical,
                                     ChecksumRelationItem *items, uint32 nitems,
                                     int workers, ChecksumAccum64 *acc,
                                     ChecksumLogicalAccum *logical_acc,
@@ -3996,7 +3996,7 @@ pg_checksums_parallel_scan_database(bool physical,
      * is checksummed as of the same point in time, exactly like the serial
      * path.
      */
-    snapshot = pg_checksums_get_snapshot();
+    snapshot = pg_integrity_checksums_get_snapshot();
     if (snapshot == NULL)
         ereport(ERROR,
                 (errcode(ERRCODE_INTERNAL_ERROR),
@@ -4007,8 +4007,8 @@ pg_checksums_parallel_scan_database(bool physical,
 
     PG_TRY();
     {
-        pcxt = CreateParallelContext("pg_checksums",
-                                     "pg_checksums_parallel_worker_main",
+        pcxt = CreateParallelContext("pg_integrity_checksums",
+                                     "pg_integrity_checksums_parallel_worker_main",
                                      workers);
         pcxt_cleanup = pcxt;
 
@@ -4057,7 +4057,7 @@ pg_checksums_parallel_scan_database(bool physical,
             WaitForParallelWorkersToAttach(pcxt);
 
         /* The leader processes its own share of the relations. */
-        while (pg_checksums_consume(state, 1, &start, &end))
+        while (pg_integrity_checksums_consume(state, 1, &start, &end))
             compute_database_items(items, start, end, physical, acc,
                                    logical_acc, &local_had_error);
 
@@ -4136,7 +4136,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     int         workers;
 
     /* Use a consistent snapshot */
-    snapshot = pg_checksums_get_snapshot();
+    snapshot = pg_integrity_checksums_get_snapshot();
     if (snapshot == NULL)
         ereport(ERROR,
                 (errcode(ERRCODE_INTERNAL_ERROR),
@@ -4213,7 +4213,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     table_endscan(scan);
     table_close(pg_class_rel, AccessShareLock);
 
-    workers = pg_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count();
     if (nitems < (uint32) workers)
         workers = (int) nitems;
 
@@ -4221,7 +4221,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
         compute_database_items(items, 0, nitems, physical, &acc,
                                physical ? NULL : &lacc, &had_error);
     else
-        pg_checksums_parallel_scan_database(physical, items, nitems,
+        pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
                                             workers, &acc,
                                             physical ? NULL : &lacc,
                                             &had_error);

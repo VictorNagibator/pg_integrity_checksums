@@ -1,8 +1,8 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
-\echo Use "CREATE EXTENSION pg_checksums" to load this file. \quit
+\echo Use "CREATE EXTENSION pg_integrity_checksums" to load this file. \quit
 
 /*-------------------------------------------------------------------------
- * pg_checksums - Multi-Level Checksum Framework for PostgreSQL
+ * pg_integrity_checksums - Multi-Level Checksum Framework for PostgreSQL
  *
  * This extension provides checksum computation at six granularity levels,
  * with both physical and logical variants (except where noted):
@@ -19,18 +19,15 @@
  *   - Physical data movement
  *   - Storage reorganization
  *
- * Table-level logical checksums depend only on data content and are stable
- * across physical reorganization (VACUUM FULL, CLUSTER, REINDEX with the
- * same data).  Logical index checksums are B-tree only and include heap
- * TIDs; database logical checksums include indexes, so they can change when
- * dead index entries are vacuumed.  Planner statistics are not part of
+ * Logical checksums depend on data content, not on physical layout, relation
+ * OIDs or heap TIDs.  Values are canonicalized by type: enum labels, numeric
+ * scale, arrays, composites and ranges do not leak type OIDs.  Logical index
+ * checksums are derived from the table data and the index definition, so they
+ * work for every index access method.  Planner statistics are not part of
  * physical checksums.
  *
- * 1.2 adds pg_table_content_checksum(): a primary-key-free, relation-OID-free
- * content checksum that preserves duplicate rows with a sum-plus-count
- * aggregate.  Partitioned indexes now aggregate the checksums of their leaf
- * indexes.  The pg_checksums.strict GUC makes database scans fail instead of
- * skipping relations without a usable checksum.
+ * Logical checksums are 32-bit.  The pg_integrity_checksums.strict GUC makes database
+ * scans fail instead of skipping relations without a usable checksum.
  *
  * All functions use the FNV-1a hash algorithm for consistency with
  * PostgreSQL's internal checksum implementation.
@@ -83,15 +80,16 @@ COMMENT ON FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean) IS
 'Physical checksum of a tuple (row). Depends on physical location (block, offset).
  Changes after VACUUM, CLUSTER, or physical data movement. Useful for detecting physical corruption.';
 
--- Logical tuple checksum (depends on primary key values)
-CREATE OR REPLACE FUNCTION pg_tuple_logical_checksum(relname regclass, tid tid, include_header boolean DEFAULT false)
+-- Logical tuple checksum (canonical content, no physical header)
+CREATE OR REPLACE FUNCTION pg_tuple_logical_checksum(relname regclass, tid tid)
 RETURNS integer
 AS 'MODULE_PATHNAME', 'pg_tuple_logical_checksum'
 LANGUAGE C STRICT;
 
-COMMENT ON FUNCTION pg_tuple_logical_checksum(regclass, tid, boolean) IS 
-'Logical checksum of a tuple (row). Uses primary key values instead of physical location.
- Returns NULL if table has no primary key. Stable across physical reorganization.';
+COMMENT ON FUNCTION pg_tuple_logical_checksum(regclass, tid) IS
+'Logical checksum of a tuple (row). Hashes canonical column values, without
+ relation OIDs, heap TIDs or the tuple header. No primary key is required.
+ Stable across physical reorganization.';
 
 /*-----------------------------------------------------------
  * TABLE LEVEL FUNCTIONS (Physical and Logical)
@@ -114,20 +112,11 @@ RETURNS bigint
 AS 'MODULE_PATHNAME', 'pg_table_logical_checksum'
 LANGUAGE C STRICT;
 
-COMMENT ON FUNCTION pg_table_logical_checksum(regclass) IS 
-'Logical checksum of entire table. Aggregates logical checksums of all tuples.
- Requires primary key. Stable across VACUUM FULL, CLUSTER. Returns NULL if no primary key.';
-
--- Content-only checksum (no primary key, no relation OID)
-CREATE OR REPLACE FUNCTION pg_table_content_checksum(relname regclass)
-RETURNS bigint
-AS 'MODULE_PATHNAME', 'pg_table_content_checksum'
-LANGUAGE C STRICT;
-
-COMMENT ON FUNCTION pg_table_content_checksum(regclass) IS
-'Content-only checksum of a table. Does not require a primary key and does not
- include relation OIDs. Uses a sum-plus-count aggregate so duplicate rows are
- preserved. Partitioned tables aggregate all leaf rows.';
+COMMENT ON FUNCTION pg_table_logical_checksum(regclass) IS
+'Logical checksum of an entire table. No primary key is required. Aggregates
+ canonical row hashes with a sum-plus-count aggregate, preserving duplicate
+ rows. Relation OIDs and heap TIDs are excluded. Stable across VACUUM FULL,
+ CLUSTER and REINDEX. Partitioned tables aggregate all leaf rows.';
 
 /*-----------------------------------------------------------
  * INDEX LEVEL FUNCTIONS (Physical and Logical)
@@ -152,11 +141,12 @@ RETURNS integer
 AS 'MODULE_PATHNAME', 'pg_index_logical_checksum'
 LANGUAGE C STRICT;
 
-COMMENT ON FUNCTION pg_index_logical_checksum(regclass) IS 
-'Logical checksum of an index. Depends only on index key values and heap TIDs.
- Stable across REINDEX with same data. B-tree only; returns NULL for Hash, GiST,
- GIN, SP-GiST and BRIN, whose pages do not contain ordinary index tuples.
- A partitioned B-tree index aggregates the checksums of its leaf indexes.';
+COMMENT ON FUNCTION pg_index_logical_checksum(regclass) IS
+'Logical checksum of an index. Derived from the visible table rows and the
+ index definition, not from index pages: works for every index access method,
+ including expression, partial and INCLUDE indexes. No heap TIDs or relation
+ OIDs are included. Stable across VACUUM, CLUSTER and REINDEX. Physical
+ checksums remain the tool for detecting missing or corrupt index entries.';
 
 /*-----------------------------------------------------------
  * DATABASE LEVEL FUNCTIONS (Physical and Logical)
@@ -178,16 +168,16 @@ COMMENT ON FUNCTION pg_database_physical_checksum(boolean, boolean) IS
 REVOKE EXECUTE ON FUNCTION pg_database_physical_checksum(boolean, boolean) FROM PUBLIC;
 
 -- Logical database checksum (aggregates logical relation checksums)
-CREATE OR REPLACE FUNCTION pg_database_logical_checksum(include_system boolean DEFAULT false, include_toast boolean DEFAULT false)
+CREATE OR REPLACE FUNCTION pg_database_logical_checksum(include_system boolean DEFAULT false, include_indexes boolean DEFAULT true)
 RETURNS bigint
 AS 'MODULE_PATHNAME', 'pg_database_logical_checksum'
 LANGUAGE C STRICT;
 
-COMMENT ON FUNCTION pg_database_logical_checksum(boolean, boolean) IS 
-'Logical checksum of entire database. Aggregates logical checksums of all relations.
- Superuser-only (enforced by the C implementation). Skips tables without primary keys
- and TOAST relations; toast content is covered through the parent table.
- 64-bit return value.';
+COMMENT ON FUNCTION pg_database_logical_checksum(boolean, boolean) IS
+'Logical checksum of an entire database. Aggregates canonical table checksums;
+no primary key is required. include_indexes controls whether logical index
+checksums are included. TOAST content is covered through the parent table.
+Superuser-only (enforced by the C implementation).';
 
 REVOKE EXECUTE ON FUNCTION pg_database_logical_checksum(boolean, boolean) FROM PUBLIC;
 

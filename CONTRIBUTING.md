@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for taking the time to contribute to `pg_checksums`.
+Thanks for taking the time to contribute to `pg_integrity_checksums`.
 
 ## Reporting bugs and requesting features
 
@@ -49,7 +49,7 @@ for `make installcheck`.
   correct.
 - Update `README.md` and `Changes` when user-visible behavior changes.
 - If the SQL API changes, add an install script and an upgrade script, and
-  update `pg_checksums.control` and `META.json`.
+  update `pg_integrity_checksums.control` and `META.json`.
 - Do not commit build artifacts such as `*.o`, `*.so`, or test output.
 - Make sure the code builds without new compiler warnings.
 - Describe how the change was tested and on which PostgreSQL versions.
@@ -71,5 +71,5 @@ the README.
 ## Code style
 
 Follow PostgreSQL C style and the conventions already used in
-`pg_checksums.c`. Keep functions focused, remove dead code, and document
+`pg_integrity_checksums.c`. Keep functions focused, remove dead code, and document
 non-obvious checksum semantics. Prefer clear names over abbreviations.

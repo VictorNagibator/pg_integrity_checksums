@@ -1,6 +1,6 @@
 ---
 name: Bug report
-about: Report a reproducible defect in pg_checksums
+about: Report a reproducible defect in pg_integrity_checksums
 title: "[BUG]"
 labels: bug
 assignees: ''
@@ -35,9 +35,9 @@ SELECT pg_...;
 
 ### Environment
 
-- pg_checksums version:
+- pg_integrity_checksums version:
   ```sql
-  SELECT extversion FROM pg_extension WHERE extname = 'pg_checksums';
+  SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';
   ```
 - PostgreSQL version:
   ```sql
@@ -45,8 +45,8 @@ SELECT pg_...;
   ```
 - OS and architecture:
 - Installation method: PGXN / `make install` / package / other
-- `SHOW pg_checksums.workers;`
-- `SHOW pg_checksums.strict;`
+- `SHOW pg_integrity_checksums.workers;`
+- `SHOW pg_integrity_checksums.strict;`
 
 ### Which checksum is affected?
 
@@ -57,11 +57,11 @@ SELECT pg_...;
 - [ ] partitioned table / partitioned index
 - [ ] TOAST
 - [ ] expression / partial / INCLUDE index
-- [ ] parallel mode (`pg_checksums.workers > 0`)
+- [ ] parallel mode (`pg_integrity_checksums.workers > 0`)
 
 ### Additional checks
 
-- Does it reproduce with `SET pg_checksums.workers = 0`?
+- Does it reproduce with `SET pg_integrity_checksums.workers = 0`?
 - Does the result change after `VACUUM`, `VACUUM FULL`, `CLUSTER`, or `REINDEX`?
 - Does it affect only a specific index AM: B-tree, Hash, GiST, GIN, SP-GiST, BRIN?
 - Is this a server crash or an incorrect checksum value?
@@ -79,7 +79,7 @@ SELECT pg_...;
 
 ### Checklist
 
-- [ ] I am using the latest pg_checksums release
+- [ ] I am using the latest pg_integrity_checksums release
 - [ ] I searched for existing issues
 - [ ] The example is minimal and contains no real data or secrets
 - [ ] This is not a security vulnerability; I will use a private advisory for that

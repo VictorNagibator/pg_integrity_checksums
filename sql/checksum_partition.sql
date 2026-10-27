@@ -142,9 +142,9 @@ DECLARE
     serial_val bigint;
     parallel_val bigint;
 BEGIN
-    PERFORM set_config('pg_checksums.workers', '0', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '0', true);
     serial_val := pg_table_physical_checksum('test_partitioned'::regclass, false);
-    PERFORM set_config('pg_checksums.workers', '4', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '4', true);
     parallel_val := pg_table_physical_checksum('test_partitioned'::regclass, false);
     IF serial_val IS NULL OR serial_val != parallel_val THEN
         RAISE EXCEPTION 'Test J failed: parallel partitioned physical checksum differs from serial';
@@ -158,9 +158,9 @@ DECLARE
     serial_val bigint;
     parallel_val bigint;
 BEGIN
-    PERFORM set_config('pg_checksums.workers', '0', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '0', true);
     serial_val := pg_table_logical_checksum('test_partitioned'::regclass);
-    PERFORM set_config('pg_checksums.workers', '4', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '4', true);
     parallel_val := pg_table_logical_checksum('test_partitioned'::regclass);
     IF serial_val IS NULL OR serial_val != parallel_val THEN
         RAISE EXCEPTION 'Test K failed: parallel partitioned logical checksum differs from serial';

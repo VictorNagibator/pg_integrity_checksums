@@ -16,7 +16,7 @@ $node->init;
 $node->start;
 
 # Create extension
-$node->safe_psql('postgres', 'CREATE EXTENSION pg_checksums;');
+$node->safe_psql('postgres', 'CREATE EXTENSION pg_integrity_checksums;');
 
 # Helper function to validate checksums
 sub checksum_is_valid {

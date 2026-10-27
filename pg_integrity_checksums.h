@@ -1,6 +1,6 @@
 /*-------------------------------------------------------------------------
  *
- * pg_checksums.h
+ * pg_integrity_checksums.h
  *    Header file for checksum extension for PostgreSQL
  *
  * This extension provides a comprehensive checksum framework for PostgreSQL
@@ -25,8 +25,8 @@
  *
  *-------------------------------------------------------------------------
  */
-#ifndef PG_CHECKSUMS_H
-#define PG_CHECKSUMS_H
+#ifndef PG_INTEGRITY_CHECKSUMS_H
+#define PG_INTEGRITY_CHECKSUMS_H
 
 /*
  * The extension relies on the table-AM abstraction (table_open(),
@@ -35,7 +35,7 @@
  * PostgreSQL 11 and older are therefore not supported.
  */
 #if PG_VERSION_NUM < 120000
-#error "pg_checksums requires PostgreSQL 12 or later"
+#error "pg_integrity_checksums requires PostgreSQL 12 or later"
 #endif
 
 #include "postgres.h"
@@ -72,4 +72,4 @@ extern Datum pg_database_logical_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_data_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_text_checksum(PG_FUNCTION_ARGS);
 
-#endif /* PG_CHECKSUMS_H */
+#endif /* PG_INTEGRITY_CHECKSUMS_H */

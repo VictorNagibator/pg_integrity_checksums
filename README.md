@@ -1,12 +1,12 @@
-# pg_checksums - Multi-Level Data Integrity Extension for PostgreSQL
+# pg_integrity_checksums - Multi-Level Data Integrity Extension for PostgreSQL
 
-[![CI](https://github.com/VictorNagibator/pg_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_checksums/actions/workflows/ci.yml)
+[![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
 [![PostgreSQL 12-18](https://img.shields.io/badge/postgres-12--18-336791)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 ## Overview
 
-`pg_checksums` is a PostgreSQL extension that provides comprehensive checksum functionality at six granularity levels, with both physical and logical variants (except for cell level). It enables data integrity verification, change detection, consistency checking, and corruption detection across the entire database hierarchy.
+`pg_integrity_checksums` is a PostgreSQL extension that provides comprehensive checksum functionality at six granularity levels, with both physical and logical variants (except for cell level). It enables data integrity verification, change detection, consistency checking, and corruption detection across the entire database hierarchy.
 
 ---
 
@@ -32,7 +32,7 @@
   relations
 * **Partitioned Support**: Table and index checksums transparently aggregate
   the checksums of all leaf partitions/indexes
-* **Strict Mode**: `pg_checksums.strict` makes database scans fail instead of
+* **Strict Mode**: `pg_integrity_checksums.strict` makes database scans fail instead of
   skipping relations that cannot be checksummed
 
 ---
@@ -82,10 +82,10 @@
 > clear error on PostgreSQL 11 and older, which lack the table-AM API the
 > extension relies on.
 
-> **Note:** the distribution is named `pg_checksums`, the same name as the
-> `pg_checksums` utility shipped with PostgreSQL core. They are unrelated: the
-> core utility verifies data page checksums on disk, while this extension
-> provides SQL functions for computing checksums.
+> **Note:** this extension is named `pg_integrity_checksums` specifically to
+> distinguish it from the `pg_checksums` utility shipped with PostgreSQL core.
+> They are unrelated: the core utility verifies data page checksums on disk,
+> while this extension provides SQL functions for computing checksums.
 
 ### Build and Install
 
@@ -94,10 +94,10 @@ can point `make` at a specific installation with `PG_CONFIG=/path/to/pg_config`.
 
 ```bash
 # Clone or extract the extension
-git clone https://github.com/VictorNagibator/pg_checksums
+git clone https://github.com/VictorNagibator/pg_integrity_checksums
 
 # Go into extension directory
-cd pg_checksums
+cd pg_integrity_checksums
 
 # Build
 make
@@ -106,15 +106,42 @@ make
 make install
 
 # Create extension in your database
-psql -d your_database -c "CREATE EXTENSION pg_checksums;"
+psql -d your_database -c "CREATE EXTENSION pg_integrity_checksums;"
 ```
 
-Or install it straight from [PGXN](https://pgxn.org/dist/pg_checksums/) with the
+Or install it straight from [PGXN](https://pgxn.org/dist/pg_integrity_checksums/) with the
 [pgxn client](https://github.com/pgxn/pgxnclient):
 
 ```bash
-pgxn install pg_checksums
+pgxn install pg_integrity_checksums
 ```
+
+### Migrating from pg_checksums 1.x
+
+The extension was renamed in 2.0.0 to avoid confusion with PostgreSQL's core
+`pg_checksums` utility.  PostgreSQL has no `ALTER EXTENSION ... RENAME`, so
+migrate by reinstalling the extension and updating the GUC prefix.  See
+[MIGRATION.md](MIGRATION.md) for the full checklist:
+
+```sql
+DROP EXTENSION pg_checksums;
+CREATE EXTENSION pg_integrity_checksums;
+```
+
+```sql
+-- old settings
+SET pg_checksums.workers = 4;
+SET pg_checksums.strict = on;
+
+-- new settings
+SET pg_integrity_checksums.workers = 4;
+SET pg_integrity_checksums.strict = on;
+```
+
+SQL function names and checksum values are unchanged, so existing logical and
+physical baselines remain valid.  If `DROP EXTENSION` fails because of
+dependent objects, remove or recreate those dependencies explicitly rather
+than using `CASCADE` without review.
 
 ---
 
@@ -299,7 +326,7 @@ canceled scan never returns a partial result as if it were complete.
 **PostgreSQL 12-16 and parallel database scans:** those releases prohibit
 internal subtransactions while in parallel mode.  A parallel database scan
 therefore cannot isolate relation errors: if a relation fails, the scan is
-aborted.  Run with `pg_checksums.workers = 0` (the default) to get the
+aborted.  Run with `pg_integrity_checksums.workers = 0` (the default) to get the
 skip-with-warning behavior on PostgreSQL 12-16.  Serial scans and parallel
 scans on PostgreSQL 17+ isolate errors as described above.
 
@@ -439,12 +466,12 @@ index definition in each worker.
 
 ### Configuration
 
-The degree of parallelism is controlled by the `pg_checksums.workers` GUC:
+The degree of parallelism is controlled by the `pg_integrity_checksums.workers` GUC:
 
 | Setting                          | Behavior                                   |
 | -------------------------------- | ------------------------------------------ |
-| `pg_checksums.workers = 0`       | Disabled (default, single-backend)         |
-| `pg_checksums.workers = N`       | Use up to `N` parallel workers             |
+| `pg_integrity_checksums.workers = 0`       | Disabled (default, single-backend)         |
+| `pg_integrity_checksums.workers = N`       | Use up to `N` parallel workers             |
 
 The actual number of workers is clamped by `max_parallel_workers` and by the
 number of blocks (or relations) being scanned. Parallelism is also skipped
@@ -453,11 +480,11 @@ parallel workers cannot be nested.
 
 ```sql
 -- Compute a table checksum with 4 parallel workers
-SET pg_checksums.workers = 4;
+SET pg_integrity_checksums.workers = 4;
 SELECT pg_table_physical_checksum('large_table'::regclass, false);
 
 -- Disable parallelism (restore the default)
-RESET pg_checksums.workers;
+RESET pg_integrity_checksums.workers;
 ```
 
 ### Strict mode
@@ -466,10 +493,10 @@ Database checksum functions normally skip a relation that cannot be
 checksummed (for example an invalid index, a foreign partition, or a relation
 that fails during the scan).  Tables without a primary key and all index
 access methods are now supported, so they are not skipped.  Set
-`pg_checksums.strict = on` to turn an actual skip into an error instead:
+`pg_integrity_checksums.strict = on` to turn an actual skip into an error instead:
 
 ```sql
-SET pg_checksums.strict = on;
+SET pg_integrity_checksums.strict = on;
 SELECT pg_database_logical_checksum(false, true);
 -- ERROR: relation "..." cannot be checksummed
 -- DETAIL: The relation has no usable checksum.
@@ -638,14 +665,14 @@ WHERE backup_time = '2024-01-15 03:00:00';
 | `pg_database_*_checksum` | O(total DB size) | Periodic interrupt checks       |
 
 Table, index, and database scans can be parallelized with
-`pg_checksums.workers`; the scan work is divided among the workers with
+`pg_integrity_checksums.workers`; the scan work is divided among the workers with
 linear speedup up to the point where the scan becomes I/O-bound.
 
 ---
 
 ## Test Suite
 
-The pg_checksums extension includes a comprehensive test suite that validates functionality at all granularity levels and ensures algorithm correctness. The tests are divided into two categories: regression tests (SQL-based) and TAP tests (Perl-based).
+The pg_integrity_checksums extension includes a comprehensive test suite that validates functionality at all granularity levels and ensures algorithm correctness. The tests are divided into two categories: regression tests (SQL-based) and TAP tests (Perl-based).
 
 ```bash
 # Run the regression tests
@@ -728,7 +755,7 @@ The script uses the same environment settings as your manual commands. You can a
 ## Building a Release
 
 The `dist` target packs the current `HEAD` into the archive that PGXN expects
-(`pg_checksums-<version>.zip`, with everything under a `pg_checksums-<version>/`
+(`pg_integrity_checksums-<version>.zip`, with everything under a `pg_integrity_checksums-<version>/`
 directory):
 
 ```bash
@@ -740,7 +767,7 @@ make dist
 Pushing a `v*` tag runs the [Release workflow](.github/workflows/release.yml),
 which:
 
-1. checks that the tag, `pg_checksums.control` and `META.json` all carry the
+1. checks that the tag, `pg_integrity_checksums.control` and `META.json` all carry the
    same version;
 2. builds the archive with `make dist` and verifies its contents;
 3. takes the release notes from the matching `Changes` entry (the release fails
@@ -750,12 +777,12 @@ which:
 5. uploads the archive to [PGXN](https://manager.pgxn.org/) when the
    `PGXN_USERNAME` and `PGXN_PASSWORD` repository secrets are configured.
 
-So bump the version in `pg_checksums.control`, `META.json` and `Changes`, add
+So bump the version in `pg_integrity_checksums.control`, `META.json` and `Changes`, add
 the new SQL script (and an upgrade script if needed), and only then tag:
 
 ```bash
-git tag -a v1.3.2 -m "pg_checksums 1.3.2"
-git push origin v1.3.2
+git tag -a v2.0.0 -m "pg_integrity_checksums 2.0.0"
+git push origin v2.0.0
 ```
 
 ---
@@ -766,8 +793,8 @@ Released under the [MIT License](LICENSE).
 
 ## Support
 
-* Source code and issue tracker: <https://github.com/VictorNagibator/pg_checksums>
-* Distribution page on PGXN: <https://pgxn.org/dist/pg_checksums/>
+* Source code and issue tracker: <https://github.com/VictorNagibator/pg_integrity_checksums>
+* Distribution page on PGXN: <https://pgxn.org/dist/pg_integrity_checksums/>
 
 ## Contributing
 

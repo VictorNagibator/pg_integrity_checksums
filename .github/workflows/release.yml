@@ -44,9 +44,9 @@ jobs:
         run: |
           set -euo pipefail
           tag="$GITHUB_REF_NAME"
-          ctrl="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" pg_checksums.control)"
+          ctrl="$(sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*\)'/\1/p" pg_integrity_checksums.control)"
           meta="$(python3 -c "import json; print(json.load(open('META.json'))['version'])")"
-          prov="$(python3 -c "import json; print(json.load(open('META.json'))['provides']['pg_checksums']['version'])")"
+          prov="$(python3 -c "import json; print(json.load(open('META.json'))['provides']['pg_integrity_checksums']['version'])")"
 
           echo "tag=$tag control=$ctrl meta=$meta provides=$prov"
 
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           make dist
-          ls -l "pg_checksums-${VERSION}.zip"
+          ls -l "pg_integrity_checksums-${VERSION}.zip"
 
       - name: Verify the archive
         env:
@@ -75,7 +75,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 .github/scripts/verify_pgxn_archive.py \
-            "pg_checksums-${VERSION}.zip" "$VERSION"
+            "pg_integrity_checksums-${VERSION}.zip" "$VERSION"
 
       - name: Build the release notes from Changes
         env:
@@ -108,7 +108,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          archive="pg_checksums-${VERSION}.zip"
+          archive="pg_integrity_checksums-${VERSION}.zip"
           notes="release-notes.md"
 
           prerelease=""
@@ -122,7 +122,7 @@ jobs:
             gh release upload "$GITHUB_REF_NAME" "$archive" --clobber
           else
             gh release create "$GITHUB_REF_NAME" "$archive" \
-              --title "pg_checksums ${VERSION}" \
+              --title "pg_integrity_checksums ${VERSION}" \
               --notes-file "$notes" $prerelease
           fi
 
@@ -131,7 +131,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          archive="pg_checksums-${VERSION}.zip"
+          archive="pg_integrity_checksums-${VERSION}.zip"
 
           if [ -z "${PGXN_USERNAME:-}" ] || [ -z "${PGXN_PASSWORD:-}" ]; then
             {

@@ -3,7 +3,7 @@
 
 Usage: verify_pgxn_archive.py <archive.zip> <version>
 
-Checks that the archive is packed under the pg_checksums-<version>/ prefix that
+Checks that the archive is packed under the pg_integrity_checksums-<version>/ prefix that
 PGXN expects, contains every file the distribution needs, carries no build
 artifacts, and that the META.json inside it describes the same version.
 """
@@ -19,7 +19,7 @@ def main() -> int:
         return 2
 
     archive, version = sys.argv[1], sys.argv[2]
-    prefix = f"pg_checksums-{version}/"
+    prefix = f"pg_integrity_checksums-{version}/"
 
     required = {
         "META.json",
@@ -27,10 +27,10 @@ def main() -> int:
         "Changes",
         "LICENSE",
         "README.md",
-        "pg_checksums.control",
-        f"pg_checksums--{version}.sql",
-        "pg_checksums.c",
-        "pg_checksums.h",
+        "pg_integrity_checksums.control",
+        f"pg_integrity_checksums--{version}.sql",
+        "pg_integrity_checksums.c",
+        "pg_integrity_checksums.h",
     }
 
     try:
@@ -78,16 +78,16 @@ def main() -> int:
         )
         return 1
 
-    provided = meta.get("provides", {}).get("pg_checksums", {}).get("version")
+    provided = meta.get("provides", {}).get("pg_integrity_checksums", {}).get("version")
     if provided != version:
         print(
-            f"error: META.json provides.pg_checksums.version is {provided!r}, "
+            f"error: META.json provides.pg_integrity_checksums.version is {provided!r}, "
             f"expected {version!r}",
             file=sys.stderr,
         )
         return 1
 
-    if meta.get("provides", {}).get("pg_checksums", {}).get("file") not in files:
+    if meta.get("provides", {}).get("pg_integrity_checksums", {}).get("file") not in files:
         print(
             "error: META.json points at a SQL file that is not in the archive",
             file=sys.stderr,

@@ -158,9 +158,9 @@ DECLARE
     serial_val bigint;
     parallel_val bigint;
 BEGIN
-    PERFORM set_config('pg_checksums.workers', '0', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '0', true);
     serial_val := pg_database_logical_checksum(false, true);
-    PERFORM set_config('pg_checksums.workers', '2', true);
+    PERFORM set_config('pg_integrity_checksums.workers', '2', true);
     parallel_val := pg_database_logical_checksum(false, true);
 
     IF serial_val IS DISTINCT FROM parallel_val THEN
@@ -170,10 +170,10 @@ END;
 $$;
 
 -- Test I: strict mode accepts the new logical format (no skipped relations)
-SET pg_checksums.strict = on;
+SET pg_integrity_checksums.strict = on;
 SELECT pg_database_logical_checksum(false, true) IS NOT NULL
     AS strict_logical_non_null;
-RESET pg_checksums.strict;
+RESET pg_integrity_checksums.strict;
 
 -- Clean up
 DROP TABLE test_logical_part;

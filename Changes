@@ -1,4 +1,21 @@
-Revision history for pg_checksums
+Revision history for pg_integrity_checksums (formerly pg_checksums)
+
+2.0.0   2026-10-28
+
+    - BREAKING: rename the extension from pg_checksums to
+      pg_integrity_checksums.  The new name avoids confusion with the
+      pg_checksums utility shipped with PostgreSQL core and with the unrelated
+      credativ pg_checksums_ext tool.
+    - BREAKING: rename the GUC prefix from pg_checksums.* to
+      pg_integrity_checksums.*.
+    - SQL function names and checksum values are unchanged.  Existing
+      checksum baselines remain valid after reinstalling the extension.
+    - There is no ALTER EXTENSION rename path.  Migrate with:
+      DROP EXTENSION pg_checksums;
+      CREATE EXTENSION pg_integrity_checksums;
+      then update pg_checksums.workers/strict settings to the new prefix.
+    - The 1.3.x extension remains available from the previous PGXN release and
+      git tag for users who need the old name.
 
 1.3.2   2026-10-28
 

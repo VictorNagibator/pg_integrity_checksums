@@ -1,5 +1,5 @@
 #!/bin/bash
-# run_tests.sh - build, install and test pg_checksums
+# run_tests.sh - build, install and test pg_integrity_checksums
 #
 # Environment overrides:
 #   PG_CONFIG   path to pg_config (default: $HOME/postgres-custom/bin/pg_config)

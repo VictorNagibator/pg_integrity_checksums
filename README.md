@@ -3,6 +3,7 @@
 [![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
 [![PostgreSQL 12-18](https://img.shields.io/badge/postgres-12--18-336791)](https://www.postgresql.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/VictorNagibator/badge.svg)](https://hub.xerj.org/contributors/VictorNagibator)
 
 ## Overview
 
@@ -115,6 +116,9 @@ Or install it straight from [PGXN](https://pgxn.org/dist/pg_integrity_checksums/
 ```bash
 pgxn install pg_integrity_checksums
 ```
+
+The extension is also listed in
+[PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums).
 
 ### Migrating from pg_checksums 1.x
 
@@ -795,6 +799,8 @@ Released under the [MIT License](LICENSE).
 
 * Source code and issue tracker: <https://github.com/VictorNagibator/pg_integrity_checksums>
 * Distribution page on PGXN: <https://pgxn.org/dist/pg_integrity_checksums/>
+* Extension catalog entry on PGEXT.CLOUD: <https://pgext.cloud/ext/pg_integrity_checksums>
+* XERJ Corpus Hub contributor profile: <https://hub.xerj.org/contributors/VictorNagibator>
 
 ## Contributing
 

@@ -82,13 +82,26 @@ jobs:
 
           cleanup() { docker rm -f pg-integrity-smoke >/dev/null 2>&1 || true; }
           trap cleanup EXIT
+          trap 'docker logs pg-integrity-smoke >&2 || true' ERR
 
+          # pg_isready only says the postmaster is accepting connections; the
+          # POSTGRES_DB creation and the init script run afterwards.  Wait for
+          # the extension itself, not just the server socket.
+          extension_ready=0
           for i in $(seq 1 60); do
-            if docker exec pg-integrity-smoke pg_isready -U postgres -d smoke >/dev/null 2>&1; then
+            if docker exec pg-integrity-smoke psql -U postgres -d smoke -tAc \
+              "SELECT 1 FROM pg_extension WHERE extname = 'pg_integrity_checksums'" \
+              2>/dev/null | grep -qx 1; then
+              extension_ready=1
               break
             fi
             sleep 1
           done
+
+          if [ "$extension_ready" -ne 1 ]; then
+            echo "extension was not created in the smoke database" >&2
+            exit 1
+          fi
 
           docker exec pg-integrity-smoke psql -U postgres -d smoke -v ON_ERROR_STOP=1 \
             -c "SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';" \

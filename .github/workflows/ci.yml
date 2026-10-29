@@ -337,23 +337,53 @@ jobs:
           PGUSER: postgres
         run: |
           # pg_regress.exe links against libpq.dll, which lives in the
-          # PostgreSQL bin directory, so it must be on PATH.
-          export PATH="$(dirname "$PG_CONFIG"):$PATH"
+          # PostgreSQL bin directory, so it must be on PATH.  Convert the
+          # Windows path with cygpath and append it: putting PostgreSQL's
+          # native DLLs before /usr/bin can make MSYS2's make load a
+          # conflicting libintl-8.dll and fail with STATUS_DLL_INIT_FAILED.
+          PGBIN="$(dirname "$(cygpath -u "$PG_CONFIG")")"
+          export PATH="$PATH:$PGBIN"
           make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE="$PROVE_BIN" PROVE_FLAGS="-I $TAP_PERL_DIR"
 
       - name: Show regression.diffs on failure
         if: failure()
+        shell: pwsh
         run: |
-          if [ -f regression.diffs ]; then cat regression.diffs; else echo "regression.diffs not found"; fi
+          if (Test-Path regression.diffs) { Get-Content regression.diffs }
+          else { Write-Host "regression.diffs not found" }
 
       - name: Show TAP test log on failure
         if: failure()
-        run: cat tmp_check/log/regress_log_* 2>/dev/null || true
+        shell: pwsh
+        run: |
+          Get-ChildItem tmp_check/log/regress_log_* -ErrorAction SilentlyContinue |
+            ForEach-Object { Get-Content $_.FullName }
 
       - name: Show cluster log on failure
         if: failure()
-        run: cat "$PGDATA/server.log" 2>/dev/null || true
+        shell: pwsh
+        run: |
+          if ($env:PGDATA) {
+            Get-Content "$env:PGDATA/server.log" -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload Windows logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-pg${{ matrix.pg_version }}-logs
+          path: |
+            regression.diffs
+            regression.out
+            results
+            tmp_check
+            **/server.log
+          if-no-files-found: ignore
 
       - name: Stop test cluster
         if: always()
-        run: '"$(pwd)/pg-${{ matrix.pg_version }}/bin/pg_ctl.exe" -D "$PGDATA" -m immediate stop || true'
+        shell: pwsh
+        run: |
+          if ($env:PGDATA) {
+            & "$PWD\pg-${{ matrix.pg_version }}\bin\pg_ctl.exe" -D "$env:PGDATA" -m immediate stop
+          }

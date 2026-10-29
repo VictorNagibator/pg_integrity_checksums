@@ -385,5 +385,12 @@ jobs:
         shell: pwsh
         run: |
           if ($env:PGDATA) {
-            & "$PWD\pg-${{ matrix.pg_version }}\bin\pg_ctl.exe" -D "$env:PGDATA" -m immediate stop
+            # PGXS exports PGDATA as an MSYS path (/d/a/...); native
+            # pg_ctl.exe needs a Windows path (D:/a/...).
+            $pgdata = $env:PGDATA
+            if ($pgdata -match '^/([a-zA-Z])/') {
+              $pgdata = $Matches[1] + ":" + $pgdata.Substring(2)
+            }
+            & "$PWD\pg-${{ matrix.pg_version }}\bin\pg_ctl.exe" -D $pgdata -m immediate stop
+            if ($LASTEXITCODE -ne 0) { exit 0 }
           }

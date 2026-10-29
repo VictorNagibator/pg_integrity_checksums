@@ -26,7 +26,11 @@ jobs:
       - name: Install PostgreSQL build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y postgresql-server-dev-all build-essential
+          # Do not use postgresql-server-dev-all here: on the GitHub runner it
+          # is the Ubuntu metapackage, which pins postgresql-common to the
+          # Ubuntu version and conflicts with the PGDG repository already
+          # configured on the image.
+          sudo apt-get install -y postgresql-server-dev-16 build-essential
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v3

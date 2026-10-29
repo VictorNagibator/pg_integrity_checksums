@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
+[![Quality](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml)
 [![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
 [![PostgreSQL 12-19](https://img.shields.io/badge/postgres-12--19-336791)](https://www.postgresql.org/)
 [![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
@@ -97,8 +98,8 @@ Replace `16` with your PostgreSQL major version.  The package page is
 > **Version note:** binary packages are rebuilt by the PIGSTY/PGEXT maintainers
 > after a release and can lag behind PGXN.  Check the installed version with
 > `SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`.
-> If the package still contains 2.0.0 and you need the 2.0.1 fixes, use PGXN or
-> build from source until the package is refreshed.
+> If the package still contains an older release and you need the latest 2.0.2
+> fixes, use PGXN or build from source until the package is refreshed.
 
 ### Docker
 
@@ -754,10 +755,12 @@ make installcheck
 make installcheck enable_tap_tests=yes PROVE=prove
 ```
 
-CI runs both suites on every supported major version (PostgreSQL 12 through 18)
+CI runs both suites on every supported major version (PostgreSQL 12 through 19)
 on Linux, macOS, and Windows.  [CodeQL](.github/workflows/codeql.yml) analyzes
-the C sources, and the [Docker workflow](.github/workflows/docker.yml) builds
-PG 14–18 images and smoke-tests PostgreSQL 16 on pull requests.
+the C sources, the [Quality workflow](.github/workflows/quality.yml) runs
+ASAN/UBSAN and coverage builds for PostgreSQL 14, 16, 18, and 19, and the
+[Docker workflow](.github/workflows/docker.yml) builds PG 14–18 images and
+smoke-tests PostgreSQL 16 on pull requests.
 
 **Tests cover:**
 
@@ -794,6 +797,10 @@ PG 14–18 images and smoke-tests PostgreSQL 16 on pull requests.
     required for table, page, index, tuple and cell checksums
 17. TOAST, zero-column tables, all-dropped-column tables, materialized views,
     invalid indexes and empty partitioned indexes
+18. Fixed cross-version logical baselines: the same schema/data gives the same
+    table, index, tuple and cell checksums on every supported major version
+19. Property/fuzz coverage of canonical encodings: numeric scale, array
+    literals, ranges, composites and enums, plus repeated scans of random data
 
 ---
 
@@ -866,8 +873,8 @@ So bump the version in `pg_integrity_checksums.control`, `META.json` and `Change
 the new SQL script (and an upgrade script if needed), and only then tag:
 
 ```bash
-git tag -a v2.0.1 -m "pg_integrity_checksums 2.0.1"
-git push origin v2.0.1
+git tag -a v2.0.2 -m "pg_integrity_checksums 2.0.2"
+git push origin v2.0.2
 ```
 
 ---

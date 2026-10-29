@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Linux - full PostgreSQL version matrix (12 - 18) using the PGDG packages.
+  # Linux - full PostgreSQL version matrix (12 - 19) using the PGDG packages.
   # Regression tests and TAP tests are both executed.
   # PostgreSQL 12 and 13 are out of support upstream: PGDG still builds them,
   # but only for older Ubuntu releases, so those two jobs stay on 22.04.
@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [14, 15, 16, 17, 18]
+        pg_version: [14, 15, 16, 17, 18, 19]
         include:
           - pg_version: 12
             os: ubuntu-22.04
@@ -45,10 +45,10 @@ jobs:
           sudo apt-get install -y postgresql-${{ matrix.pg_version }} postgresql-server-dev-${{ matrix.pg_version }}
 
       - name: Build extension
-        run: make PG_CONFIG="$PG_CONFIG"
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
 
       - name: Install extension (into system PostgreSQL)
-        run: sudo make PG_CONFIG="$PG_CONFIG" install
+        run: sudo make PG_CONFIG="$PG_CONFIG" install with_llvm=no
 
       - name: Setup test cluster
         run: |
@@ -80,7 +80,7 @@ jobs:
         if: always()
         run: sudo pg_dropcluster ${{ matrix.pg_version }} testcluster --stop || true
 
-  # macOS - full PostgreSQL version matrix (12 - 18).
+  # macOS - full PostgreSQL version matrix (12 - 19).
   # Homebrew ships bottles for 14 and newer. postgresql@12 and postgresql@13
   # are disabled in Homebrew, so those two versions are compiled from source
   # instead (the matching source tree is downloaded anyway for its TAP Perl
@@ -95,7 +95,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17, 18]
+        pg_version: [12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
       - name: Checkout repository
@@ -146,10 +146,10 @@ jobs:
           echo "$PREFIX/bin" >> "$GITHUB_PATH"
 
       - name: Build extension
-        run: make PG_CONFIG="$PG_CONFIG"
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
 
       - name: Install extension
-        run: make PG_CONFIG="$PG_CONFIG" install
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no install
 
       - name: Setup test cluster
         run: |
@@ -161,7 +161,7 @@ jobs:
           echo "PGDATA=$PGDATA" >> "$GITHUB_ENV"
 
       - name: Run regression tests and TAP tests
-        run: make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE=prove PROVE_FLAGS="-I $TAP_PERL_DIR"
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no installcheck enable_tap_tests=yes PROVE=prove PROVE_FLAGS="-I $TAP_PERL_DIR"
         env:
           PGPORT: 5433
           PGHOST: 127.0.0.1
@@ -186,7 +186,7 @@ jobs:
           PGBIN="$(dirname "$PG_CONFIG")"
           "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true
 
-  # Windows - full PostgreSQL version matrix (12 - 18).
+  # Windows - full PostgreSQL version matrix (12 - 19).
   # The official PostgreSQL binaries are built with MSVC and do not ship PGXS,
   # so PostgreSQL is compiled from source with MinGW-w64 inside MSYS2 (the same
   # way MSYS2 packages PostgreSQL). The resulting install is cached between runs,
@@ -200,7 +200,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17, 18]
+        pg_version: [12, 13, 14, 15, 16, 17, 18, 19]
 
     defaults:
       run:
@@ -316,10 +316,10 @@ jobs:
         run: '"$PG_CONFIG" --version'
 
       - name: Build extension
-        run: make PG_CONFIG="$PG_CONFIG"
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
 
       - name: Install extension
-        run: make PG_CONFIG="$PG_CONFIG" install
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no install
 
       - name: Setup test cluster
         run: |

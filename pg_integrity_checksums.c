@@ -1300,7 +1300,12 @@ logical_hash_array(Datum value, int depth)
 
     if (nelems > 0)
     {
+#if PG_VERSION_NUM >= 190000
+        array_iter_setup(&iter, arr, elem_info->typlen,
+                         elem_info->typbyval, elem_info->typalign);
+#else
         array_iter_setup(&iter, arr);
+#endif
 
         for (i = 0; i < nelems; i++)
         {
@@ -1308,8 +1313,12 @@ logical_hash_array(Datum value, int depth)
             Datum       elem;
             uint32      elem_hash;
 
+#if PG_VERSION_NUM >= 190000
+            elem = array_iter_next(&iter, &isnull, i);
+#else
             elem = array_iter_next(&iter, &isnull, i, elem_info->typlen,
                                    elem_info->typbyval, elem_info->typalign);
+#endif
             elem_hash = logical_hash_datum(elem, isnull, elemtype, -1,
                                            i + 1, depth + 1);
             h = combine_checksums(h, elem_hash);
@@ -4223,7 +4232,11 @@ compute_database_checksum_internal(bool physical, bool include_system,
     items = (ChecksumRelationItem *) palloc(capacity * sizeof(ChecksumRelationItem));
 
     pg_class_rel = table_open(RelationRelationId, AccessShareLock);
+#if PG_VERSION_NUM >= 190000
+    scan = table_beginscan(pg_class_rel, snapshot, 0, NULL, 0);
+#else
     scan = table_beginscan(pg_class_rel, snapshot, 0, NULL);
+#endif
 
     while ((classTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
     {

@@ -1,0 +1,184 @@
+name: Quality
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  coverage:
+    name: Coverage (PostgreSQL ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 16, 18, 19]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL and lcov
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get update
+          sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }} lcov
+
+      - name: Build extension with coverage
+        run: |
+          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          make clean
+          make PG_CONFIG="$PG_CONFIG" with_llvm=no \
+            CFLAGS="--coverage -O0 -g -fPIC" \
+            LDFLAGS="--coverage" \
+            -j"$(nproc)"
+          make PG_CONFIG="$PG_CONFIG" install DESTDIR="$PWD/coverage-stage" with_llvm=no
+
+      - name: Start coverage cluster
+        run: |
+          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          PKGLIBDIR="$("$PG_CONFIG" --pkglibdir)"
+          SHAREDIR="$("$PG_CONFIG" --sharedir)"
+          "$PG_CONFIG" --version
+          rm -rf .coverage-pgdata
+          /usr/lib/postgresql/${{ matrix.pg }}/bin/initdb -D "$PWD/.coverage-pgdata" -A trust --no-sync
+          /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_ctl -D "$PWD/.coverage-pgdata" \
+            -l "$PWD/.coverage-pgdata/server.log" \
+            -o "-p 55432 -k /tmp -c autovacuum=off -c dynamic_library_path=$PWD/coverage-stage$PKGLIBDIR:$PKGLIBDIR -c extension_control_path=$PWD/coverage-stage$SHAREDIR" \
+            -w start
+
+      - name: Run regression tests with coverage
+        run: |
+          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          PGHOST=/tmp PGPORT=55432 PGUSER="$(id -un)" \
+            make PG_CONFIG="$PG_CONFIG" installcheck
+
+      - name: Generate coverage report
+        if: always()
+        run: |
+          lcov --capture --directory . --output-file coverage.info || true
+          lcov --list coverage.info || true
+          genhtml coverage.info --output-directory coverage-html || true
+
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-pg${{ matrix.pg }}
+          path: |
+            coverage.info
+            coverage-html
+          if-no-files-found: ignore
+
+      - name: Show regression diff on failure
+        if: failure()
+        run: cat regression.diffs 2>/dev/null || true
+
+      - name: Stop coverage cluster
+        if: always()
+        run: /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_ctl -D "$PWD/.coverage-pgdata" -m immediate stop || true
+
+  sanitizers:
+    name: ASAN + UBSAN (PostgreSQL ${{ matrix.pg }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
+      UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 16, 18, 19]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex curl ca-certificates
+
+      - name: Build PostgreSQL ${{ matrix.pg }} with ASAN and UBSAN
+        run: |
+          curl -L -o pg.tar.gz \
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+          tar -xzf pg.tar.gz
+          cd postgres-REL_${{ matrix.pg }}_STABLE
+          ./configure \
+            --prefix="$PWD/../pgsan" \
+            --enable-cassert \
+            --enable-debug \
+            --without-icu \
+            --without-readline \
+            --without-zlib \
+            --without-llvm \
+            CFLAGS="-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined"
+          make -j"$(nproc)"
+          make install
+
+      - name: Build extension with sanitizers
+        run: |
+          make clean
+          make PG_CONFIG="$PWD/pgsan/bin/pg_config" with_llvm=no \
+            CFLAGS="-O1 -g -fPIC -fsanitize=address,undefined -fno-omit-frame-pointer" \
+            LDFLAGS="-fsanitize=address,undefined" \
+            -j"$(nproc)"
+          make PG_CONFIG="$PWD/pgsan/bin/pg_config" install with_llvm=no
+
+      - name: Start sanitizer cluster
+        run: |
+          export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1"
+          export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          rm -rf .san-pgdata
+          "$PWD/pgsan/bin/initdb" -D "$PWD/.san-pgdata" -A trust --no-sync
+          "$PWD/pgsan/bin/pg_ctl" -D "$PWD/.san-pgdata" \
+            -l "$PWD/.san-pgdata/server.log" \
+            -o "-p 55433 -k /tmp -c autovacuum=off" \
+            -w start
+
+      - name: Run regression tests with sanitizers
+        run: |
+          # Parallel workers fork; ASAN reports them less reliably than the
+          # serial suite.  Parallel coverage is still exercised by the normal
+          # CI matrix and by the coverage job.
+          REGRESS="checksum_basic checksum_database checksum_index checksum_table checksum_stability checksum_partition checksum_safety checksum_types checksum_crossversion checksum_catalog checksum_ddl checksum_access checksum_toast checksum_errors"
+          PGHOST=/tmp PGPORT=55433 PGUSER="$(id -un)" \
+            make PG_CONFIG="$PWD/pgsan/bin/pg_config" REGRESS="$REGRESS" installcheck
+
+      - name: Show sanitizer logs on failure
+        if: failure()
+        run: |
+          cat regression.diffs 2>/dev/null || true
+          cat .san-pgdata/server.log 2>/dev/null || true
+
+      - name: Upload sanitizer logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sanitizer-pg${{ matrix.pg }}-logs
+          path: |
+            regression.diffs
+            regression.out
+            .san-pgdata/server.log
+          if-no-files-found: ignore
+
+      - name: Stop sanitizer cluster
+        if: always()
+        run: |
+          export ASAN_OPTIONS="detect_leaks=0:abort_on_error=1"
+          export UBSAN_OPTIONS="halt_on_error=1:print_stacktrace=1"
+          "$PWD/pgsan/bin/pg_ctl" -D "$PWD/.san-pgdata" -m immediate stop || true

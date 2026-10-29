@@ -1,5 +1,13 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.0.2   2026-10-29
+
+    - Build against PostgreSQL 19 stable: adapt to the changed array_iter_setup,
+      array_iter_next and table_beginscan APIs.
+    - Add PostgreSQL 19 to CI, ASAN/UBSAN and coverage workflows,
+      cross-version logical baselines, and property/fuzz tests.
+    - No SQL object changes; the 2.0.1 -> 2.0.2 upgrade script is a no-op.
+
 2.0.1   2026-10-29
 
     - Fix logical checksums of system catalogs containing anyarray values

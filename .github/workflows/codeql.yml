@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y postgresql-server-dev-16 build-essential
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@v3
+        uses: github/codeql-action/init@v4
         with:
           languages: c-cpp
 
@@ -41,9 +41,12 @@ jobs:
         run: |
           PG_CONFIG="$(find /usr/lib/postgresql -name pg_config | sort -V | tail -1)"
           echo "Using $PG_CONFIG"
-          make PG_CONFIG="$PG_CONFIG" clean all
+          # PostgreSQL packages built with LLVM try to emit .bc files and may
+          # require a clang version that is not installed on the runner.
+          # Bitcode is not needed for CodeQL, so disable it.
+          make PG_CONFIG="$PG_CONFIG" with_llvm=no clean all
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@v3
+        uses: github/codeql-action/analyze@v4
         with:
           category: "/language:c-cpp"

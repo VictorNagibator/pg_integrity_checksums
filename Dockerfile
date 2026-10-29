@@ -17,8 +17,8 @@ RUN apt-get update \
 WORKDIR /src
 COPY . .
 RUN make clean \
-    && make -j"$(nproc)" \
-    && make install DESTDIR=/stage
+    && make -j"$(nproc)" with_llvm=no \
+    && make install DESTDIR=/stage with_llvm=no
 
 FROM postgres:${PG_MAJOR}
 ARG PG_MAJOR

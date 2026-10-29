@@ -1,7 +1,10 @@
 # pg_integrity_checksums - Multi-Level Data Integrity Extension for PostgreSQL
 
 [![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
-[![PostgreSQL 12-18](https://img.shields.io/badge/postgres-12--18-336791)](https://www.postgresql.org/)
+[![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
+[![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
+[![PostgreSQL 12-19](https://img.shields.io/badge/postgres-12--19-336791)](https://www.postgresql.org/)
+[![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/VictorNagibator/badge.svg)](https://hub.xerj.org/contributors/VictorNagibator)
 
@@ -64,9 +67,73 @@
 
 ## Installation
 
+### Install from packages or Docker (recommended)
+
+| Method | PostgreSQL versions | Notes |
+|---|---|---|
+| **PGXN / source** | 12–19 | Always gets the latest release |
+| **PIG / APT / DNF** | 14–18 | Binary packages from the PIGSTY repository via [PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums) |
+| **Docker** | 14–18 | Prebuilt images with the extension enabled in the default database |
+
+The fastest way on a machine that already has PostgreSQL 14–18 and the PIGSTY
+repository configured:
+
+```bash
+# Any distribution supported by PIG
+pig install pg_integrity_checksums
+
+# Debian / Ubuntu (PIGSTY repository configured)
+sudo apt install postgresql-16-pg-integrity-checksums
+
+# RHEL / Fedora / Rocky / AlmaLinux (PIGSTY repository configured)
+sudo dnf install pg_integrity_checksums_16
+
+psql -d your_database -c "CREATE EXTENSION pg_integrity_checksums;"
+```
+
+Replace `16` with your PostgreSQL major version.  The package page is
+[PGEXT.CLOUD: pg_integrity_checksums](https://pgext.cloud/ext/pg_integrity_checksums).
+
+> **Version note:** binary packages are rebuilt by the PIGSTY/PGEXT maintainers
+> after a release and can lag behind PGXN.  Check the installed version with
+> `SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`.
+> If the package still contains 2.0.0 and you need the 2.0.1 fixes, use PGXN or
+> build from source until the package is refreshed.
+
+### Docker
+
+Prebuilt images are published to GHCR for PostgreSQL 14–18.  The extension is
+created automatically in `POSTGRES_DB` on first initialization.
+
+```bash
+docker run --rm --name pg-integrity \
+  -e POSTGRES_PASSWORD=secret \
+  -e POSTGRES_DB=demo \
+  -p 5432:5432 \
+  ghcr.io/victornagibator/pg_integrity_checksums:pg16
+```
+
+Then, from another terminal:
+
+```bash
+psql -h localhost -U postgres -d demo \
+  -c "SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';" \
+  -c "SELECT pg_table_logical_checksum('pg_class'::regclass);"
+```
+
+To build an image for another PostgreSQL major version locally:
+
+```bash
+docker build --build-arg PG_MAJOR=17 -t pg-integrity-checksums:pg17 .
+```
+
+Images are built by the
+[Docker workflow](.github/workflows/docker.yml); pull requests and releases are
+smoke-tested with PostgreSQL 16.
+
 ### Prerequisites
 
-* PostgreSQL 12 or later (tested on 12, 13, 14, 15, 16, 17, and 18)
+* PostgreSQL 12 or later (tested on 12, 13, 14, 15, 16, 17, 18, and 19)
 * C compiler and PostgreSQL development headers
 * Superuser access to install the extension and to run the database-level
   checksum functions
@@ -688,7 +755,9 @@ make installcheck enable_tap_tests=yes PROVE=prove
 ```
 
 CI runs both suites on every supported major version (PostgreSQL 12 through 18)
-on Linux, macOS, and Windows.
+on Linux, macOS, and Windows.  [CodeQL](.github/workflows/codeql.yml) analyzes
+the C sources, and the [Docker workflow](.github/workflows/docker.yml) builds
+PG 14–18 images and smoke-tests PostgreSQL 16 on pull requests.
 
 **Tests cover:**
 

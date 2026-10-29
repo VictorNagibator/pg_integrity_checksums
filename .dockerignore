@@ -1,0 +1,9 @@
+.git
+.gitignore
+results
+tmp_check
+regression.diffs
+regression.out
+*.o
+*.so
+*.zip

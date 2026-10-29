@@ -1,0 +1,268 @@
+-- Canonical type encoding and edge-value tests.
+-- Numeric scale, NaN and infinities must be canonical.
+CREATE TABLE test_types_num_a (v numeric);
+CREATE TABLE test_types_num_b (v numeric);
+INSERT INTO test_types_num_a VALUES (1.0), ('NaN'), (-0.0);
+INSERT INTO test_types_num_b VALUES (1.00), ('NaN'), (0.0);
+SELECT pg_table_logical_checksum('test_types_num_a'::regclass) =
+       pg_table_logical_checksum('test_types_num_b'::regclass)
+       AS numeric_canonical_equal;
+ numeric_canonical_equal 
+-------------------------
+ t
+(1 row)
+
+-- Float NaN and signed zero must be canonical.
+CREATE TABLE test_types_float_a (v float8);
+CREATE TABLE test_types_float_b (v float8);
+INSERT INTO test_types_float_a VALUES ('NaN'), (-0.0), (1.5);
+INSERT INTO test_types_float_b VALUES ('NaN'), (0.0), (1.5);
+SELECT pg_table_logical_checksum('test_types_float_a'::regclass) =
+       pg_table_logical_checksum('test_types_float_b'::regclass)
+       AS float_canonical_equal;
+ float_canonical_equal 
+-----------------------
+ t
+(1 row)
+
+CREATE TABLE test_types_float4_a (v real);
+CREATE TABLE test_types_float4_b (v real);
+INSERT INTO test_types_float4_a VALUES ('NaN'), (-0.0), (1.5);
+INSERT INTO test_types_float4_b VALUES ('NaN'), (0.0), (1.5);
+SELECT pg_table_logical_checksum('test_types_float4_a'::regclass) =
+       pg_table_logical_checksum('test_types_float4_b'::regclass)
+       AS float4_canonical_equal;
+ float4_canonical_equal 
+------------------------
+ t
+(1 row)
+
+-- Same value, different SQL type: type tags must distinguish them.
+CREATE TABLE test_types_int_a (v int);
+CREATE TABLE test_types_bigint_b (v bigint);
+INSERT INTO test_types_int_a VALUES (42);
+INSERT INTO test_types_bigint_b VALUES (42);
+SELECT pg_table_logical_checksum('test_types_int_a'::regclass) <>
+       pg_table_logical_checksum('test_types_bigint_b'::regclass)
+       AS int_and_bigint_differ;
+ int_and_bigint_differ 
+-----------------------
+ t
+(1 row)
+
+CREATE TABLE test_types_text_a (v text);
+CREATE TABLE test_types_varchar_b (v varchar(20));
+INSERT INTO test_types_text_a VALUES ('same');
+INSERT INTO test_types_varchar_b VALUES ('same');
+SELECT pg_table_logical_checksum('test_types_text_a'::regclass) <>
+       pg_table_logical_checksum('test_types_varchar_b'::regclass)
+       AS text_and_varchar_differ;
+ text_and_varchar_differ 
+-------------------------
+ t
+(1 row)
+
+CREATE TABLE test_types_char_a (v char(5));
+INSERT INTO test_types_char_a VALUES ('same');
+SELECT pg_table_logical_checksum('test_types_char_a'::regclass) <>
+       pg_table_logical_checksum('test_types_text_a'::regclass)
+       AS char_and_text_differ;
+ char_and_text_differ 
+----------------------
+ t
+(1 row)
+
+-- NULL, empty string and empty bytea are distinct.
+CREATE TABLE test_types_null_text (v text);
+CREATE TABLE test_types_empty_text (v text);
+INSERT INTO test_types_null_text VALUES (NULL);
+INSERT INTO test_types_empty_text VALUES ('');
+SELECT pg_table_logical_checksum('test_types_null_text'::regclass) <>
+       pg_table_logical_checksum('test_types_empty_text'::regclass)
+       AS null_and_empty_text_differ;
+ null_and_empty_text_differ 
+----------------------------
+ t
+(1 row)
+
+CREATE TABLE test_types_null_bytea (v bytea);
+CREATE TABLE test_types_empty_bytea (v bytea);
+CREATE TABLE test_types_zero_bytea (v bytea);
+INSERT INTO test_types_null_bytea VALUES (NULL);
+INSERT INTO test_types_empty_bytea VALUES ('\x');
+INSERT INTO test_types_zero_bytea VALUES ('\x00');
+SELECT pg_table_logical_checksum('test_types_null_bytea'::regclass) <>
+       pg_table_logical_checksum('test_types_empty_bytea'::regclass)
+       AS null_and_empty_bytea_differ,
+       pg_table_logical_checksum('test_types_empty_bytea'::regclass) <>
+       pg_table_logical_checksum('test_types_zero_bytea'::regclass)
+       AS empty_and_zero_bytea_differ;
+ null_and_empty_bytea_differ | empty_and_zero_bytea_differ 
+-----------------------------+-----------------------------
+ t                           | t
+(1 row)
+
+-- Arrays: shape, bounds, NULL elements and empty/NULL are distinct.
+CREATE TABLE test_types_array_a (v int[]);
+CREATE TABLE test_types_array_b (v int[]);
+INSERT INTO test_types_array_a VALUES (ARRAY[1, 2]);
+INSERT INTO test_types_array_b VALUES ('[0:1]={1,2}'::int[]);
+SELECT pg_table_logical_checksum('test_types_array_a'::regclass) <>
+       pg_table_logical_checksum('test_types_array_b'::regclass)
+       AS array_lower_bound_differs;
+ array_lower_bound_differs 
+---------------------------
+ t
+(1 row)
+
+CREATE TABLE test_types_array_2d (v int[]);
+CREATE TABLE test_types_array_null_elem (v int[]);
+CREATE TABLE test_types_array_empty (v int[]);
+CREATE TABLE test_types_array_null (v int[]);
+INSERT INTO test_types_array_2d VALUES (ARRAY[[1,2]]);
+INSERT INTO test_types_array_null_elem VALUES (ARRAY[1,NULL]);
+INSERT INTO test_types_array_empty VALUES (ARRAY[]::int[]);
+INSERT INTO test_types_array_null VALUES (NULL);
+SELECT pg_table_logical_checksum('test_types_array_a'::regclass) <>
+       pg_table_logical_checksum('test_types_array_2d'::regclass)
+       AS array_dimensions_differ,
+       pg_table_logical_checksum('test_types_array_a'::regclass) <>
+       pg_table_logical_checksum('test_types_array_null_elem'::regclass)
+       AS array_null_element_differs,
+       pg_table_logical_checksum('test_types_array_empty'::regclass) <>
+       pg_table_logical_checksum('test_types_array_null'::regclass)
+       AS empty_and_null_array_differ;
+ array_dimensions_differ | array_null_element_differs | empty_and_null_array_differ 
+-------------------------+----------------------------+-----------------------------
+ t                       | t                          | t
+(1 row)
+
+-- Composite values: equal values of the same type match; different
+-- composite types do not.
+CREATE TYPE test_types_pair_a AS (n integer, s text);
+CREATE TYPE test_types_pair_b AS (n integer, s text);
+CREATE TABLE test_types_comp_a (v test_types_pair_a);
+CREATE TABLE test_types_comp_b (v test_types_pair_b);
+INSERT INTO test_types_comp_a VALUES (ROW(1, 'x')::test_types_pair_a);
+INSERT INTO test_types_comp_b VALUES (ROW(1, 'x')::test_types_pair_b);
+CREATE TABLE test_types_comp_a2 (v test_types_pair_a);
+INSERT INTO test_types_comp_a2 VALUES (ROW(1, 'x')::test_types_pair_a);
+SELECT pg_table_logical_checksum('test_types_comp_a'::regclass) =
+       pg_table_logical_checksum('test_types_comp_a2'::regclass)
+       AS same_composite_equal,
+       pg_table_logical_checksum('test_types_comp_a'::regclass) <>
+       pg_table_logical_checksum('test_types_comp_b'::regclass)
+       AS different_composite_types_differ;
+ same_composite_equal | different_composite_types_differ 
+----------------------+----------------------------------
+ t                    | t
+(1 row)
+
+-- Enums: labels are content; the enum type itself is part of the tag.
+CREATE TYPE test_types_mood_a AS ENUM ('sad', 'ok', 'happy');
+CREATE TYPE test_types_mood_b AS ENUM ('sad', 'ok', 'happy');
+CREATE TABLE test_types_enum_a (v test_types_mood_a);
+CREATE TABLE test_types_enum_b (v test_types_mood_b);
+INSERT INTO test_types_enum_a VALUES ('ok');
+INSERT INTO test_types_enum_b VALUES ('ok');
+SELECT pg_table_logical_checksum('test_types_enum_a'::regclass) <>
+       pg_table_logical_checksum('test_types_enum_b'::regclass)
+       AS different_enum_types_differ;
+ different_enum_types_differ 
+-----------------------------
+ t
+(1 row)
+
+-- Domains include the domain type tag, but the base value is canonical.
+CREATE DOMAIN test_types_domain AS int CHECK (VALUE > 0);
+CREATE TABLE test_types_domain_t (v test_types_domain);
+CREATE TABLE test_types_domain_base (v int);
+INSERT INTO test_types_domain_t VALUES (5);
+INSERT INTO test_types_domain_base VALUES (5);
+SELECT pg_table_logical_checksum('test_types_domain_t'::regclass) <>
+       pg_table_logical_checksum('test_types_domain_base'::regclass)
+       AS domain_and_base_differ;
+ domain_and_base_differ 
+------------------------
+ t
+(1 row)
+
+-- Ranges: bound inclusivity and emptiness are content.
+CREATE TABLE test_types_range_a (v int4range);
+CREATE TABLE test_types_range_b (v int4range);
+CREATE TABLE test_types_range_empty (v int4range);
+INSERT INTO test_types_range_a VALUES ('[1,3)');
+INSERT INTO test_types_range_b VALUES ('(1,3)');
+INSERT INTO test_types_range_empty VALUES ('empty');
+SELECT pg_table_logical_checksum('test_types_range_a'::regclass) <>
+       pg_table_logical_checksum('test_types_range_b'::regclass)
+       AS range_inclusivity_differs,
+       pg_table_logical_checksum('test_types_range_a'::regclass) <>
+       pg_table_logical_checksum('test_types_range_empty'::regclass)
+       AS range_empty_differs;
+ range_inclusivity_differs | range_empty_differs 
+---------------------------+---------------------
+ t                         | t
+(1 row)
+
+-- jsonb key order is canonical; the value is the same.
+CREATE TABLE test_types_json_a (v jsonb);
+CREATE TABLE test_types_json_b (v jsonb);
+INSERT INTO test_types_json_a VALUES ('{"a": 1, "b": 2}');
+INSERT INTO test_types_json_b VALUES ('{"b": 2, "a": 1}');
+SELECT pg_table_logical_checksum('test_types_json_a'::regclass) =
+       pg_table_logical_checksum('test_types_json_b'::regclass)
+       AS jsonb_key_order_equal;
+ jsonb_key_order_equal 
+-----------------------
+ t
+(1 row)
+
+-- The same instant with different display time zones is the same value.
+CREATE TABLE test_types_ts_a (v timestamptz);
+CREATE TABLE test_types_ts_b (v timestamptz);
+INSERT INTO test_types_ts_a VALUES ('2020-01-01 00:00:00+00');
+INSERT INTO test_types_ts_b VALUES ('2020-01-01 03:00:00+03');
+SELECT pg_table_logical_checksum('test_types_ts_a'::regclass) =
+       pg_table_logical_checksum('test_types_ts_b'::regclass)
+       AS timestamptz_instant_equal;
+ timestamptz_instant_equal 
+---------------------------
+ t
+(1 row)
+
+-- bit and varbit are distinct types with the same displayed bits.
+CREATE TABLE test_types_bit (v bit(8));
+CREATE TABLE test_types_varbit (v varbit);
+INSERT INTO test_types_bit VALUES (B'10101010');
+INSERT INTO test_types_varbit VALUES (B'10101010');
+SELECT pg_table_logical_checksum('test_types_bit'::regclass) <>
+       pg_table_logical_checksum('test_types_varbit'::regclass)
+       AS bit_and_varbit_differ;
+ bit_and_varbit_differ 
+-----------------------
+ t
+(1 row)
+
+-- Cleanup.
+DROP TABLE test_types_num_a, test_types_num_b;
+DROP TABLE test_types_float_a, test_types_float_b;
+DROP TABLE test_types_float4_a, test_types_float4_b;
+DROP TABLE test_types_int_a, test_types_bigint_b;
+DROP TABLE test_types_text_a, test_types_varchar_b, test_types_char_a;
+DROP TABLE test_types_null_text, test_types_empty_text;
+DROP TABLE test_types_null_bytea, test_types_empty_bytea, test_types_zero_bytea;
+DROP TABLE test_types_array_a, test_types_array_b, test_types_array_2d;
+DROP TABLE test_types_array_null_elem, test_types_array_empty, test_types_array_null;
+DROP TABLE test_types_comp_a, test_types_comp_b, test_types_comp_a2;
+DROP TYPE test_types_pair_a;
+DROP TYPE test_types_pair_b;
+DROP TABLE test_types_enum_a, test_types_enum_b;
+DROP TYPE test_types_mood_a;
+DROP TYPE test_types_mood_b;
+DROP TABLE test_types_domain_t, test_types_domain_base;
+DROP DOMAIN test_types_domain;
+DROP TABLE test_types_range_a, test_types_range_b, test_types_range_empty;
+DROP TABLE test_types_json_a, test_types_json_b;
+DROP TABLE test_types_ts_a, test_types_ts_b;
+DROP TABLE test_types_bit, test_types_varbit;

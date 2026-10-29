@@ -13,6 +13,7 @@ SELECT gs, gs % 10, 'data_' || gs FROM generate_series(1, 5000) gs;
 
 CREATE INDEX idx_test_parallel_group ON test_parallel (group_id);
 CREATE INDEX idx_test_parallel_data ON test_parallel (data);
+CREATE INDEX idx_test_parallel_hash ON test_parallel USING hash (data);
 
 -- Test A: parallel table physical checksum equals serial
 DO $$
@@ -74,6 +75,24 @@ BEGIN
     parallel_val := pg_index_logical_checksum('idx_test_parallel_group'::regclass);
     IF serial_val IS NULL OR serial_val != parallel_val THEN
         RAISE EXCEPTION 'Test D failed: parallel index logical checksum differs from serial';
+    END IF;
+END;
+$$;
+
+-- Test D2: parallel Hash index logical checksum equals serial.  Hash index
+-- descriptors store int4 hash codes, while FormIndexDatum returns the
+-- original text value; this covers the original-input-type path in workers.
+DO $$
+DECLARE
+    serial_val integer;
+    parallel_val integer;
+BEGIN
+    PERFORM set_config('pg_integrity_checksums.workers', '0', true);
+    serial_val := pg_index_logical_checksum('idx_test_parallel_hash'::regclass);
+    PERFORM set_config('pg_integrity_checksums.workers', '4', true);
+    parallel_val := pg_index_logical_checksum('idx_test_parallel_hash'::regclass);
+    IF serial_val IS NULL OR serial_val != parallel_val THEN
+        RAISE EXCEPTION 'Test D2 failed: parallel hash index logical checksum differs from serial';
     END IF;
 END;
 $$;

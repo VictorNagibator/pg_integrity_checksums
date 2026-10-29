@@ -1,6 +1,6 @@
 -- Safety, validation and privilege tests for pg_integrity_checksums
--- Test A: non-B-tree logical index checksums return NULL and do not crash,
--- while physical checksums remain available for every supported AM.
+-- Test A: logical and physical index checksums work for every supported AM
+-- without crashes, and remain independent of the access method.
 CREATE TABLE test_safety_index (
     id integer PRIMARY KEY,
     i integer NOT NULL,

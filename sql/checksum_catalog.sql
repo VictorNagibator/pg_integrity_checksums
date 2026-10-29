@@ -1,0 +1,34 @@
+-- System catalog and polymorphic type coverage.
+-- These relations exercise aclitem, pg_node_tree, anyarray and the many
+-- built-in catalog types that ordinary user tables do not contain.
+
+SELECT
+    pg_table_logical_checksum('pg_class'::regclass) IS NOT NULL AS pg_class_logical,
+    pg_table_logical_checksum('pg_attribute'::regclass) IS NOT NULL AS pg_attribute_logical,
+    pg_table_logical_checksum('pg_proc'::regclass) IS NOT NULL AS pg_proc_logical,
+    pg_table_logical_checksum('pg_type'::regclass) IS NOT NULL AS pg_type_logical,
+    pg_table_logical_checksum('pg_rewrite'::regclass) IS NOT NULL AS pg_rewrite_logical,
+    pg_table_logical_checksum('pg_depend'::regclass) IS NOT NULL AS pg_depend_logical;
+
+-- pg_statistic contains anyarray values (and often aclitem arrays in
+-- stavaluesN), which used to fail with "no binary output function".
+ANALYZE pg_class;
+SELECT pg_table_logical_checksum('pg_statistic'::regclass) IS NOT NULL
+       AS pg_statistic_logical;
+
+SELECT
+    pg_index_logical_checksum('pg_class_oid_index'::regclass) IS NOT NULL
+        AS system_btree_index_logical,
+    pg_index_physical_checksum('pg_class_oid_index'::regclass) IS NOT NULL
+        AS system_btree_index_physical;
+
+-- Include system catalogs and indexes.  This must complete without skipping
+-- relations; the expected output contains no warning.
+SELECT pg_database_logical_checksum(true, false) IS NOT NULL
+       AS database_logical_system_tables,
+       pg_database_logical_checksum(true, true) IS NOT NULL
+       AS database_logical_system_indexes;
+
+-- The same page-level API works on a catalog relation.
+SELECT pg_page_checksum('pg_class'::regclass, 0) IS NOT NULL
+       AS catalog_page_checksum;

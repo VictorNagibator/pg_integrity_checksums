@@ -102,6 +102,7 @@
 #include "executor/executor.h"
 #include "executor/tuptable.h"
 #include "nodes/execnodes.h"
+#include "nodes/nodeFuncs.h"
 
 /*
  * The OID of the pg_index_indrelid_index index is exposed differently
@@ -143,6 +144,16 @@
 #include "storage/checksum.h" 
 
 #include "pg_integrity_checksums.h"
+
+/*
+ * lnext() gained the list argument in PostgreSQL 13.  Keep the extension
+ * buildable on PostgreSQL 12.
+ */
+#if PG_VERSION_NUM < 130000
+#define lnext_compat(list, cell) lnext(cell)
+#else
+#define lnext_compat(list, cell) lnext(list, cell)
+#endif
 
 PG_MODULE_MAGIC;
 
@@ -351,6 +362,8 @@ typedef struct IndexLogicalScanState
     BufferAccessStrategy bstrategy;
     Datum      *values;
     bool       *nulls;
+    Oid        *inputtypid;
+    int32      *inputtypmod;
     int         nattrs;
 } IndexLogicalScanState;
 
@@ -1515,7 +1528,19 @@ logical_hash_datum(Datum value, bool isnull, Oid typid,
     typtype = type_info->base_typtype;
     elemtype = type_info->elemtype;
 
-    if (OidIsValid(elemtype))
+    /*
+     * Real array types have a concrete element type.  Polymorphic anyarray
+     * values (for example pg_statistic.stavalues) are still arrays at
+     * runtime, but get_element_type() returns InvalidOid for the pseudotype.
+     * Treat them as arrays and take the actual element type from the value's
+     * array header.
+     */
+    if (OidIsValid(elemtype) ||
+        typid == ANYARRAYOID
+#if PG_VERSION_NUM >= 140000
+        || typid == ANYCOMPATIBLEARRAYOID
+#endif
+        )
     {
         h = combine_checksums(h, logical_hash_array(value, depth));
         specialized = true;
@@ -2865,6 +2890,60 @@ pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
     scanstate->nattrs = scanstate->indexInfo->ii_NumIndexAttrs;
     scanstate->values = palloc(sizeof(Datum) * scanstate->nattrs);
     scanstate->nulls = palloc(sizeof(bool) * scanstate->nattrs);
+    scanstate->inputtypid = palloc(sizeof(Oid) * scanstate->nattrs);
+    scanstate->inputtypmod = palloc(sizeof(int32) * scanstate->nattrs);
+
+    {
+        ListCell   *expr_item = list_head(scanstate->indexInfo->ii_Expressions);
+        int         i;
+
+        for (i = 0; i < scanstate->nattrs; i++)
+        {
+            int         keycol = scanstate->indexInfo->ii_IndexAttrNumbers[i];
+            Form_pg_attribute hatt;
+            Oid         typid;
+            int32       typmod;
+
+            if (keycol > 0)
+            {
+                hatt = TupleDescAttr(scanstate->heapRel->rd_att, keycol - 1);
+                typid = hatt->atttypid;
+                typmod = hatt->atttypmod;
+            }
+            else if (keycol == 0)
+            {
+                Node       *expr;
+
+                if (expr_item == NULL)
+                    elog(ERROR, "wrong number of index expressions");
+
+                expr = (Node *) lfirst(expr_item);
+                typid = exprType(expr);
+                typmod = exprTypmod(expr);
+                expr_item = lnext_compat(scanstate->indexInfo->ii_Expressions,
+                                         expr_item);
+            }
+            else
+            {
+                Oid         sysrelid = RelationGetRelid(scanstate->heapRel);
+
+                typid = get_atttype(sysrelid, keycol);
+                typmod = -1;
+                if (!OidIsValid(typid))
+                {
+                    hatt = TupleDescAttr(RelationGetDescr(scanstate->idxRel), i);
+                    typid = hatt->atttypid;
+                    typmod = hatt->atttypmod;
+                }
+            }
+
+            scanstate->inputtypid[i] = typid;
+            scanstate->inputtypmod[i] = typmod;
+        }
+
+        if (expr_item != NULL)
+            elog(ERROR, "wrong number of index expressions");
+    }
 
     MemoryContextSwitchTo(oldcontext);
 
@@ -2880,7 +2959,6 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
                              ChecksumLogicalAccum *acc)
 {
     BlockNumber blkno;
-    TupleDesc   idxdesc = RelationGetDescr(scanstate->idxRel);
 
     for (blkno = start; blkno < end; blkno++)
     {
@@ -2956,13 +3034,12 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
 
                 for (i = 0; i < scanstate->nattrs; i++)
                 {
-                    Form_pg_attribute att = TupleDescAttr(idxdesc, i);
                     uint32      col_hash;
 
                     col_hash = pg_cell_checksum_canonical(scanstate->values[i],
                                                           scanstate->nulls[i],
-                                                          att->atttypid,
-                                                          att->atttypmod,
+                                                          scanstate->inputtypid[i],
+                                                          scanstate->inputtypmod[i],
                                                           i + 1);
                     row_hash = combine_checksums(row_hash, col_hash);
                 }

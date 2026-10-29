@@ -1,5 +1,24 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.0.1   2026-10-29
+
+    - Fix logical checksums of system catalogs containing anyarray values
+      (notably pg_statistic): the relation was skipped with "no binary output
+      function available for type aclitem" when system catalogs were included.
+    - Fix logical index checksums for Hash indexes.  Hash index descriptors
+      store an int4 hash code, but FormIndexDatum returns the original key;
+      logical checksums now use the original input type, so a Hash index and a
+      B-tree index on the same column have the same logical content and match
+      across databases.
+    - Add extensive type, system-catalog, DDL, privilege, TOAST, error and
+      cross-database tests.
+    - Hash-index logical checksums change because the previous values used
+      the index descriptor's int4 type for the original key value.  Recompute
+      index and database logical baselines that include Hash indexes.
+    - Database logical checksums with include_system=true change because
+      system catalogs such as pg_statistic are now covered instead of skipped.
+    - No SQL object changes; the 2.0.0 -> 2.0.1 upgrade script is a no-op.
+
 2.0.0   2026-10-28
 
     - BREAKING: rename the extension from pg_checksums to

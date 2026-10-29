@@ -713,6 +713,18 @@ on Linux, macOS, and Windows.
     partitioned tables, enum/numeric/array/composite/range values, all index
     AMs, expression/partial/INCLUDE indexes, and serial/parallel database
     consistency
+13. System-catalog checksums, including anyarray/aclitem values in
+    pg_statistic and pg_attribute; Hash index logical checksums match B-tree
+    checksums for the same input and are independent of the index AM
+14. DDL stability: table/column/index renames, added/dropped columns, type
+    changes, fillfactor, index creation, TRUNCATE and enum value additions
+15. Cross-database portability: identical schema/data in two databases with
+    different type, table and index OIDs produces equal logical checksums and
+    different physical checksums
+16. Privilege boundaries: column-only SELECT is rejected; table SELECT is
+    required for table, page, index, tuple and cell checksums
+17. TOAST, zero-column tables, all-dropped-column tables, materialized views,
+    invalid indexes and empty partitioned indexes
 
 ---
 
@@ -785,8 +797,8 @@ So bump the version in `pg_integrity_checksums.control`, `META.json` and `Change
 the new SQL script (and an upgrade script if needed), and only then tag:
 
 ```bash
-git tag -a v2.0.0 -m "pg_integrity_checksums 2.0.0"
-git push origin v2.0.0
+git tag -a v2.0.1 -m "pg_integrity_checksums 2.0.1"
+git push origin v2.0.1
 ```
 
 ---

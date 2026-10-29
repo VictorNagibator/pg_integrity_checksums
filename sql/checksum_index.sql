@@ -36,6 +36,8 @@ CREATE INDEX idx_btree_partial ON test_index_checksum (int_col) WHERE float_col 
 
 -- Create Hash index
 CREATE INDEX idx_hash_text ON test_index_checksum USING hash (text_col);
+CREATE INDEX idx_hash_expression ON test_index_checksum USING hash ((text_col || '_x'));
+CREATE INDEX idx_btree_expression_text ON test_index_checksum ((text_col || '_x'));
 
 -- Create GiST index
 CREATE INDEX idx_gist_range ON test_index_checksum USING gist (range_col);
@@ -68,6 +70,23 @@ SELECT
     pg_index_logical_checksum('idx_gin_tsvector'::regclass) IS NOT NULL AS gin_logical_valid,
     pg_index_logical_checksum('idx_spgist_range'::regclass) IS NOT NULL AS spgist_logical_valid,
     pg_index_logical_checksum('idx_brin_int'::regclass) IS NOT NULL AS brin_logical_valid;
+
+-- Test 2c: logical index content is independent of the access method.
+-- Hash indexes store an int4 hash code, but their logical checksum must be
+-- based on the original text value, just like a B-tree index.
+SELECT
+    pg_index_logical_checksum('idx_btree_text'::regclass) =
+    pg_index_logical_checksum('idx_hash_text'::regclass)
+        AS hash_uses_original_key,
+    pg_index_logical_checksum('idx_btree_int'::regclass) =
+    pg_index_logical_checksum('idx_brin_int'::regclass)
+        AS brin_uses_original_key,
+    pg_index_logical_checksum('idx_hash_expression'::regclass) =
+    pg_index_logical_checksum('idx_btree_expression_text'::regclass)
+        AS hash_expression_uses_original_key,
+    pg_index_logical_checksum('idx_gist_range'::regclass) =
+    pg_index_logical_checksum('idx_spgist_range'::regclass)
+        AS range_am_independent;
 
 -- Test 3: Hash index physical checksum is non-zero
 SELECT 

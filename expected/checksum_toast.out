@@ -1,0 +1,66 @@
+-- TOAST coverage: logical checksums must detoast parent values, while direct
+-- TOAST relations are physical-only.
+CREATE TABLE test_toast_a (id integer, v text, b bytea);
+CREATE TABLE test_toast_b (id integer, v text, b bytea);
+INSERT INTO test_toast_a
+VALUES (1, repeat('abcdef', 20000), decode(repeat('ab', 20000), 'hex'));
+INSERT INTO test_toast_b
+VALUES (1, repeat('abcdef', 20000), decode(repeat('ab', 20000), 'hex'));
+SELECT pg_table_logical_checksum('test_toast_a'::regclass) =
+       pg_table_logical_checksum('test_toast_b'::regclass)
+       AS toasted_values_equal;
+ toasted_values_equal 
+----------------------
+ t
+(1 row)
+
+CREATE TABLE test_toast_diff (id integer, v text);
+INSERT INTO test_toast_diff
+VALUES (1, repeat('a', 200000));
+SELECT pg_table_logical_checksum('test_toast_a'::regclass) <>
+       pg_table_logical_checksum('test_toast_diff'::regclass)
+       AS different_toasted_value_differs;
+ different_toasted_value_differs 
+---------------------------------
+ t
+(1 row)
+
+SELECT pg_table_logical_checksum('test_toast_a'::regclass) AS toast_before,
+       pg_table_physical_checksum('test_toast_a'::regclass, false) AS toast_phys_before
+\gset
+UPDATE test_toast_a SET v = repeat('b', 200000);
+SELECT pg_table_logical_checksum('test_toast_a'::regclass) <> :toast_before
+       AS toasted_update_changes_logical,
+       pg_table_physical_checksum('test_toast_a'::regclass, false) <> :toast_phys_before
+       AS toasted_update_changes_parent_physical;
+ toasted_update_changes_logical | toasted_update_changes_parent_physical 
+--------------------------------+----------------------------------------
+ t                              | t
+(1 row)
+
+SELECT
+    pg_table_physical_checksum(c.reltoastrelid::regclass, false) IS NOT NULL
+        AS toast_relation_physical,
+    pg_table_logical_checksum(c.reltoastrelid::regclass) IS NULL
+        AS toast_relation_logical_null
+FROM pg_class c
+WHERE c.oid = 'test_toast_a'::regclass;
+ toast_relation_physical | toast_relation_logical_null 
+-------------------------+-----------------------------
+ t                       | t
+(1 row)
+
+SELECT
+    pg_database_physical_checksum(false, true) IS NOT NULL
+        AS database_physical_with_toast,
+    pg_database_logical_checksum(false, true) IS NOT NULL
+        AS database_logical_with_indexes;
+ database_physical_with_toast | database_logical_with_indexes 
+------------------------------+-------------------------------
+ t                            | t
+(1 row)
+
+-- Cleanup.
+DROP TABLE test_toast_a;
+DROP TABLE test_toast_b;
+DROP TABLE test_toast_diff;

@@ -98,8 +98,6 @@ Replace `16` with your PostgreSQL major version.  The package page is
 > **Version note:** binary packages are rebuilt by the PIGSTY/PGEXT maintainers
 > after a release and can lag behind PGXN.  Check the installed version with
 > `SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`.
-> If the package still contains an older release and you need the latest 2.0.2
-> fixes, use PGXN or build from source until the package is refreshed.
 
 ### Docker
 

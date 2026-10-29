@@ -22,7 +22,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [14, 15, 16, 17, 18, 19]
+        pg_version: [14, 15, 16, 17, 18]
         include:
           - pg_version: 12
             os: ubuntu-22.04

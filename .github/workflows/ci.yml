@@ -11,8 +11,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Linux - full PostgreSQL version matrix (12 - 19) using the PGDG packages.
-  # Regression tests and TAP tests are both executed.
+  # Linux - PostgreSQL 12-18 via PGDG packages, plus a PostgreSQL 19
+  # source-build job below. Regression and TAP tests are executed.
   # PostgreSQL 12 and 13 are out of support upstream: PGDG still builds them,
   # but only for older Ubuntu releases, so those two jobs stay on 22.04.
   linux:
@@ -80,11 +80,84 @@ jobs:
         if: always()
         run: sudo pg_dropcluster ${{ matrix.pg_version }} testcluster --stop || true
 
+  # PostgreSQL 19 is newer than the PGDG apt repository for Ubuntu 24.04.
+  # Build it from source here; the normal Linux matrix covers 12-18.
+  linux-pg19:
+    name: Linux / PostgreSQL 19 (source)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex curl ca-certificates libipc-run-perl
+
+      - name: Build PostgreSQL 19 from source
+        run: |
+          curl -L -o pg.tar.gz \
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_19_STABLE.tar.gz"
+          tar -xzf pg.tar.gz
+          cd postgres-REL_19_STABLE
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/pg19" \
+            --enable-tap-tests \
+            --disable-nls \
+            --without-icu \
+            --without-readline \
+            --without-zlib \
+            --without-llvm
+          make -j"$(nproc)"
+          make install
+          echo "PG_CONFIG=$GITHUB_WORKSPACE/pg19/bin/pg_config" >> "$GITHUB_ENV"
+          echo "PATH=$GITHUB_WORKSPACE/pg19/bin:$PATH" >> "$GITHUB_ENV"
+          echo "TAP_PERL_DIR=$GITHUB_WORKSPACE/postgres-REL_19_STABLE/src/test/perl" >> "$GITHUB_ENV"
+
+      - name: Build extension
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
+
+      - name: Install extension
+        run: make PG_CONFIG="$PG_CONFIG" install with_llvm=no
+
+      - name: Setup test cluster
+        run: |
+          PGBIN="$(dirname "$PG_CONFIG")"
+          PGDATA="$RUNNER_TEMP/pgdata"
+          rm -rf "$PGDATA"
+          "$PGBIN/initdb" -D "$PGDATA" -U postgres -A trust --no-sync
+          "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" -o "-p 5433" -w start
+          echo "PGDATA=$PGDATA" >> "$GITHUB_ENV"
+
+      - name: Run regression tests and TAP tests
+        run: |
+          make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE=prove PROVE_FLAGS="-I $TAP_PERL_DIR"
+        env:
+          PGPORT: 5433
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+
+      - name: Show regression.diffs on failure
+        if: failure()
+        run: cat regression.diffs 2>/dev/null || true
+
+      - name: Show TAP test log on failure
+        if: failure()
+        run: cat tmp_check/log/regress_log_* 2>/dev/null || true
+
+      - name: Stop test cluster
+        if: always()
+        run: |
+          if [ -n "$PGDATA" ]; then
+            PGBIN="$(dirname "$PG_CONFIG")"
+            "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true
+          fi
+
   # macOS - full PostgreSQL version matrix (12 - 19).
-  # Homebrew ships bottles for 14 and newer. postgresql@12 and postgresql@13
-  # are disabled in Homebrew, so those two versions are compiled from source
-  # instead (the matching source tree is downloaded anyway for its TAP Perl
-  # modules). Homebrew's PostgreSQL is built without --enable-tap-tests, so the
+  # Homebrew ships bottles for 14-18. PostgreSQL 12, 13, and 19 are compiled
+  # from source (the matching source tree is downloaded anyway for its TAP
+  # Perl modules). Homebrew's PostgreSQL is built without --enable-tap-tests, so the
   # TAP Perl modules are not installed. We download the matching PostgreSQL
   # source's src/test/perl tree and force the PGXS TAP target on, so that TAP
   # tests run here as well.
@@ -111,8 +184,8 @@ jobs:
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
 
-      - name: Install PostgreSQL ${{ matrix.pg_version }} (Homebrew, 14+)
-        if: matrix.pg_version >= 14
+      - name: Install PostgreSQL ${{ matrix.pg_version }} (Homebrew, 14-18)
+        if: matrix.pg_version >= 14 && matrix.pg_version <= 18
         run: |
           brew install postgresql@${{ matrix.pg_version }}
           echo "PG_CONFIG=$(brew --prefix postgresql@${{ matrix.pg_version }})/bin/pg_config" >> "$GITHUB_ENV"
@@ -129,8 +202,8 @@ jobs:
           echo "PG_SRC=$RUNNER_TEMP/postgres-REL_${{ matrix.pg_version }}_STABLE" >> "$GITHUB_ENV"
           echo "TAP_PERL_DIR=$RUNNER_TEMP/postgres-REL_${{ matrix.pg_version }}_STABLE/src/test/perl" >> "$GITHUB_ENV"
 
-      - name: Build and install PostgreSQL ${{ matrix.pg_version }} from source (12, 13)
-        if: matrix.pg_version < 14
+      - name: Build and install PostgreSQL ${{ matrix.pg_version }} from source (12, 13, 19)
+        if: matrix.pg_version < 14 || matrix.pg_version == 19
         run: |
           PREFIX="$RUNNER_TEMP/pg-${{ matrix.pg_version }}"
           cd "$PG_SRC"
@@ -298,6 +371,9 @@ jobs:
               export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
               ;;
           esac
+          # PostgreSQL 19 checks libpq with libpq_check.pl, which runs native
+          # Perl and needs a Windows path for nm.
+          export NM="$(cygpath -w "$(command -v nm)")"
           ./configure \
             --prefix="$PREFIX" \
             --build="$MINGW_CHOST" \

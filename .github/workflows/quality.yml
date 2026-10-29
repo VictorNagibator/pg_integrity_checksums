@@ -18,7 +18,7 @@ jobs:
   coverage:
     name: Coverage (PostgreSQL ${{ matrix.pg }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -28,42 +28,51 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install PostgreSQL and lcov
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ca-certificates
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get update
-          sudo apt-get install -y postgresql-${{ matrix.pg }} postgresql-server-dev-${{ matrix.pg }} lcov
+          sudo apt-get install -y build-essential bison flex curl ca-certificates lcov
+
+      - name: Build PostgreSQL ${{ matrix.pg }} for coverage
+        run: |
+          curl -L -o pg.tar.gz \
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+          tar -xzf pg.tar.gz
+          cd postgres-REL_${{ matrix.pg }}_STABLE
+          ./configure \
+            --prefix="$PWD/../pgcov" \
+            --disable-nls \
+            --without-icu \
+            --without-readline \
+            --without-zlib \
+            --without-llvm
+          make -j"$(nproc)"
+          make install
 
       - name: Build extension with coverage
         run: |
-          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
+          PG_CONFIG="$PWD/pgcov/bin/pg_config"
           make clean
           make PG_CONFIG="$PG_CONFIG" with_llvm=no \
             CFLAGS="--coverage -O0 -g -fPIC" \
             LDFLAGS="--coverage" \
             -j"$(nproc)"
-          make PG_CONFIG="$PG_CONFIG" install DESTDIR="$PWD/coverage-stage" with_llvm=no
+          make PG_CONFIG="$PG_CONFIG" install with_llvm=no
 
       - name: Start coverage cluster
         run: |
-          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
-          PKGLIBDIR="$("$PG_CONFIG" --pkglibdir)"
-          SHAREDIR="$("$PG_CONFIG" --sharedir)"
-          "$PG_CONFIG" --version
+          "$PWD/pgcov/bin/pg_config" --version
           rm -rf .coverage-pgdata
-          /usr/lib/postgresql/${{ matrix.pg }}/bin/initdb -D "$PWD/.coverage-pgdata" -A trust --no-sync
-          /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_ctl -D "$PWD/.coverage-pgdata" \
+          "$PWD/pgcov/bin/initdb" -D "$PWD/.coverage-pgdata" -A trust --no-sync
+          "$PWD/pgcov/bin/pg_ctl" -D "$PWD/.coverage-pgdata" \
             -l "$PWD/.coverage-pgdata/server.log" \
-            -o "-p 55432 -k /tmp -c autovacuum=off -c dynamic_library_path=$PWD/coverage-stage$PKGLIBDIR:$PKGLIBDIR -c extension_control_path=$PWD/coverage-stage$SHAREDIR" \
+            -o "-p 55432 -k /tmp -c autovacuum=off" \
             -w start
 
       - name: Run regression tests with coverage
         run: |
-          PG_CONFIG=/usr/lib/postgresql/${{ matrix.pg }}/bin/pg_config
           PGHOST=/tmp PGPORT=55432 PGUSER="$(id -un)" \
-            make PG_CONFIG="$PG_CONFIG" installcheck
+            make PG_CONFIG="$PWD/pgcov/bin/pg_config" installcheck
 
       - name: Generate coverage report
         if: always()
@@ -88,7 +97,8 @@ jobs:
 
       - name: Stop coverage cluster
         if: always()
-        run: /usr/lib/postgresql/${{ matrix.pg }}/bin/pg_ctl -D "$PWD/.coverage-pgdata" -m immediate stop || true
+        run: |
+          "$PWD/pgcov/bin/pg_ctl" -D "$PWD/.coverage-pgdata" -m immediate stop || true
 
   sanitizers:
     name: ASAN + UBSAN (PostgreSQL ${{ matrix.pg }})

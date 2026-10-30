@@ -117,13 +117,28 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Resolve PostgreSQL source checksum
+        id: pg-src
+        run: |
+          curl -L -o pg-src-cache.tar.gz \
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+          echo "sha=$(sha256sum pg-src-cache.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore FreeBSD PostgreSQL build
+        id: pg-cache
+        if: matrix.pg == 12 || matrix.pg == 13 || matrix.pg == 19
+        uses: actions/cache/restore@v4
+        with:
+          path: pg-cache
+          key: freebsd-14-v1-${{ matrix.arch }}-pg${{ matrix.pg }}-${{ steps.pg-src.outputs.sha }}
+
       - name: Test in FreeBSD
         uses: vmactions/freebsd-vm@v1
         with:
           release: "14"
           arch: ${{ matrix.arch }}
           mem: 4096
-          cpu: 2
+          cpu: 4
           envs: 'PG'
           prepare: |
             pkg update
@@ -133,12 +148,14 @@ jobs:
             PG_SRC="/tmp/pg-src-$PG"
             PREFIX="/usr/local/pg$PG"
             rm -rf "$PG_SRC"
-            curl -L -o /tmp/pg.tar.gz \
-              "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
-            tar -xzf /tmp/pg.tar.gz -C /tmp
+            tar -xzf "$GITHUB_WORKSPACE/pg-src-cache.tar.gz" -C /tmp
             mv "/tmp/postgres-REL_$PG"_STABLE "$PG_SRC"
 
-            if pkg install -y "postgresql$PG-server" "postgresql$PG-client"; then
+            CACHE_FILE="$GITHUB_WORKSPACE/pg-cache/pg$PG.tar.gz"
+            if [ -f "$CACHE_FILE" ]; then
+              tar -xzf "$CACHE_FILE" -C /
+              PG_CONFIG="$PREFIX/bin/pg_config"
+            elif pkg install -y "postgresql$PG-server" "postgresql$PG-client"; then
               PG_CONFIG=/usr/local/bin/pg_config
             else
               cd "$PG_SRC"
@@ -153,6 +170,10 @@ jobs:
               gmake -j"$(sysctl -n hw.ncpu)"
               gmake install
               PG_CONFIG="$PREFIX/bin/pg_config"
+
+              mkdir -p "$GITHUB_WORKSPACE/pg-cache"
+              tar -czf "$CACHE_FILE" -C / "usr/local/pg$PG"
+              chmod 644 "$CACHE_FILE"
             fi
 
             if ! id postgres >/dev/null 2>&1; then
@@ -177,6 +198,14 @@ jobs:
             su -m postgres -c "cd '$GITHUB_WORKSPACE' && PATH='$PGBIN:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' PGHOST=/tmp PGPORT=5433 PGUSER=postgres gmake PG_CONFIG='$PG_CONFIG' installcheck $TAP_ARGS"
 
             su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -m immediate stop"
+
+      - name: Save FreeBSD PostgreSQL build
+        if: always() && (matrix.pg == 12 || matrix.pg == 13 || matrix.pg == 19) && steps.pg-cache.outputs.cache-hit != 'true' && hashFiles('pg-cache/*.tar.gz') != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: pg-cache
+          key: freebsd-14-v1-${{ matrix.arch }}-pg${{ matrix.pg }}-${{ steps.pg-src.outputs.sha }}
 
       - name: Show TAP log on failure
         if: failure()

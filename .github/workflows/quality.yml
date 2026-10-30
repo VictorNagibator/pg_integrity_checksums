@@ -107,6 +107,7 @@ jobs:
     env:
       ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"
       UBSAN_OPTIONS: "halt_on_error=1:print_stacktrace=1"
+      PG: ${{ matrix.pg }}
     strategy:
       fail-fast: false
       matrix:
@@ -127,11 +128,16 @@ jobs:
             "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
           tar -xzf pg.tar.gz
           cd postgres-REL_${{ matrix.pg }}_STABLE
-          # ASAN's fake stack makes PostgreSQL 12/13's stack-depth check
-          # unreliable for even trivial statements such as set_config().
-          # This is a sanitizer harness workaround, not a production change.
+          # ASAN's fake stack makes the stack-depth check ineffective on
+          # PostgreSQL 12-17.  This is a sanitizer harness workaround, not a
+          # production change.
+          if [ "$PG" -lt 18 ]; then
+            STACK_FILE=src/backend/tcop/postgres.c
+          else
+            STACK_FILE=src/backend/utils/misc/stack_depth.c
+          fi
           sed -i 's/if (stack_depth > max_stack_depth_bytes/if (false \&\& stack_depth > max_stack_depth_bytes/' \
-            src/backend/utils/misc/stack_depth.c
+            "$STACK_FILE"
           ./configure \
             --prefix="$PWD/../pgsan" \
             --enable-cassert \

@@ -157,8 +157,14 @@ jobs:
           "$PWD/pgsan/bin/initdb" -D "$PWD/.san-pgdata" -A trust --no-sync
           "$PWD/pgsan/bin/pg_ctl" -D "$PWD/.san-pgdata" \
             -l "$PWD/.san-pgdata/server.log" \
-            -o "-p 55433 -k /tmp -c autovacuum=off -c max_stack_depth=6MB" \
+            -o "-p 55433 -k /tmp -c autovacuum=off" \
             -w start
+          # PG12/13 under ASAN hit the stack-depth check in pg_regress's
+          # initial DROP DATABASE.  Create the database up front and use
+          # --use-existing so the sanitizer run exercises the extension itself.
+          "$PWD/pgsan/bin/createdb" -h /tmp -p 55433 -U "$(id -un)" contrib_regression
+          "$PWD/pgsan/bin/psql" -h /tmp -p 55433 -U "$(id -un)" -d contrib_regression \
+            -v ON_ERROR_STOP=1 -c "CREATE EXTENSION pg_integrity_checksums"
 
       - name: Run regression tests with sanitizers
         run: |
@@ -166,8 +172,9 @@ jobs:
           # serial suite.  Parallel coverage is still exercised by the normal
           # CI matrix and by the coverage job.
           REGRESS="checksum_basic checksum_database checksum_index checksum_table checksum_stability checksum_partition checksum_safety checksum_types checksum_crossversion checksum_catalog checksum_ddl checksum_access checksum_toast checksum_errors"
+          REGRESS_OPTS="--inputdir=./ --use-existing"
           PGHOST=/tmp PGPORT=55433 PGUSER="$(id -un)" \
-            make PG_CONFIG="$PWD/pgsan/bin/pg_config" REGRESS="$REGRESS" installcheck
+            make PG_CONFIG="$PWD/pgsan/bin/pg_config" REGRESS="$REGRESS" REGRESS_OPTS="$REGRESS_OPTS" installcheck
 
       - name: Show sanitizer logs on failure
         if: failure()

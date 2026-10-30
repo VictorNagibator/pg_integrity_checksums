@@ -127,6 +127,11 @@ jobs:
             "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
           tar -xzf pg.tar.gz
           cd postgres-REL_${{ matrix.pg }}_STABLE
+          # ASAN's fake stack makes PostgreSQL 12/13's stack-depth check
+          # unreliable for even trivial statements such as set_config().
+          # This is a sanitizer harness workaround, not a production change.
+          sed -i 's/if (stack_depth > max_stack_depth_bytes/if (false \&\& stack_depth > max_stack_depth_bytes/' \
+            src/backend/utils/misc/stack_depth.c
           ./configure \
             --prefix="$PWD/../pgsan" \
             --enable-cassert \
@@ -158,7 +163,7 @@ jobs:
           "$PWD/pgsan/bin/initdb" -D "$PWD/.san-pgdata" -A trust --no-sync
           "$PWD/pgsan/bin/pg_ctl" -D "$PWD/.san-pgdata" \
             -l "$PWD/.san-pgdata/server.log" \
-            -o "-p 55433 -k /tmp -c autovacuum=off -c max_stack_depth=16MB" \
+            -o "-p 55433 -k /tmp -c autovacuum=off" \
             -w start
           # PG12/13 under ASAN hit the stack-depth check in pg_regress's
           # initial DROP DATABASE.  Create the database up front and use

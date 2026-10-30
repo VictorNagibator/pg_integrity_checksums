@@ -11,80 +11,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Linux - PostgreSQL 12-18 via PGDG packages, plus a PostgreSQL 19
-  # source-build job below. Regression and TAP tests are executed.
-  # PostgreSQL 12 and 13 are out of support upstream: PGDG still builds them,
-  # but only for older Ubuntu releases, so those two jobs stay on 22.04.
+  # Linux - every PostgreSQL version on x86_64 and ARM64, built from source.
   linux:
-    name: Linux / PostgreSQL ${{ matrix.pg_version }}
-    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
-
+    name: Linux ${{ matrix.arch }} / PostgreSQL ${{ matrix.pg }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      PG: ${{ matrix.pg }}
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [14, 15, 16, 17, 18]
-        include:
-          - pg_version: 12
-            os: ubuntu-22.04
-          - pg_version: 13
-            os: ubuntu-22.04
-
-    env:
-      PG_CONFIG: /usr/lib/postgresql/${{ matrix.pg_version }}/bin/pg_config
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install PostgreSQL, build dependencies, and Perl modules
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ca-certificates postgresql-common build-essential libipc-run-perl
-          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
-          sudo apt-get update
-          sudo apt-get install -y postgresql-${{ matrix.pg_version }} postgresql-server-dev-${{ matrix.pg_version }}
-
-      - name: Build extension
-        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
-
-      - name: Install extension (into system PostgreSQL)
-        run: sudo make PG_CONFIG="$PG_CONFIG" install with_llvm=no
-
-      - name: Setup test cluster
-        run: |
-          sudo pg_createcluster ${{ matrix.pg_version }} testcluster --start --port 5433
-          echo "local all all trust" | sudo tee -a /etc/postgresql/${{ matrix.pg_version }}/testcluster/pg_hba.conf
-          sudo -u postgres psql -p 5433 -c "ALTER SYSTEM SET autovacuum = off;"
-          sudo pg_ctlcluster ${{ matrix.pg_version }} testcluster reload
-          sudo -u postgres psql -p 5433 -c "CREATE USER runner WITH SUPERUSER;"
-
-      - name: Run regression tests and TAP tests
-        run: |
-          # The TAP framework shells out to initdb/pg_ctl/psql, but Debian
-          # keeps the versioned binaries outside the default PATH.
-          export PATH="/usr/lib/postgresql/${{ matrix.pg_version }}/bin:$PATH"
-          make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE=prove
-        env:
-          PGPORT: 5433
-
-      - name: Show regression.diffs on failure
-        if: failure()
-        run: |
-          if [ -f regression.diffs ]; then cat regression.diffs; else echo "regression.diffs not found"; fi
-
-      - name: Show TAP test log on failure
-        if: failure()
-        run: cat tmp_check/log/regress_log_* 2>/dev/null || true
-
-      - name: Cleanup cluster
-        if: always()
-        run: sudo pg_dropcluster ${{ matrix.pg_version }} testcluster --stop || true
-
-  # PostgreSQL 19 is newer than the PGDG apt repository for Ubuntu 24.04.
-  # Build it from source here; the normal Linux matrix covers 12-18.
-  linux-pg19:
-    name: Linux / PostgreSQL 19 (source)
-    runs-on: ubuntu-latest
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        arch: [x86_64, arm64]
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+        exclude:
+          - os: ubuntu-latest
+            arch: arm64
+          - os: ubuntu-24.04-arm
+            arch: x86_64
 
     steps:
       - name: Checkout repository
@@ -95,14 +39,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex curl ca-certificates libipc-run-perl
 
-      - name: Build PostgreSQL 19 from source
+      - name: Build PostgreSQL ${{ matrix.pg }} from source
         run: |
           curl -L -o pg.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_19_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
           tar -xzf pg.tar.gz
-          cd postgres-REL_19_STABLE
+          PG_SRC="$PWD/postgres-REL_$PG"_STABLE
+          PREFIX="$PWD/pg$PG"
+          cd "$PG_SRC"
           ./configure \
-            --prefix="$GITHUB_WORKSPACE/pg19" \
+            --prefix="$PREFIX" \
             --enable-tap-tests \
             --disable-nls \
             --without-icu \
@@ -111,9 +57,9 @@ jobs:
             --without-llvm
           make -j"$(nproc)"
           make install
-          echo "PG_CONFIG=$GITHUB_WORKSPACE/pg19/bin/pg_config" >> "$GITHUB_ENV"
-          echo "PATH=$GITHUB_WORKSPACE/pg19/bin:$PATH" >> "$GITHUB_ENV"
-          echo "TAP_PERL_DIR=$GITHUB_WORKSPACE/postgres-REL_19_STABLE/src/test/perl" >> "$GITHUB_ENV"
+          echo "PG_CONFIG=$PREFIX/bin/pg_config" >> "$GITHUB_ENV"
+          echo "PATH=$PREFIX/bin:$PATH" >> "$GITHUB_ENV"
+          echo "TAP_PERL_DIR=$PG_SRC/src/test/perl" >> "$GITHUB_ENV"
 
       - name: Build extension
         run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
@@ -130,7 +76,7 @@ jobs:
           "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" -o "-p 5433" -w start
           echo "PGDATA=$PGDATA" >> "$GITHUB_ENV"
 
-      - name: Run regression tests and TAP tests
+      - name: Run regression and TAP tests
         run: |
           make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE=prove PROVE_FLAGS="-I $TAP_PERL_DIR"
         env:
@@ -142,7 +88,7 @@ jobs:
         if: failure()
         run: cat regression.diffs 2>/dev/null || true
 
-      - name: Show TAP test log on failure
+      - name: Show TAP log on failure
         if: failure()
         run: cat tmp_check/log/regress_log_* 2>/dev/null || true
 
@@ -153,6 +99,88 @@ jobs:
             PGBIN="$(dirname "$PG_CONFIG")"
             "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true
           fi
+
+  # FreeBSD - every PostgreSQL version on amd64 and arm64.
+  freebsd:
+    name: FreeBSD ${{ matrix.arch }} / PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PG: ${{ matrix.pg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test in FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          arch: ${{ matrix.arch }}
+          mem: 4096
+          cpu: 2
+          envs: 'PG'
+          prepare: |
+            pkg update
+            pkg install -y gmake bison flex curl p5-IPC-Run
+          run: |
+            set -e
+            PG_SRC="/tmp/pg-src-$PG"
+            PREFIX="/usr/local/pg$PG"
+            rm -rf "$PG_SRC"
+            curl -L -o /tmp/pg.tar.gz \
+              "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
+            tar -xzf /tmp/pg.tar.gz -C /tmp
+            mv "/tmp/postgres-REL_$PG"_STABLE "$PG_SRC"
+
+            if pkg install -y "postgresql$PG-server" "postgresql$PG-client"; then
+              PG_CONFIG=/usr/local/bin/pg_config
+            else
+              cd "$PG_SRC"
+              ./configure \
+                --prefix="$PREFIX" \
+                --enable-tap-tests \
+                --disable-nls \
+                --without-icu \
+                --without-readline \
+                --without-zlib \
+                --without-llvm
+              gmake -j"$(sysctl -n hw.ncpu)"
+              gmake install
+              PG_CONFIG="$PREFIX/bin/pg_config"
+            fi
+
+            if ! id postgres >/dev/null 2>&1; then
+              pw useradd postgres -m -s /bin/sh
+            fi
+            chown -R postgres:postgres "$GITHUB_WORKSPACE"
+
+            cd "$GITHUB_WORKSPACE"
+            gmake PG_CONFIG="$PG_CONFIG" with_llvm=no
+            gmake PG_CONFIG="$PG_CONFIG" install with_llvm=no
+
+            PGBIN="$(dirname "$PG_CONFIG")"
+            PGDATA="/tmp/pgdata-$PG"
+            rm -rf "$PGDATA"
+            su -m postgres -c "$PGBIN/initdb -D $PGDATA -U postgres -A trust --no-sync"
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -l $PGDATA/server.log -o '-p 5433' -w start"
+
+            TAP_ARGS=""
+            if command -v prove >/dev/null 2>&1; then
+              TAP_ARGS="enable_tap_tests=yes PROVE=prove PROVE_FLAGS='-I $PG_SRC/src/test/perl'"
+            fi
+            su -m postgres -c "cd '$GITHUB_WORKSPACE' && PATH='$PGBIN:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' PGHOST=/tmp PGPORT=5433 PGUSER=postgres gmake PG_CONFIG='$PG_CONFIG' installcheck $TAP_ARGS"
+
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -m immediate stop"
+
+      - name: Show TAP log on failure
+        if: failure()
+        run: cat tmp_check/log/regress_log_* 2>/dev/null || true
 
   # macOS - full PostgreSQL version matrix (12 - 19).
   # Homebrew ships bottles for 14-18. PostgreSQL 12, 13, and 19 are compiled

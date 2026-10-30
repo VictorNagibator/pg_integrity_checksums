@@ -1,0 +1,174 @@
+name: Platforms
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platforms-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux-arm64:
+    name: Linux ARM64 / PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    env:
+      PG: ${{ matrix.pg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex curl ca-certificates libipc-run-perl
+
+      - name: Build PostgreSQL ${{ matrix.pg }} from source
+        run: |
+          curl -L -o pg.tar.gz \
+            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+          tar -xzf pg.tar.gz
+          PG_SRC="$PWD/postgres-REL_$PG"_STABLE
+          PREFIX="$PWD/pg$PG"
+          cd "$PG_SRC"
+          ./configure \
+            --prefix="$PREFIX" \
+            --enable-tap-tests \
+            --disable-nls \
+            --without-icu \
+            --without-readline \
+            --without-zlib \
+            --without-llvm
+          make -j"$(nproc)"
+          make install
+          echo "PG_CONFIG=$PREFIX/bin/pg_config" >> "$GITHUB_ENV"
+          echo "PATH=$PREFIX/bin:$PATH" >> "$GITHUB_ENV"
+          echo "TAP_PERL_DIR=$PG_SRC/src/test/perl" >> "$GITHUB_ENV"
+
+      - name: Build extension
+        run: make PG_CONFIG="$PG_CONFIG" with_llvm=no
+
+      - name: Install extension
+        run: make PG_CONFIG="$PG_CONFIG" install with_llvm=no
+
+      - name: Setup test cluster
+        run: |
+          PGBIN="$(dirname "$PG_CONFIG")"
+          PGDATA="$RUNNER_TEMP/pgdata"
+          rm -rf "$PGDATA"
+          "$PGBIN/initdb" -D "$PGDATA" -U postgres -A trust --no-sync
+          "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" -o "-p 5433" -w start
+          echo "PGDATA=$PGDATA" >> "$GITHUB_ENV"
+
+      - name: Run regression and TAP tests
+        run: |
+          make PG_CONFIG="$PG_CONFIG" installcheck enable_tap_tests=yes PROVE=prove PROVE_FLAGS="-I $TAP_PERL_DIR"
+        env:
+          PGPORT: 5433
+          PGHOST: 127.0.0.1
+          PGUSER: postgres
+
+      - name: Show regression.diffs on failure
+        if: failure()
+        run: cat regression.diffs 2>/dev/null || true
+
+      - name: Show TAP log on failure
+        if: failure()
+        run: cat tmp_check/log/regress_log_* 2>/dev/null || true
+
+      - name: Stop test cluster
+        if: always()
+        run: |
+          if [ -n "$PGDATA" ]; then
+            PGBIN="$(dirname "$PG_CONFIG")"
+            "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true
+          fi
+
+  freebsd:
+    name: FreeBSD ${{ matrix.arch }} / PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PG: ${{ matrix.pg }}
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, aarch64]
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test in FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14"
+          arch: ${{ matrix.arch }}
+          mem: 4096
+          cpu: 2
+          envs: 'PG'
+          prepare: |
+            pkg update
+            pkg install -y gmake bison flex curl p5-IPC-Run p5-TAP-Harness
+          run: |
+            set -e
+            PG_SRC="/tmp/pg-src-$PG"
+            PREFIX="/usr/local/pg$PG"
+            rm -rf "$PG_SRC"
+            curl -L -o /tmp/pg.tar.gz \
+              "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
+            tar -xzf /tmp/pg.tar.gz -C /tmp
+            mv "/tmp/postgres-REL_$PG"_STABLE "$PG_SRC"
+
+            if pkg install -y "postgresql$PG-server" "postgresql$PG-client"; then
+              PG_CONFIG=/usr/local/bin/pg_config
+            else
+              cd "$PG_SRC"
+              ./configure \
+                --prefix="$PREFIX" \
+                --enable-tap-tests \
+                --disable-nls \
+                --without-icu \
+                --without-readline \
+                --without-zlib \
+                --without-llvm
+              gmake -j"$(sysctl -n hw.ncpu)"
+              gmake install
+              PG_CONFIG="$PREFIX/bin/pg_config"
+            fi
+
+            if ! id postgres >/dev/null 2>&1; then
+              pw useradd postgres -m -s /bin/sh
+            fi
+            chown -R postgres:postgres "$GITHUB_WORKSPACE"
+
+            cd "$GITHUB_WORKSPACE"
+            gmake PG_CONFIG="$PG_CONFIG" with_llvm=no
+            gmake PG_CONFIG="$PG_CONFIG" install with_llvm=no
+
+            PGBIN="$(dirname "$PG_CONFIG")"
+            PGDATA="/tmp/pgdata-$PG"
+            rm -rf "$PGDATA"
+            su -m postgres -c "$PGBIN/initdb -D $PGDATA -U postgres -A trust --no-sync"
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -l $PGDATA/server.log -o '-p 5433' -w start"
+
+            su -m postgres -c "cd '$GITHUB_WORKSPACE' && PATH='$PGBIN:$PATH' PGHOST=/tmp PGPORT=5433 PGUSER=postgres gmake PG_CONFIG='$PG_CONFIG' installcheck enable_tap_tests=yes PROVE=/usr/local/bin/prove PROVE_FLAGS='-I $PG_SRC/src/test/perl'"
+
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -m immediate stop"
+
+      - name: Show TAP log on failure
+        if: failure()
+        run: cat tmp_check/log/regress_log_* 2>/dev/null || true

@@ -3,6 +3,7 @@
 [![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
 [![Quality](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml)
+[![Platforms](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/platforms.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/platforms.yml)
 [![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
 [![PostgreSQL 12-19](https://img.shields.io/badge/postgres-12--19-336791)](https://www.postgresql.org/)
 [![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
@@ -74,7 +75,7 @@
 |---|---|---|
 | **PGXN / source** | 12–19 | Always gets the latest release |
 | **PIG / APT / DNF** | 14–18 | Binary packages from the PIGSTY repository via [PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums) |
-| **Docker** | 14–18 | Prebuilt images with the extension enabled in the default database |
+| **Docker** | 12–18 | Prebuilt images with the extension enabled in the default database |
 
 The fastest way on a machine that already has PostgreSQL 14–18 and the PIGSTY
 repository configured:
@@ -101,7 +102,7 @@ Replace `16` with your PostgreSQL major version.  The package page is
 
 ### Docker
 
-Prebuilt images are published to GHCR for PostgreSQL 14–18.  The extension is
+Prebuilt images are published to GHCR for PostgreSQL 12–18.  The extension is
 created automatically in `POSTGRES_DB` on first initialization.
 
 ```bash
@@ -754,11 +755,16 @@ make installcheck enable_tap_tests=yes PROVE=prove
 ```
 
 CI runs both suites on every supported major version (PostgreSQL 12 through 19)
-on Linux, macOS, and Windows.  [CodeQL](.github/workflows/codeql.yml) analyzes
-the C sources, the [Quality workflow](.github/workflows/quality.yml) runs
-ASAN/UBSAN and coverage builds for PostgreSQL 14, 16, 18, and 19, and the
-[Docker workflow](.github/workflows/docker.yml) builds PG 14–18 images and
+on Linux x86_64 and ARM64, macOS ARM64, Windows x64, and FreeBSD amd64 and
+ARM64.  [CodeQL](.github/workflows/codeql.yml) analyzes the C sources, the
+[Quality workflow](.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
+builds for PostgreSQL 12–19, and the
+[Docker workflow](.github/workflows/docker.yml) builds PG 12–18 images and
 smoke-tests PostgreSQL 16 on pull requests.
+
+Logical checksums are stable across the tested little-endian 64-bit platforms.
+Physical checksums are storage- and architecture-dependent by design.  Big-endian
+platforms are not covered yet.
 
 **Tests cover:**
 
@@ -799,6 +805,21 @@ smoke-tests PostgreSQL 16 on pull requests.
     table, index, tuple and cell checksums on every supported major version
 19. Property/fuzz coverage of canonical encodings: numeric scale, array
     literals, ranges, composites and enums, plus repeated scans of random data
+
+## Platform Support
+
+CI runs regression and TAP tests for PostgreSQL 12–19 on:
+
+- Linux x86_64 and arm64
+- macOS arm64
+- Windows x86_64
+- FreeBSD amd64 and arm64
+
+All tested platforms are little-endian.  The current canonical encoding hashes
+a few native fixed-width integers for array shape and composite/multirange
+counts, so big-endian systems are not supported yet.  Physical checksums are
+storage- and architecture-dependent by design; use logical checksums for
+cross-platform comparisons.
 
 ---
 

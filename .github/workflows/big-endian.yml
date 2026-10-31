@@ -29,13 +29,12 @@ jobs:
         run: |
           docker run --rm --platform linux/s390x \
             -v "$PWD:/src" -w /src \
-            debian:bookworm \
-            bash -c '
+            alpine:3.20 \
+            sh -c '
               set -e
-              apt-get update
-              apt-get install -y --no-install-recommends \
-                ca-certificates curl build-essential bison flex libipc-run-perl
-              useradd -m pg
+              apk add --no-cache build-base bison flex curl ca-certificates \
+                perl perl-utils perl-ipc-run su-exec
+              adduser -D pg
               chown -R pg /src
-              su pg -c "sh /src/.github/scripts/big-endian-s390x.sh"
+              su-exec pg sh /src/.github/scripts/big-endian-s390x.sh
             '

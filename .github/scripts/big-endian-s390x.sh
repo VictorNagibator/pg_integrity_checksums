@@ -21,7 +21,7 @@ cd "$PG_SRC"
   --without-readline \
   --without-zlib \
   --without-llvm
-make -j"$(nproc)"
+make -j2
 make install
 PG_CONFIG="$PREFIX/bin/pg_config"
 

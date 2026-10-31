@@ -32,9 +32,12 @@ jobs:
             alpine:3.20 \
             sh -c '
               set -e
-              apk add --no-cache build-base bison flex curl ca-certificates \
-                perl perl-utils perl-ipc-run su-exec
+              apk add --no-cache build-base postgresql16 \
+                postgresql16-client postgresql16-dev su-exec
               adduser -D pg
               chown -R pg /src
+              PG_CONFIG="$(command -v pg_config)"
+              make PG_CONFIG="$PG_CONFIG" with_llvm=no
+              make PG_CONFIG="$PG_CONFIG" install with_llvm=no
               su-exec pg sh /src/.github/scripts/big-endian-s390x.sh
             '

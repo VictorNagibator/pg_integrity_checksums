@@ -35,7 +35,6 @@ jobs:
               apk add --no-cache build-base postgresql16 \
                 postgresql16-client postgresql16-dev su-exec
               adduser -D pg
-              chown -R pg /src
               PG_CONFIG="$(command -v pg_config)"
               make PG_CONFIG="$PG_CONFIG" with_llvm=no
               make PG_CONFIG="$PG_CONFIG" install with_llvm=no

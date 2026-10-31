@@ -11,7 +11,11 @@ PGBIN="$(pg_config --bindir)"
 export PATH="$PGBIN:$PATH"
 
 "$PGBIN/initdb" -D "$PGDATA" -U pg -A trust --no-sync
-"$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" -o '-p 55444' -w start
+if ! "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" \
+    -o '-p 55444 -k /tmp' -w start; then
+    cat "$PGDATA/server.log"
+    exit 1
+fi
 trap '"$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true' EXIT
 
 "$PGBIN/psql" -h /tmp -p 55444 -U pg -d postgres -v ON_ERROR_STOP=1 <<'SQL'

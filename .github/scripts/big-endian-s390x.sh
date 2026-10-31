@@ -21,16 +21,16 @@ trap '"$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true' EXIT
 "$PGBIN/psql" -h /tmp -p 55444 -U pg -d postgres -v ON_ERROR_STOP=1 <<'SQL'
 CREATE EXTENSION pg_integrity_checksums;
 
-CREATE TYPE endian_mood AS ENUM ('sad', 'ok', 'happy');
-CREATE TYPE endian_pair AS (a integer, b text);
+CREATE TYPE xv_mood AS ENUM ('sad', 'ok', 'happy');
+CREATE TYPE xv_pair AS (a integer, b text);
 
 CREATE TABLE endian_t (
     id integer,
     n numeric,
     a integer[],
     r int4range,
-    m endian_mood,
-    p endian_pair,
+    m xv_mood,
+    p xv_pair,
     t text
 );
 
@@ -85,6 +85,6 @@ $$;
 
 DROP TABLE endian_mr;
 DROP TABLE endian_t;
-DROP TYPE endian_pair;
-DROP TYPE endian_mood;
+DROP TYPE xv_pair;
+DROP TYPE xv_mood;
 SQL

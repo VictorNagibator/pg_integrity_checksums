@@ -29,6 +29,9 @@ jobs:
           mem: 4096
           cpu: 2
           prepare: |
+            # The powerpc64 image ships the pkg bootstrap stub without the
+            # package manager, so bootstrap it non-interactively first.
+            ASSUME_ALWAYS_YES=yes pkg bootstrap -f
             pkg update
             pkg install -y gmake bison flex curl p5-IPC-Run
           run: |

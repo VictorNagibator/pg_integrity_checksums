@@ -1192,6 +1192,28 @@ logical_hash_bytes(uint32 h, const void *data, size_t len)
     return fnv1a_32_hash(data, len, h);
 }
 
+/*
+ * logical_hash_uint32_le - hash a 32-bit integer in a canonical byte order
+ *
+ * Logical checksums must not depend on the server's native endianness.  The
+ * historical encoding hashed the native bytes of int/uint32 values, which
+ * happened to be little-endian on all platforms where 2.x baselines were
+ * created.  Keep those values unchanged on little-endian systems and emit the
+ * same little-endian bytes on big-endian systems.
+ */
+static uint32
+logical_hash_uint32_le(uint32 h, uint32 value)
+{
+    unsigned char bytes[4];
+
+    bytes[0] = (unsigned char) (value & 0xFF);
+    bytes[1] = (unsigned char) ((value >> 8) & 0xFF);
+    bytes[2] = (unsigned char) ((value >> 16) & 0xFF);
+    bytes[3] = (unsigned char) ((value >> 24) & 0xFF);
+
+    return logical_hash_bytes(h, bytes, sizeof(bytes));
+}
+
 static void
 logical_type_cache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
 {
@@ -1288,15 +1310,17 @@ logical_hash_array(Datum value, int depth)
     uint32      h = FNV_BASIS_32;
 
     /* Hash the shape first: an empty array differs from an empty string. */
-    h = logical_hash_bytes(h, &ndim, sizeof(ndim));
+    h = logical_hash_uint32_le(h, (uint32) ndim);
     if (ndim > 0)
     {
-        h = logical_hash_bytes(h, AARR_DIMS(arr), ndim * sizeof(int));
-        h = logical_hash_bytes(h, AARR_LBOUND(arr), ndim * sizeof(int));
+        for (i = 0; i < ndim; i++)
+            h = logical_hash_uint32_le(h, (uint32) AARR_DIMS(arr)[i]);
+        for (i = 0; i < ndim; i++)
+            h = logical_hash_uint32_le(h, (uint32) AARR_LBOUND(arr)[i]);
     }
 
     nelems = (ndim > 0) ? ArrayGetNItems(ndim, AARR_DIMS(arr)) : 0;
-    h = logical_hash_bytes(h, &nelems, sizeof(nelems));
+    h = logical_hash_uint32_le(h, (uint32) nelems);
 
     if (nelems > 0)
     {
@@ -1362,7 +1386,7 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth)
             non_dropped++;
     }
 
-    h = logical_hash_bytes(h, &non_dropped, sizeof(non_dropped));
+    h = logical_hash_uint32_le(h, (uint32) non_dropped);
 
     local_arrays = (tupdesc->natts <= 32);
     if (local_arrays)
@@ -1468,7 +1492,7 @@ logical_hash_multirange(Datum value, Oid typid, int depth)
     uint32      h = FNV_BASIS_32;
     uint32      i;
 
-    h = logical_hash_bytes(h, &count, sizeof(count));
+    h = logical_hash_uint32_le(h, count);
 
     for (i = 0; i < count; i++)
     {

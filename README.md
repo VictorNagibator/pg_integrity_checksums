@@ -761,9 +761,9 @@ builds for PostgreSQL 12–19, and the
 [Docker workflow](.github/workflows/docker.yml) builds PG 12–18 images and
 smoke-tests PostgreSQL 16 on pull requests.
 
-Logical checksums are stable across the tested little-endian 64-bit platforms.
-Physical checksums are storage- and architecture-dependent by design.  Big-endian
-platforms are not covered yet.
+Logical checksums are canonical across endianness: the same schema and data
+produce the same logical values on little-endian and big-endian systems.
+Physical checksums are storage- and architecture-dependent by design.
 
 **Tests cover:**
 
@@ -804,6 +804,8 @@ platforms are not covered yet.
     table, index, tuple and cell checksums on every supported major version
 19. Property/fuzz coverage of canonical encodings: numeric scale, array
     literals, ranges, composites and enums, plus repeated scans of random data
+20. Endian-stable logical checksums for arrays, composites and multiranges,
+    with fixed baselines checked on a big-endian FreeBSD powerpc64 build
 
 ## Platform Support
 
@@ -813,12 +815,14 @@ CI runs regression and TAP tests for PostgreSQL 12–19 on:
 - macOS arm64
 - Windows x86_64
 - FreeBSD amd64 and arm64
+- FreeBSD powerpc64 (big-endian, manually triggered [Big-endian workflow](.github/workflows/big-endian.yml))
 
-All tested platforms are little-endian.  The current canonical encoding hashes
-a few native fixed-width integers for array shape and composite/multirange
-counts, so big-endian systems are not supported yet.  Physical checksums are
-storage- and architecture-dependent by design; use logical checksums for
-cross-platform comparisons.
+Logical checksums use a canonical little-endian encoding for the few fixed-width
+integers in the canonical form (array shape, composite field count and
+multirange count).  They are therefore identical on little-endian and
+big-endian systems.  Physical checksums remain storage- and
+architecture-dependent by design; use logical checksums for cross-platform
+comparisons.
 
 ---
 
@@ -891,8 +895,8 @@ So bump the version in `pg_integrity_checksums.control`, `META.json` and `Change
 the new SQL script (and an upgrade script if needed), and only then tag:
 
 ```bash
-git tag -a v2.0.2 -m "pg_integrity_checksums 2.0.2"
-git push origin v2.0.2
+git tag -a v2.1.0 -m "pg_integrity_checksums 2.1.0"
+git push origin v2.1.0
 ```
 
 ---

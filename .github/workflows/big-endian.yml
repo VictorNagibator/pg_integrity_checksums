@@ -1,0 +1,83 @@
+name: Big-endian
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: big-endian-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  freebsd-powerpc64:
+    name: FreeBSD powerpc64 / PostgreSQL 16
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Test in big-endian FreeBSD
+        uses: vmactions/freebsd-vm@v1
+        with:
+          release: "14.5"
+          arch: powerpc64
+          sync: tar
+          mem: 4096
+          cpu: 2
+          prepare: |
+            pkg update
+            pkg install -y gmake bison flex curl p5-IPC-Run
+          run: |
+            set -e
+            PG=16
+            PG_SRC="/tmp/pg-src-$PG"
+            PREFIX="/usr/local/pg$PG"
+            rm -rf "$PG_SRC"
+            curl -L -o /tmp/pg.tar.gz \
+              "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
+            tar -xzf /tmp/pg.tar.gz -C /tmp
+            mv "/tmp/postgres-REL_$PG"_STABLE "$PG_SRC"
+
+            if pkg install -y "postgresql$PG-server" "postgresql$PG-client"; then
+              PG_CONFIG=/usr/local/bin/pg_config
+            else
+              cd "$PG_SRC"
+              ./configure \
+                --prefix="$PREFIX" \
+                --enable-tap-tests \
+                --disable-nls \
+                --without-icu \
+                --without-readline \
+                --without-zlib \
+                --without-llvm
+              gmake -j2
+              gmake install
+              PG_CONFIG="$PREFIX/bin/pg_config"
+            fi
+
+            if ! id postgres >/dev/null 2>&1; then
+              pw useradd postgres -m -s /bin/sh
+            fi
+            chown -R postgres:postgres "$GITHUB_WORKSPACE"
+
+            cd "$GITHUB_WORKSPACE"
+            gmake PG_CONFIG="$PG_CONFIG" with_llvm=no
+            gmake PG_CONFIG="$PG_CONFIG" install with_llvm=no
+
+            PGBIN="$(dirname "$PG_CONFIG")"
+            PGDATA="/tmp/pgdata-$PG"
+            rm -rf "$PGDATA"
+            su -m postgres -c "$PGBIN/initdb -D $PGDATA -U postgres -A trust --no-sync"
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -l $PGDATA/server.log -o '-p 5433' -w start"
+
+            TAP_ARGS=""
+            if command -v prove >/dev/null 2>&1; then
+              TAP_ARGS="enable_tap_tests=yes PROVE=prove PROVE_FLAGS='-I $PG_SRC/src/test/perl'"
+            fi
+            su -m postgres -c "cd '$GITHUB_WORKSPACE' && PATH='$PGBIN:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin' PGHOST=/tmp PGPORT=5433 PGUSER=postgres gmake PG_CONFIG='$PG_CONFIG' installcheck $TAP_ARGS"
+
+            su -m postgres -c "$PGBIN/pg_ctl -D $PGDATA -m immediate stop"

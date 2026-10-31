@@ -1,5 +1,18 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.1.0   2026-10-31
+
+    - Make logical checksums independent of the server's native endianness.
+      Array dimensions/lower bounds, composite field counts and multirange
+      counts are now hashed in a canonical little-endian byte order instead of
+      hashing native int/uint32 bytes.
+    - Logical checksum values on little-endian systems are unchanged; 2.x
+      baselines remain valid.  Big-endian systems now produce the same logical
+      values as little-endian systems.
+    - Physical checksums remain storage- and architecture-dependent by design.
+    - Add a manually triggered FreeBSD powerpc64 big-endian test workflow.
+    - No SQL object changes; the 2.0.2 -> 2.1.0 upgrade script is a no-op.
+
 2.0.2   2026-10-29
 
     - Build against PostgreSQL 19 stable: adapt to the changed array_iter_setup,

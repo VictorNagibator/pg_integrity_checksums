@@ -1,7 +1,7 @@
 # pg_integrity_checksums.control
 
 comment = 'Checksum functions for PostgreSQL at page, cell, tuple, table, index and database levels'
-default_version = '2.0.2'
+default_version = '2.1.0'
 module_pathname = '$libdir/pg_integrity_checksums'
 relocatable = true
 # Creating a C extension that reads relation storage should require a

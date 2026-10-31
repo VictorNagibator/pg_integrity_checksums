@@ -805,7 +805,7 @@ Physical checksums are storage- and architecture-dependent by design.
 19. Property/fuzz coverage of canonical encodings: numeric scale, array
     literals, ranges, composites and enums, plus repeated scans of random data
 20. Endian-stable logical checksums for arrays, composites and multiranges,
-    with fixed baselines checked on a big-endian FreeBSD powerpc64 build
+    with fixed baselines checked on a big-endian Linux s390x build
 
 ## Platform Support
 
@@ -815,7 +815,7 @@ CI runs regression and TAP tests for PostgreSQL 12–19 on:
 - macOS arm64
 - Windows x86_64
 - FreeBSD amd64 and arm64
-- FreeBSD powerpc64 (big-endian, manually triggered [Big-endian workflow](.github/workflows/big-endian.yml))
+- Linux s390x (big-endian, manually triggered [Big-endian workflow](.github/workflows/big-endian.yml))
 
 Logical checksums use a canonical little-endian encoding for the few fixed-width
 integers in the canonical form (array shape, composite field count and

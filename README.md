@@ -9,9 +9,29 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/VictorNagibator/badge.svg)](https://hub.xerj.org/contributors/VictorNagibator)
 
+## Contents
+
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Physical and Logical Checksums](#physical-and-logical-checksums)
+- [Installation](#installation)
+- [Function Reference](#function-reference)
+- [Algorithm Details](#algorithm-details)
+- [Limitations and Portability](#limitations-and-portability)
+- [Parallel Computation](#parallel-computation)
+- [Practical Applications](#practical-applications)
+- [Performance Characteristics](#performance-characteristics)
+- [Test Suite](#test-suite)
+- [Platform Support](#platform-support)
+- [Automated Testing with run_tests.sh](#automated-testing-with-run_testssh)
+- [Building a Release](#building-a-release)
+- [License](#license)
+- [Support](#support)
+- [Contributing](#contributing)
+
 ## Overview
 
-`pg_integrity_checksums` is a PostgreSQL extension that provides comprehensive checksum functionality at six granularity levels, with both physical and logical variants (except for cell level). It enables data integrity verification, change detection, consistency checking, and corruption detection across the entire database hierarchy.
+`pg_integrity_checksums` is a PostgreSQL extension that provides checksums at six granularity levels. Page checksums are physical, cell checksums are logical, and tuple, table, index and database checksums are available in both physical and logical variants. It enables data integrity verification, change detection, consistency checking, and corruption detection across the database hierarchy.
 
 ---
 
@@ -29,9 +49,12 @@
 * **Portable Content**: Logical checksums omit relation OIDs, heap TIDs and
   type OIDs; enum labels, numeric scale, arrays, composites and ranges are
   canonicalized
-* **All Index Access Methods**: Logical index checksums are derived from table
-  data and the index definition, so B-tree, Hash, GiST, GIN, SP-GiST, BRIN and
-  custom AMs are supported
+* **Endian-Independent**: Fixed-width integers in the canonical form use a
+  little-endian byte order, so logical values match on little-endian and
+  big-endian systems
+* **All Logical Index Access Methods**: Logical index checksums are derived
+  from table data and the index definition, so B-tree, Hash, GiST, GIN,
+  SP-GiST, BRIN and custom AMs are supported
 * **Parallel Computation**: Table, index and database checksums can be
   computed with PostgreSQL parallel workers for faster scans of large
   relations
@@ -47,7 +70,8 @@
 ### Physical Checksums
 
 * **Depend on**: Physical storage layout (block numbers, offsets, page headers)
-* **Change when**: `VACUUM FULL`, `CLUSTER`, `REINDEX`, physical data movement
+* **Change when**: tables are rewritten or moved (`VACUUM FULL`, `CLUSTER`,
+  physical data movement), or physical index pages are rebuilt (`REINDEX`)
 * **Useful for**: Physical corruption detection, storage integrity
 * **Includes**: Location encoding, MVCC information, page structure
 
@@ -443,7 +467,10 @@ SELECT pg_text_checksum('sample text', 0);
 
 ### FNV-1a 32-bit Hash Algorithm
 
-The extension uses the FNV-1a (Fowler-Noll-Vo) 32-bit hash algorithm, identical to PostgreSQL's internal checksum implementation.
+Logical, cell, tuple, table, index and utility checksums use the FNV-1a
+(Fowler-Noll-Vo) 32-bit hash.  PostgreSQL's `pg_page_checksum` is computed with
+PostgreSQL's own page-checksum routine, which is based on a modified FNV-1a
+variant; it is not the same function as the logical checksum.
 
 **Algorithm:**
 
@@ -467,10 +494,11 @@ CHECKSUM_NULL = 0xFFFFFFFF (signed -1)
 Physical and index aggregates use XOR, which is commutative and associative and
 therefore independent of scan order and partition boundaries.
 
-Logical table/database aggregates use a **sum plus count** instead.  Addition
-is still order-independent, but the count preserves duplicate rows, which a
-pure XOR would cancel.  Parallel workers combine their partial sums and counts
-before the final 32-bit mix, so serial and parallel results are identical.
+Logical table, index and database aggregates use a **sum plus count** instead.
+Addition is still order-independent, but the count preserves duplicate rows,
+which a pure XOR would cancel.  Parallel workers combine their partial sums and
+counts before the final 32-bit mix, so serial and parallel results are
+identical.
 
 ### Type-Specific Handling
 
@@ -483,6 +511,9 @@ Logical values use a canonical type-aware encoding:
   compare equal.
 * **Arrays, composites, domains and ranges** are traversed recursively, so
   embedded type OIDs are not part of the hash.
+* **Fixed-width integers** in array shape, composite counts and multirange
+  counts are encoded in little-endian byte order, independent of the server's
+  native endianness.
 * **Floating point** canonicalizes NaN and negative zero.
 
 ---
@@ -500,6 +531,10 @@ These limitations are documented rather than silently ignored.
 * **Custom types are type-defined.** A user-defined type is hashed through its
   binary send function, or its output function when no send function exists.
   If that representation differs between databases, the checksum differs.
+* **Endianness.** Logical checksums use a canonical little-endian encoding for
+  the fixed-width integers in arrays, composites and multiranges, and are
+  therefore identical on little-endian and big-endian systems.  Physical
+  checksums remain architecture- and storage-dependent.
 * **Physical checksums are not replica fingerprints.** Tuple/table physical
   checksums depend on tuple locations, MVCC fields, tuple bytes and the
   relation's relfilenode/reltablespace; index physical checksums hash raw
@@ -561,9 +596,11 @@ RESET pg_integrity_checksums.workers;
 
 Database checksum functions normally skip a relation that cannot be
 checksummed (for example an invalid index, a foreign partition, or a relation
-that fails during the scan).  Tables without a primary key and all index
-access methods are now supported, so they are not skipped.  Set
-`pg_integrity_checksums.strict = on` to turn an actual skip into an error instead:
+that fails during the scan).  Tables without a primary key are supported, and
+logical index checksums work for every access method.  Physical index
+checksums cover B-tree, Hash, GiST, GIN, SP-GiST and BRIN; other physical
+index AMs are skipped.  Set `pg_integrity_checksums.strict = on` to turn an
+actual skip into an error instead:
 
 ```sql
 SET pg_integrity_checksums.strict = on;
@@ -615,23 +652,21 @@ SELECT
 ### 2. Replication Consistency Validation
 
 ```sql
--- Compare source and replica consistency.
--- IMPORTANT: this only works when the replica has the same relation OIDs and
--- heap TIDs (for example a physical standby that has not been vacuumed
--- differently).  Physical checksums include LSNs and are usually not equal on
--- a standby; logical checksums include OIDs.  See Limitations.
--- Run on source:
-SELECT 
+-- Compare source and replica logical content.
+-- Logical checksums exclude relation OIDs, heap TIDs and type OIDs, so they
+-- are the appropriate values to compare when schema/type names and row
+-- content match.  Physical checksums include page LSNs, tuple locations and
+-- other storage details, so they will normally differ on a standby.
+-- Run on source and replica and compare logical_cs only:
+SELECT
     c.relname,
-    pg_table_logical_checksum(c.oid) as logical_cs,
-    pg_table_physical_checksum(c.oid, false) as physical_cs
+    pg_table_logical_checksum(c.oid) AS logical_cs,
+    pg_table_physical_checksum(c.oid, false) AS physical_cs
 FROM pg_class c
 JOIN pg_namespace n ON n.oid = c.relnamespace
 WHERE n.nspname = 'public'
   AND c.relkind IN ('r', 'p', 'm')
 ORDER BY c.relname;
-
--- Run the same query on the replica and compare results.
 ```
 
 ### 3. Data Migration Verification
@@ -700,8 +735,12 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
-CREATE EVENT TRIGGER audit_changes 
-ON ddl_command_end 
+-- Statement-level trigger: the checksum is computed once per statement,
+-- after the statement's changes are visible.  The baseline and audit tables
+-- are application-owned and are not created by the extension.
+CREATE TRIGGER audit_changes
+AFTER INSERT OR UPDATE OR DELETE ON transactions
+FOR EACH STATEMENT
 EXECUTE FUNCTION audit_table_changes();
 ```
 
@@ -709,14 +748,14 @@ EXECUTE FUNCTION audit_table_changes();
 
 ```sql
 -- Verify restored database matches expected state
-SELECT 
-    'Restored DB' as source,
-    pg_database_logical_checksum(false, true) as checksum
+SELECT
+    'Restored DB'::text AS source,
+    pg_database_logical_checksum(false, true)::text AS checksum
 UNION ALL
-SELECT 
+SELECT
     'Backup timestamp ' || backup_time,
-    expected_checksum
-FROM backup_catalog 
+    expected_checksum::text
+FROM backup_catalog
 WHERE backup_time = '2024-01-15 03:00:00';
 ```
 
@@ -730,9 +769,10 @@ WHERE backup_time = '2024-01-15 03:00:00';
 | ------------------------ | ---------------: | ------------------------------- |
 | `pg_cell_checksum`     |             O(1) | Single cell, minimal overhead |
 | `pg_tuple_*_checksum`    |    O(tuple size) | Requires buffer lock            |
-| `pg_table_*_checksum`    |   O(rows * columns) | Order-independent aggregation   |
-| `pg_index_*_checksum`    |    O(index size) | Bulk read strategy              |
-| `pg_database_*_checksum` | O(total DB size) | Periodic interrupt checks       |
+| `pg_table_*_checksum`    |   O(rows × columns) | Order-independent aggregation |
+| `pg_index_physical_checksum` | O(index size) | Bulk read strategy |
+| `pg_index_logical_checksum` | O(table rows) | Scans heap rows, not index pages |
+| `pg_database_*_checksum` | O(total DB size) | Periodic interrupt checks |
 
 Table, index, and database scans can be parallelized with
 `pg_integrity_checksums.workers`; the scan work is divided among the workers with
@@ -785,8 +825,8 @@ Physical checksums are storage- and architecture-dependent by design.
 11. Partitioned index aggregation, including deterministic physical and
     logical checksums for partitioned indexes
 12. Canonical logical checksums: no-PK tables, duplicate rows, empty and
-    partitioned tables, enum/numeric/array/composite/range values, all index
-    AMs, expression/partial/INCLUDE indexes, and serial/parallel database
+    partitioned tables, enum/numeric/array/composite/range values, all logical
+    index AMs, expression/partial/INCLUDE indexes, and serial/parallel database
     consistency
 13. System-catalog checksums, including anyarray/aclitem values in
     pg_statistic and pg_attribute; Hash index logical checksums match B-tree
@@ -805,7 +845,7 @@ Physical checksums are storage- and architecture-dependent by design.
 19. Property/fuzz coverage of canonical encodings: numeric scale, array
     literals, ranges, composites and enums, plus repeated scans of random data
 20. Endian-stable logical checksums for arrays, composites and multiranges,
-    with fixed baselines checked on a big-endian Linux s390x build
+    with fixed baselines checked on a big-endian Linux s390x test
 
 ## Platform Support
 
@@ -890,14 +930,6 @@ which:
    `-rc`, `-beta` or `-alpha` are marked as pre-releases);
 5. uploads the archive to [PGXN](https://manager.pgxn.org/) when the
    `PGXN_USERNAME` and `PGXN_PASSWORD` repository secrets are configured.
-
-So bump the version in `pg_integrity_checksums.control`, `META.json` and `Changes`, add
-the new SQL script (and an upgrade script if needed), and only then tag:
-
-```bash
-git tag -a v2.1.0 -m "pg_integrity_checksums 2.1.0"
-git push origin v2.1.0
-```
 
 ---
 

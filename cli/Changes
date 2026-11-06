@@ -1,0 +1,16 @@
+Revision history for pg_integrity_checksums CLI
+
+0.1.0   2026-11-07
+
+    - First standalone release of the Go CLI.
+    - Add capture, verify, diff, show, update and doctor commands.
+    - Add versioned JSON baseline format v1 and its JSON Schema.
+    - Use one repeatable-read read-only transaction for consistent snapshots.
+    - Support logical and physical checksums, schema filters and CI exit codes.
+    - Add schema signatures and report schema changes separately from data
+      changes.
+    - Add --changed-since for logical verification using table statistics as a
+      documented heuristic.
+    - Add gzip baseline reading and atomic baseline writes.
+    - Add integration coverage for PostgreSQL 12 through 19.
+    - Release independently from the extension with cli-v* tags.

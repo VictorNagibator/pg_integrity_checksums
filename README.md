@@ -261,7 +261,7 @@ The CLI is released independently from the extension with `cli-v*` tags;
 its source is included in the PGXN source archive.  Logical checksums are the
 default; physical baselines are opt-in and tied to one cluster.  See the
 [CLI contract](cli/README.md) for commands, flags, exit codes and the
-baseline JSON schema.
+baseline JSON schema. CLI release notes are kept in [cli/Changes](cli/Changes).
 
 ---
 
@@ -821,7 +821,7 @@ make installcheck enable_tap_tests=yes PROVE=prove
 
 CI runs both suites on every supported major version (PostgreSQL 12 through 19)
 on Linux x86_64 and ARM64, macOS ARM64, Windows x64, and FreeBSD amd64 and
-ARM64.  [CodeQL](.github/workflows/codeql.yml) analyzes the C sources, the
+ARM64.  [CodeQL](.github/workflows/codeql.yml) analyzes the C and Go sources, the
 [Quality workflow](.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
 builds for PostgreSQL 12–19, and the
 [Docker workflow](.github/workflows/docker.yml) builds PG 12–18 images and

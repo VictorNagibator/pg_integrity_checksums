@@ -1,3 +1,4 @@
+# Tag cli-v* to build platform binaries and publish release notes from cli/Changes.
 name: CLI Release
 
 on:
@@ -8,11 +9,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: cli-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   release:
+    name: Build and publish CLI
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
+      max-parallel: 1
       matrix:
         include:
           - goos: linux
@@ -34,8 +42,8 @@ jobs:
             goarch: amd64
             ext: ""
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
@@ -52,8 +60,17 @@ jobs:
           VERSION_CLEAN=$(printf '%s' "$VERSION" | sed 's/^cli-v//')
           go build -trimpath -ldflags "-s -w -X github.com/VictorNagibator/pg_integrity_checksums/cli/internal/cli.Version=$VERSION_CLEAN" -o "dist/pg_integrity_checksums-$VERSION-$GOOS-$GOARCH$EXT" ./cmd/pg_integrity_checksums
           sha256sum dist/* > "dist/SHA256SUMS-$GOOS-$GOARCH.txt"
+      - name: Build release notes
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          VERSION_CLEAN=$(printf '%s' "$VERSION" | sed 's/^cli-v//')
+          python3 .github/scripts/changelog_for_version.py "$VERSION_CLEAN" cli/Changes > cli/release-notes.md
+
       - name: Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ github.ref_name }}
+          name: pg_integrity_checksums CLI ${{ github.ref_name }}
+          body_path: cli/release-notes.md
           files: cli/dist/*

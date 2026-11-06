@@ -30,6 +30,7 @@ jobs:
   release:
     name: Package and publish
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     env:
       PGXN_USERNAME: ${{ secrets.PGXN_USERNAME }}
@@ -37,7 +38,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Check that the tag matches the extension version
         id: version
@@ -91,8 +92,11 @@ jobs:
           fi
 
           # Same "Full Changelog" footer that GitHub's generated notes carry.
-          previous="$(gh release list --exclude-drafts --limit 1 \
-            --json tagName --jq '.[0].tagName // empty' 2>/dev/null || true)"
+          # Only extension tags start with v; CLI releases use cli-v*.
+          previous="$(gh release list --exclude-drafts --limit 100 \
+            --json tagName \
+            --jq '.[] | select(.tagName | startswith("v")) | .tagName' \
+            2>/dev/null | head -n 1 || true)"
           if [ -n "$previous" ] && [ "$previous" != "$GITHUB_REF_NAME" ]; then
             printf '\n**Full Changelog**: %s/%s/compare/%s...%s\n' \
               "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" \

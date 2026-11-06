@@ -1,3 +1,4 @@
+# Full CLI integration against PostgreSQL 12-19; builds the extension from source.
 name: CLI Integration
 
 on:
@@ -5,11 +6,26 @@ on:
     paths:
       - "cli/**"
       - ".github/workflows/cli-integration.yml"
+      - "pg_integrity_checksums.c"
+      - "pg_integrity_checksums.h"
+      - "Makefile"
+      - "sql/**"
   pull_request:
     paths:
       - "cli/**"
       - ".github/workflows/cli-integration.yml"
+      - "pg_integrity_checksums.c"
+      - "pg_integrity_checksums.h"
+      - "Makefile"
+      - "sql/**"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-integration-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   integration:
@@ -23,9 +39,9 @@ jobs:
     env:
       PG: ${{ matrix.pg }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum

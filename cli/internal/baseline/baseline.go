@@ -43,6 +43,7 @@ const (
 // checksumRE keeps checksums as strings in JSON (bigint values are not safe
 // as JavaScript numbers) while still rejecting malformed values.
 var checksumRE = regexp.MustCompile("^-?[0-9]+$")
+var schemaHashRE = regexp.MustCompile("^sha256:[0-9a-f]{64}$")
 
 // Scope is the discovery filter stored in a baseline. Verify reuses it so the
 // same set of objects is compared instead of silently widening the scan.
@@ -72,7 +73,22 @@ type Object struct {
 
 	Status   string `json:"status"`
 	Checksum string `json:"checksum,omitempty"`
-	Reason   string `json:"reason,omitempty"`
+	// SchemaHash is a SHA-256 of the portable schema definition: columns,
+	// constraints, partition key, reloptions and (for indexes) indexdef.
+	SchemaHash string `json:"schema_hash,omitempty"`
+	// Stats is table-only change-detection data used by --changed-since.
+	Stats  *TableStats `json:"stats,omitempty"`
+	Reason string      `json:"reason,omitempty"`
+}
+
+// TableStats is the coarse change counter set from pg_stat_all_tables plus the
+// current relfilenode. It lets verify skip a table that has not been written
+// since the baseline, but it is a heuristic, not a transactional guarantee.
+type TableStats struct {
+	Relfilenode int64 `json:"relfilenode"`
+	Inserted    int64 `json:"inserted"`
+	Updated     int64 `json:"updated"`
+	Deleted     int64 `json:"deleted"`
 }
 
 // Baseline is the versioned JSON document captured by the CLI. It deliberately
@@ -263,6 +279,18 @@ func (b *Baseline) Validate() error {
 		}
 		if o.Status == StatusOK && !checksumRE.MatchString(o.Checksum) {
 			return fmt.Errorf("object %s: invalid checksum %q", o.Identity(), o.Checksum)
+		}
+		if o.SchemaHash != "" && !schemaHashRE.MatchString(o.SchemaHash) {
+			return fmt.Errorf("object %s: invalid schema_hash %q", o.Identity(), o.SchemaHash)
+		}
+		if o.Stats != nil {
+			if o.Kind != ObjectTable {
+				return fmt.Errorf("object %s: stats are only valid for tables", o.Identity())
+			}
+			if o.Stats.Relfilenode < 0 || o.Stats.Inserted < 0 ||
+				o.Stats.Updated < 0 || o.Stats.Deleted < 0 {
+				return fmt.Errorf("object %s: negative table stats", o.Identity())
+			}
 		}
 		if seen[o.Key()] {
 			return fmt.Errorf("duplicate object %s", o.Key())

@@ -27,7 +27,7 @@ func runCLI(args ...string) (int, string, string) {
 
 func TestVersionAndUsage(t *testing.T) {
 	code, out, _ := runCLI("version")
-	if code != 0 || !strings.Contains(out, "pg_integrity_checksums 0.1.0") {
+	if code != 0 || !strings.Contains(out, "pg_integrity_checksums 0.1.0-dev") {
 		t.Fatalf("version: code=%d out=%q", code, out)
 	}
 	code, out, _ = runCLI("help")

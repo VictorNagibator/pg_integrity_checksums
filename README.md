@@ -826,7 +826,9 @@ ARM64.  [CodeQL](.github/workflows/codeql.yml) analyzes the C sources, the
 builds for PostgreSQL 12–19, and the
 [Docker workflow](.github/workflows/docker.yml) builds PG 12–18 images and
 smoke-tests PostgreSQL 16 on pull requests.  The CLI has its own
-[CLI workflow](.github/workflows/cli.yml) and independent `cli-v*` releases.
+[CLI workflow](.github/workflows/cli.yml), the
+[CLI integration matrix](.github/workflows/cli-integration.yml) for PostgreSQL
+12–19, and independent `cli-v*` releases.
 
 Logical checksums are canonical across endianness: the same schema and data
 produce the same logical values on little-endian and big-endian systems.

@@ -1,0 +1,89 @@
+name: CLI Integration
+
+on:
+  push:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-integration.yml"
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-integration.yml"
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: PostgreSQL ${{ matrix.pg }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+    env:
+      PG: ${{ matrix.pg }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential bison flex curl ca-certificates
+
+      - name: Build PostgreSQL from source
+        run: |
+          curl -L -o pg.tar.gz "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
+          tar -xzf pg.tar.gz
+          PG_SRC="$PWD/postgres-REL_$PG"_STABLE
+          PREFIX="$PWD/pg$PG"
+          cd "$PG_SRC"
+          ./configure             --prefix="$PREFIX"             --disable-nls             --without-icu             --without-readline             --without-zlib             --without-llvm
+          make -j"$(nproc)"
+          make install
+          echo "PG_CONFIG=$PREFIX/bin/pg_config" >> "$GITHUB_ENV"
+          echo "PATH=$PREFIX/bin:$PATH" >> "$GITHUB_ENV"
+
+      - name: Build and install extension
+        run: |
+          make PG_CONFIG="$PG_CONFIG" with_llvm=no
+          make PG_CONFIG="$PG_CONFIG" with_llvm=no install
+
+      - name: Start PostgreSQL
+        run: |
+          PGBIN="$(dirname "$PG_CONFIG")"
+          PGDATA="$RUNNER_TEMP/pgdata"
+          rm -rf "$PGDATA"
+          "$PGBIN/initdb" -D "$PGDATA" -U postgres -A trust --no-sync
+          "$PGBIN/pg_ctl" -D "$PGDATA" -l "$PGDATA/server.log" -o "-p 5433" -w start
+          "$PGBIN/createdb" -h 127.0.0.1 -p 5433 -U postgres cli_test
+          "$PGBIN/psql" -h 127.0.0.1 -p 5433 -U postgres -d cli_test -c "CREATE EXTENSION pg_integrity_checksums"
+          echo "PGDATA=$PGDATA" >> "$GITHUB_ENV"
+
+      - name: Run CLI integration tests
+        env:
+          PGHOST: 127.0.0.1
+          PGPORT: 5433
+          PGUSER: postgres
+          PGDATABASE: cli_test
+          PGICS_TEST_DSN: host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable
+        run: |
+          cd cli
+          go test -count=1 ./internal/cli -run TestIntegration -v
+
+      - name: Show server log on failure
+        if: failure()
+        run: |
+          if [ -n "$PGDATA" ]; then cat "$PGDATA/server.log" || true; fi
+
+      - name: Stop PostgreSQL
+        if: always()
+        run: |
+          if [ -n "$PG_CONFIG" ] && [ -n "$PGDATA" ]; then
+            PGBIN="$(dirname "$PG_CONFIG")"
+            "$PGBIN/pg_ctl" -D "$PGDATA" -m immediate stop || true
+          fi

@@ -112,6 +112,17 @@
         }
       }
     },
+    "table_stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relfilenode", "inserted", "updated", "deleted"],
+      "properties": {
+        "relfilenode": { "type": "integer", "minimum": 0 },
+        "inserted": { "type": "integer", "minimum": 0 },
+        "updated": { "type": "integer", "minimum": 0 },
+        "deleted": { "type": "integer", "minimum": 0 }
+      }
+    },
     "object": {
       "type": "object",
       "additionalProperties": false,
@@ -142,6 +153,13 @@
         "checksum": {
           "type": "string",
           "pattern": "^-?[0-9]+$"
+        },
+        "schema_hash": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "stats": {
+          "$ref": "#/$defs/table_stats"
         },
         "reason": {
           "type": "string"

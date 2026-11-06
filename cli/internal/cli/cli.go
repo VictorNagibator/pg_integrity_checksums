@@ -15,7 +15,7 @@ import (
 
 // Version is overridden at release time with -ldflags -X. The default is
 // used by local builds and tests.
-var Version = "0.1.0"
+var Version = "0.1.0-dev"
 
 // Run dispatches one CLI invocation and returns the process exit code.
 // stdout is reserved for data (JSON, diffs, reports); progress and errors go to
@@ -186,6 +186,7 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	failOnValue := fs.String("fail-on", "any", "changed, new, missing, any or none")
 	showOK := fs.Bool("show-ok", false, "include unchanged objects")
 	allowVersion := fs.Bool("allow-version-mismatch", false, "allow a different PostgreSQL major")
+	changedSince := fs.Bool("changed-since", false, "reuse unchanged objects from the baseline (logical only; heuristic)")
 	workers := fs.Int("workers", 0, "pg_integrity_checksums.workers")
 	timeout := fs.Duration("timeout", 0, "statement timeout")
 	quiet := fs.Bool("quiet", false, "suppress progress")
@@ -212,19 +213,33 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "error: invalid baseline: %v\n", err)
 		return 3
 	}
+	if *changedSince && oldB.Kind != baseline.KindLogical {
+		return commandError(stderr, errors.New("--changed-since is supported only for logical baselines"))
+	}
+	prior := make(map[string]baseline.Object, len(oldB.Objects))
+	for _, o := range oldB.Objects {
+		prior[o.Key()] = o
+	}
 
 	db, err := openDB(ctx, *dsn)
 	if err != nil {
 		return commandError(stderr, err)
 	}
 	defer db.Close()
+	if *changedSince && !*quiet {
+		fmt.Fprintln(stderr, "warning: --changed-since uses table statistics as a heuristic; use a full verify when exactness is required")
+	}
 
+	reused := 0
 	curB, err := pgdb.Snapshot(ctx, db, pgdb.Options{
 		ToolVersion: Version,
 		Kind:        oldB.Kind,
 		Scope:       oldB.Scope,
 		Workers:     *workers,
 		Timeout:     *timeout,
+		ChangedOnly: *changedSince,
+		Prior:       prior,
+		Reused:      &reused,
 		Progress:    progress(*quiet, stderr),
 	})
 	if err != nil {
@@ -234,6 +249,9 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if err := checkCompatibility(oldB, curB, *allowVersion); err != nil {
 		fmt.Fprintf(stderr, "error: incompatible baseline: %v\n", err)
 		return 3
+	}
+	if *changedSince && !*quiet {
+		fmt.Fprintf(stderr, "changed-since: reused %d objects, checksummed %d\n", reused, len(curB.Objects)-reused)
 	}
 	if oldB.ExtensionVersion != curB.ExtensionVersion {
 		fmt.Fprintf(stderr, "warning: baseline extension %s, current extension %s\n",

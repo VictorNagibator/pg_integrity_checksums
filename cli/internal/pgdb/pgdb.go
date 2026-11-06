@@ -4,7 +4,9 @@ package pgdb
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -33,6 +35,12 @@ type Options struct {
 	Timeout     time.Duration
 	Strict      bool
 	Progress    func(string)
+
+	// ChangedOnly enables the --changed-since heuristic. It is valid only for
+	// logical checksums and requires Prior (the baseline being verified).
+	ChangedOnly bool
+	Prior       map[string]baseline.Object
+	Reused      *int
 }
 
 // Candidate is a relation discovered in pg_class before its checksum is
@@ -149,16 +157,61 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 		return nil, err
 	}
 
+	if opts.ChangedOnly && opts.Kind != baseline.KindLogical {
+		return nil, errors.New("--changed-since is supported only for logical checksums")
+	}
+
+	// Schema hashes and table statistics are needed for every candidate
+	// before checksums, because an index can be reused only if its table is
+	// unchanged and index candidates are sorted before tables.
+	schemaHashes := make(map[string]string, len(candidates))
+	statsByKey := make(map[string]*baseline.TableStats)
+	for _, c := range candidates {
+		key := candidateKey(c)
+		h, err := schemaHash(ctx, tx, c)
+		if err != nil {
+			return nil, fmt.Errorf("%s %s.%s schema: %w", c.Kind, c.Schema, c.Name, err)
+		}
+		schemaHashes[key] = h
+		if c.Kind == baseline.ObjectTable {
+			st, err := tableStats(ctx, tx, c)
+			if err != nil {
+				return nil, fmt.Errorf("%s %s.%s stats: %w", c.Kind, c.Schema, c.Name, err)
+			}
+			statsByKey[key] = st
+		}
+	}
+
 	objects := make([]baseline.Object, 0, len(candidates))
 	for _, c := range candidates {
+		key := candidateKey(c)
 		if opts.Progress != nil {
 			opts.Progress(fmt.Sprintf("%s %s.%s", c.Kind, c.Schema, c.Name))
 		}
+		obj := baseline.Object{
+			Kind:        c.Kind,
+			Schema:      c.Schema,
+			Name:        c.Name,
+			TableSchema: c.TableSchema,
+			TableName:   c.TableName,
+			SchemaHash:  schemaHashes[key],
+			Stats:       statsByKey[key],
+		}
+		if opts.ChangedOnly {
+			if reused, ok := reusableObject(c, obj, opts.Prior, schemaHashes, statsByKey); ok {
+				if opts.Reused != nil {
+					*opts.Reused++
+				}
+				objects = append(objects, reused)
+				continue
+			}
+		}
+
 		checksum, reason, err := checksumObject(ctx, tx, c, opts.Kind)
 		if err != nil {
 			return nil, fmt.Errorf("%s %s.%s: %w", c.Kind, c.Schema, c.Name, err)
 		}
-		status := baseline.StatusOK
+		obj.Status = baseline.StatusOK
 		if reason != "" {
 			// NULL normally means the extension does not support this
 			// object/kind (for example a physical checksum of an unusual
@@ -168,18 +221,13 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 				return nil, fmt.Errorf("%s %s.%s cannot be checksummed: %s",
 					c.Kind, c.Schema, c.Name, reason)
 			}
-			status = baseline.StatusSkipped
+			obj.Status = baseline.StatusSkipped
+			obj.Reason = reason
+			obj.Stats = nil
+		} else {
+			obj.Checksum = checksum
 		}
-		objects = append(objects, baseline.Object{
-			Kind:        c.Kind,
-			Schema:      c.Schema,
-			Name:        c.Name,
-			TableSchema: c.TableSchema,
-			TableName:   c.TableName,
-			Status:      status,
-			Checksum:    checksum,
-			Reason:      reason,
-		})
+		objects = append(objects, obj)
 	}
 
 	b := baseline.New(
@@ -381,6 +429,139 @@ func contains(list []string, value string) bool {
 		}
 	}
 	return false
+}
+
+// candidateKey mirrors baseline.Object.Key for a discovered relation.
+func candidateKey(c Candidate) string {
+	return c.Kind + ":" + c.Schema + "." + c.Name
+}
+
+// tableStats reads the cumulative tuple counters and relfilenode for a table.
+// A missing pg_stat_all_tables row (for example for a partitioned parent) is
+// represented as nil so --changed-since falls back to a full checksum.
+func tableStats(ctx context.Context, tx *sql.Tx, c Candidate) (*baseline.TableStats, error) {
+	query := "SELECT c.relfilenode::bigint, s.n_tup_ins, s.n_tup_upd, s.n_tup_del " +
+		"FROM pg_class c LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid " +
+		"WHERE c.oid = $1"
+	var relfilenode, inserted, updated, deleted sql.NullInt64
+	if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&relfilenode, &inserted, &updated, &deleted); err != nil {
+		return nil, err
+	}
+	if !relfilenode.Valid || !inserted.Valid || !updated.Valid || !deleted.Valid {
+		return nil, nil
+	}
+	return &baseline.TableStats{
+		Relfilenode: relfilenode.Int64,
+		Inserted:    inserted.Int64,
+		Updated:     updated.Int64,
+		Deleted:     deleted.Int64,
+	}, nil
+}
+
+// statsEqual is intentionally strict: any counter regression (a stats reset)
+// means we cannot prove the table unchanged, so the caller must checksum it.
+func statsEqual(prior, current *baseline.TableStats) bool {
+	if prior == nil || current == nil {
+		return false
+	}
+	// With all-zero counters we cannot distinguish "never modified" from
+	// "statistics were reset"; do not take the shortcut in that case.
+	if prior.Inserted+prior.Updated+prior.Deleted == 0 {
+		return false
+	}
+	if prior.Relfilenode != current.Relfilenode {
+		return false
+	}
+	if current.Inserted < prior.Inserted || current.Updated < prior.Updated || current.Deleted < prior.Deleted {
+		return false
+	}
+	return prior.Inserted == current.Inserted &&
+		prior.Updated == current.Updated &&
+		prior.Deleted == current.Deleted
+}
+
+// reusableObject decides whether --changed-since may copy a checksum from the
+// previous baseline. It requires an unchanged schema, unchanged table counters
+// and, for an index, an unchanged owning table. This is a performance hint;
+// any uncertainty falls back to a real checksum.
+func reusableObject(c Candidate, current baseline.Object, prior map[string]baseline.Object, hashes map[string]string, statsByKey map[string]*baseline.TableStats) (baseline.Object, bool) {
+	if prior == nil {
+		return baseline.Object{}, false
+	}
+	p, ok := prior[candidateKey(c)]
+	if !ok || p.Status != baseline.StatusOK || p.Checksum == "" || p.SchemaHash == "" {
+		return baseline.Object{}, false
+	}
+	if p.SchemaHash != current.SchemaHash {
+		return baseline.Object{}, false
+	}
+
+	switch c.Kind {
+	case baseline.ObjectTable:
+		if !statsEqual(p.Stats, statsByKey[candidateKey(c)]) {
+			return baseline.Object{}, false
+		}
+	case baseline.ObjectIndex:
+		tableKey := "table:" + c.TableSchema + "." + c.TableName
+		pt, ok := prior[tableKey]
+		if !ok || pt.SchemaHash == "" || pt.SchemaHash != hashes[tableKey] {
+			return baseline.Object{}, false
+		}
+		if !statsEqual(pt.Stats, statsByKey[tableKey]) {
+			return baseline.Object{}, false
+		}
+	default:
+		return baseline.Object{}, false
+	}
+
+	reused := p
+	reused.SchemaHash = current.SchemaHash
+	if c.Kind == baseline.ObjectTable {
+		reused.Stats = current.Stats
+	} else {
+		reused.Stats = nil
+	}
+	return reused, true
+}
+
+// schemaHash returns a portable fingerprint of the object definition. It reads
+// only catalogs and never includes OIDs, so a dump/restore with different OIDs
+// still produces the same hash for the same schema.
+func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
+	var spec string
+	switch c.Kind {
+	case baseline.ObjectTable:
+		query := "SELECT c.relkind::text || '|' || c.relpersistence::text || '|' || " +
+			"COALESCE(array_to_string(c.reloptions, ','), '') || '|' || " +
+			"COALESCE(pg_get_partkeydef(c.oid), '') || '|' || " +
+			"CASE WHEN c.relkind = 'm' THEN pg_get_viewdef(c.oid, true) ELSE '' END || '|' || " +
+			"COALESCE((SELECT string_agg(a.attnum::text || ':' || quote_ident(a.attname) || ':' || " +
+			"format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text || ':' || " +
+			"a.attidentity::text || ':' || a.attgenerated::text || ':' || " +
+			"COALESCE(coll.collname, '') || ':' || " +
+			"COALESCE(pg_get_expr(d.adbin, d.adrelid), ''), ' | ' ORDER BY a.attnum) " +
+			"FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
+			"LEFT JOIN pg_collation coll ON coll.oid = a.attcollation " +
+			"WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped), '') || '|' || " +
+			"COALESCE((SELECT string_agg(pg_get_constraintdef(con.oid, true), ' | ' ORDER BY con.oid) " +
+			"FROM pg_constraint con WHERE con.conrelid = c.oid), '')" +
+			" FROM pg_class c WHERE c.oid = $1"
+		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&spec); err != nil {
+			return "", err
+		}
+	case baseline.ObjectIndex:
+		query := "SELECT pg_get_indexdef(c.oid) || '|' || am.amname || '|' || " +
+			"COALESCE(array_to_string(c.reloptions, ','), '') " +
+			"FROM pg_class c JOIN pg_index i ON i.indexrelid = c.oid " +
+			"JOIN pg_am am ON am.oid = c.relam WHERE c.oid = $1"
+		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&spec); err != nil {
+			return "", err
+		}
+	default:
+		return "", fmt.Errorf("unknown object kind %q", c.Kind)
+	}
+	sum := sha256.Sum256([]byte(spec))
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
 // checksumObject calls the extension function for one relation. A NULL result

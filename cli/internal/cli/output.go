@@ -27,7 +27,7 @@ func writeChangesText(w io.Writer, changes []baseline.Change, showOK bool) {
 		return
 	}
 	for _, c := range filtered {
-		line := fmt.Sprintf("%-7s %-5s %s.%s", strings.ToUpper(c.Status), c.Kind, c.Schema, c.Name)
+		line := fmt.Sprintf("%-14s %-5s %s.%s", strings.ToUpper(c.Status), c.Kind, c.Schema, c.Name)
 		if c.Kind == baseline.ObjectIndex && c.TableName != "" {
 			line += fmt.Sprintf(" (on %s.%s)", c.TableSchema, c.TableName)
 		}
@@ -51,8 +51,8 @@ func display(value string) string {
 
 // writeSummary is the machine-friendly final line of text reports.
 func writeSummary(w io.Writer, summary baseline.Summary) {
-	fmt.Fprintf(w, "checked=%d ok=%d changed=%d new=%d missing=%d skipped=%d\n",
-		summary.Total(), summary.OK, summary.Changed, summary.New, summary.Missing, summary.Skipped)
+	fmt.Fprintf(w, "checked=%d ok=%d changed=%d schema_changed=%d new=%d missing=%d skipped=%d\n",
+		summary.Total(), summary.OK, summary.Changed, summary.SchemaChanged, summary.New, summary.Missing, summary.Skipped)
 }
 
 // writeVerifyJSON is the CI-facing verify result. The baseline ID identifies

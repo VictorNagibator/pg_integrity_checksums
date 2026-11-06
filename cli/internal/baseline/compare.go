@@ -2,9 +2,9 @@ package baseline
 
 import "sort"
 
-// Change is one entry in a diff. Status is one of ok, changed, new, missing
-// or skipped; missing/new are relative to the current database in verify and
-// relative to the second file in diff.
+// Change is one entry in a diff. Status is one of ok, changed, schema_changed,
+// new, missing or skipped; missing/new are relative to the current database in
+// verify and relative to the second file in diff.
 type Change struct {
 	Kind        string `json:"kind"`
 	Schema      string `json:"schema"`
@@ -21,22 +21,23 @@ type Change struct {
 // Summary counts changes by category. Skipped is reported separately because
 // an unsupported object is not evidence that data changed.
 type Summary struct {
-	OK      int `json:"ok"`
-	Changed int `json:"changed"`
-	New     int `json:"new"`
-	Missing int `json:"missing"`
-	Skipped int `json:"skipped"`
+	OK            int `json:"ok"`
+	Changed       int `json:"changed"`
+	SchemaChanged int `json:"schema_changed"`
+	New           int `json:"new"`
+	Missing       int `json:"missing"`
+	Skipped       int `json:"skipped"`
 }
 
 // Total is the number of objects considered by the comparison.
 func (s Summary) Total() int {
-	return s.OK + s.Changed + s.New + s.Missing + s.Skipped
+	return s.OK + s.Changed + s.SchemaChanged + s.New + s.Missing + s.Skipped
 }
 
-// HasChanges reports whether data or object membership changed. Skipped
-// objects alone do not make the result fail.
+// HasChanges reports whether data, schema or object membership changed.
+// Skipped objects alone do not make the result fail.
 func (s Summary) HasChanges() bool {
-	return s.Changed > 0 || s.New > 0 || s.Missing > 0
+	return s.Changed > 0 || s.SchemaChanged > 0 || s.New > 0 || s.Missing > 0
 }
 
 // Compare matches objects by their stable key and produces a deterministic,
@@ -105,6 +106,13 @@ func Compare(oldObjects, currentObjects []Object) ([]Change, Summary) {
 				base.Reason = oldObj.Reason
 			}
 			summary.Skipped++
+		case oldObj.SchemaHash != "" && curObj.SchemaHash != "" && oldObj.SchemaHash != curObj.SchemaHash:
+			// A schema change usually changes the checksum too, so classify it
+			// first and report it as a distinct category.
+			base.Status = "schema_changed"
+			base.BaselineChecksum = oldObj.Checksum
+			base.CurrentChecksum = curObj.Checksum
+			summary.SchemaChanged++
 		case oldObj.Checksum != curObj.Checksum:
 			base.Status = "changed"
 			base.BaselineChecksum = oldObj.Checksum
@@ -153,7 +161,7 @@ func FailOn(summary Summary, mode string) bool {
 	case "none":
 		return false
 	case "changed":
-		return summary.Changed > 0
+		return summary.Changed > 0 || summary.SchemaChanged > 0
 	case "new":
 		return summary.New > 0
 	case "missing":

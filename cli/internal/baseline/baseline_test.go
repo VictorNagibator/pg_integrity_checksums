@@ -144,6 +144,41 @@ func TestCompareStatuses(t *testing.T) {
 	}
 }
 
+func TestCompareSchemaChanged(t *testing.T) {
+	oldObjects := []Object{{
+		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK,
+		Checksum: "1", SchemaHash: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}}
+	currentObjects := []Object{{
+		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK,
+		Checksum: "2", SchemaHash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+	}}
+	changes, summary := Compare(oldObjects, currentObjects)
+	if summary.SchemaChanged != 1 || summary.Changed != 0 || summary.HasChanges() != true {
+		t.Fatalf("bad schema summary: %#v", summary)
+	}
+	if changes[0].Status != "schema_changed" {
+		t.Fatalf("bad status: %s", changes[0].Status)
+	}
+	if !FailOn(summary, "changed") || !FailOn(summary, "any") {
+		t.Fatal("schema change should fail changed/any")
+	}
+}
+
+func TestStatsValidation(t *testing.T) {
+	b := New("0.1.0", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{{
+		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "1",
+		Stats: &TableStats{Relfilenode: 1, Inserted: 2},
+	}})
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	b.Objects[0].Stats.Deleted = -1
+	if err := b.Validate(); err == nil {
+		t.Fatal("negative stats should fail")
+	}
+}
+
 func TestFailOn(t *testing.T) {
 	s := Summary{Changed: 1, New: 1, Missing: 1}
 	if FailOn(s, "none") {

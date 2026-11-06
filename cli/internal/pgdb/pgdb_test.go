@@ -60,6 +60,53 @@ func TestMatchesScopeTableFilterAppliesToIndexes(t *testing.T) {
 	}
 }
 
+func TestStatsEqual(t *testing.T) {
+	base := &baseline.TableStats{Relfilenode: 1, Inserted: 2, Updated: 3, Deleted: 4}
+	if !statsEqual(base, &baseline.TableStats{Relfilenode: 1, Inserted: 2, Updated: 3, Deleted: 4}) {
+		t.Fatal("equal stats should match")
+	}
+	if statsEqual(&baseline.TableStats{Relfilenode: 1}, &baseline.TableStats{Relfilenode: 1}) {
+		t.Fatal("all-zero counters must not be used as proof")
+	}
+	if statsEqual(base, &baseline.TableStats{Relfilenode: 1, Inserted: 1}) {
+		t.Fatal("counter regression must not match")
+	}
+	if statsEqual(base, &baseline.TableStats{Relfilenode: 2, Inserted: 2, Updated: 3, Deleted: 4}) {
+		t.Fatal("relfilenode change must not match")
+	}
+}
+
+func TestReusableObject(t *testing.T) {
+	hash := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	table := Candidate{Kind: baseline.ObjectTable, Schema: "app", Name: "t"}
+	tableKey := candidateKey(table)
+	stats := &baseline.TableStats{Relfilenode: 10, Inserted: 1}
+	prior := map[string]baseline.Object{
+		tableKey: {Kind: baseline.ObjectTable, Schema: "app", Name: "t", Status: baseline.StatusOK, Checksum: "7", SchemaHash: hash, Stats: stats},
+	}
+	hashes := map[string]string{tableKey: hash}
+	statsByKey := map[string]*baseline.TableStats{tableKey: {Relfilenode: 10, Inserted: 1}}
+	current := baseline.Object{Kind: baseline.ObjectTable, Schema: "app", Name: "t", SchemaHash: hash, Stats: statsByKey[tableKey]}
+	reused, ok := reusableObject(table, current, prior, hashes, statsByKey)
+	if !ok || reused.Checksum != "7" {
+		t.Fatalf("table should be reusable: %#v %v", reused, ok)
+	}
+
+	current.SchemaHash = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	if _, ok := reusableObject(table, current, prior, hashes, statsByKey); ok {
+		t.Fatal("schema change must prevent reuse")
+	}
+
+	idx := Candidate{Kind: baseline.ObjectIndex, Schema: "app", Name: "t_pkey", TableSchema: "app", TableName: "t"}
+	idxKey := candidateKey(idx)
+	prior[idxKey] = baseline.Object{Kind: baseline.ObjectIndex, Schema: "app", Name: "t_pkey", TableSchema: "app", TableName: "t", Status: baseline.StatusOK, Checksum: "8", SchemaHash: hash}
+	hashes[idxKey] = hash
+	idxCurrent := baseline.Object{Kind: baseline.ObjectIndex, Schema: "app", Name: "t_pkey", TableSchema: "app", TableName: "t", SchemaHash: hash}
+	if reused, ok := reusableObject(idx, idxCurrent, prior, hashes, statsByKey); !ok || reused.Checksum != "8" {
+		t.Fatalf("index should be reusable: %#v %v", reused, ok)
+	}
+}
+
 func TestIsSystemSchema(t *testing.T) {
 	for _, name := range []string{"pg_catalog", "information_schema", "pg_toast", "pg_temp_3", "pg_toast_temp_3"} {
 		if !isSystemSchema(name) {

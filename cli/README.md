@@ -76,6 +76,7 @@ Options:
 | `--fail-on` | `any` | `changed`, `new`, `missing`, `any`, `none` |
 | `--show-ok` | false | Include unchanged objects in text output |
 | `--allow-version-mismatch` | false | Allow a different PostgreSQL major |
+| `--changed-since` | false | Reuse unchanged tables/indexes (logical only, heuristic) |
 | `--workers` | 0 | Extension parallel workers |
 | `--timeout` | 0 | `statement_timeout` |
 | `--quiet` | false | No progress on stderr |
@@ -152,9 +153,9 @@ Example:
 ```json
 {
   "format": "pg_integrity_checksums.baseline/v1",
-  "baseline_id": "sha256:...",
+  "baseline_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "created_at": "2026-11-06T16:18:40Z",
-  "tool_version": "0.1.0",
+  "tool_version": "0.1.0-dev",
   "kind": "logical",
   "extension_version": "2.1.0",
   "postgres_version": 160014,
@@ -173,7 +174,14 @@ Example:
       "schema": "public",
       "name": "orders",
       "status": "ok",
-      "checksum": "161531096"
+      "checksum": "161531096",
+      "schema_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "stats": {
+        "relfilenode": 16399,
+        "inserted": 100,
+        "updated": 2,
+        "deleted": 1
+      }
     },
     {
       "kind": "index",
@@ -182,7 +190,8 @@ Example:
       "table_schema": "public",
       "table_name": "orders",
       "status": "ok",
-      "checksum": "-1867570346"
+      "checksum": "-1867570346",
+      "schema_hash": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   ]
 }
@@ -195,8 +204,15 @@ Rules:
 - `kind` is `logical` or `physical`.
 - Object `kind` is `table` or `index`.
 - OIDs are never stored; identity is schema-qualified names.
+- `schema_hash` is a SHA-256 of the portable object definition (columns,
+  constraints, partition key, reloptions and index definition). It lets
+  verify/diff report `schema_changed` separately from a data change.
+- `stats` is table-only change-detection data from `pg_stat_all_tables` plus
+  `relfilenode`; it is used only by `--changed-since`.
 - Objects are sorted by `kind`, `schema`, `name`.
 - `status` is `ok` or `skipped`; skipped objects may carry `reason`.
+- A comparison adds `schema_changed` when the stored and current
+  `schema_hash` differ; `--fail-on changed` counts it as a change.
 - `baseline_id` is `sha256:` plus the SHA-256 of the canonical JSON encoding
   of `kind`, `extension_version`, `postgres_version`, `database` and the
   sorted object list.
@@ -249,6 +265,21 @@ views, sequences and TOAST relations are not captured as separate objects.
 - depends on storage, page locations, LSNs and architecture;
 - only valid for the same cluster and storage state;
 - the baseline records `system_identifier` and is rejected on another cluster.
+
+### `--changed-since`
+
+`--changed-since` is a logical-only optimization for verify. It reuses a
+baseline checksum when all of the following are true:
+
+- the object's `schema_hash` is unchanged;
+- for a table, `relfilenode` and the `n_tup_ins`/`n_tup_upd`/`n_tup_del`
+  counters are unchanged and non-zero;
+- for an index, the owning table is unchanged and the index definition hash is
+  unchanged.
+
+The statistics counters are a heuristic: a reset, overflow or missing stats row
+forces a full checksum. Use a normal verify when exactness matters. Physical
+baselines do not support `--changed-since`.
 
 ### No automatic baseline updates
 

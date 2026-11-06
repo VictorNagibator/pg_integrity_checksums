@@ -1,0 +1,170 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/VictorNagibator/pg_integrity_checksums/cli/baseline-v1.schema.json",
+  "title": "pg_integrity_checksums baseline v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "created_at",
+    "tool_version",
+    "kind",
+    "extension_version",
+    "postgres_version",
+    "database",
+    "scope",
+    "objects"
+  ],
+  "properties": {
+    "format": {
+      "const": "pg_integrity_checksums.baseline/v1"
+    },
+    "baseline_id": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "tool_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": ["logical", "physical"]
+    },
+    "extension_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "postgres_version": {
+      "type": "integer",
+      "minimum": 120000
+    },
+    "database": {
+      "type": "string",
+      "minLength": 1
+    },
+    "system_identifier": {
+      "type": "string",
+      "pattern": "^[0-9]+$"
+    },
+    "database_oid": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "scope": {
+      "$ref": "#/$defs/scope"
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "kind": { "const": "physical" } },
+        "required": ["kind"]
+      },
+      "then": {
+        "required": ["system_identifier", "database_oid"]
+      }
+    }
+  ],
+  "$defs": {
+    "scope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemas",
+        "exclude_schemas",
+        "tables",
+        "exclude_tables",
+        "include_system",
+        "include_indexes"
+      ],
+      "properties": {
+        "schemas": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "exclude_schemas": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "tables": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "exclude_tables": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "include_system": {
+          "type": "boolean"
+        },
+        "include_indexes": {
+          "type": "boolean"
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "schema", "name", "status"],
+      "properties": {
+        "kind": {
+          "enum": ["table", "index"]
+        },
+        "schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "table_schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "table_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "enum": ["ok", "skipped"]
+        },
+        "checksum": {
+          "type": "string",
+          "pattern": "^-?[0-9]+$"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "kind": { "const": "index" } }
+          },
+          "then": {
+            "required": ["table_schema", "table_name"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "ok" } }
+          },
+          "then": {
+            "required": ["checksum"]
+          }
+        }
+      ]
+    }
+  }
+}

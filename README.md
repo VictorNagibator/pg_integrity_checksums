@@ -15,6 +15,7 @@
 - [Key Features](#key-features)
 - [Physical and Logical Checksums](#physical-and-logical-checksums)
 - [Installation](#installation)
+- [CLI: Baselines and Verification](#cli-baselines-and-verification)
 - [Function Reference](#function-reference)
 - [Algorithm Details](#algorithm-details)
 - [Limitations and Portability](#limitations-and-portability)
@@ -236,6 +237,31 @@ SQL function names and checksum values are unchanged, so existing logical and
 physical baselines remain valid.  If `DROP EXTENSION` fails because of
 dependent objects, remove or recreate those dependencies explicitly rather
 than using `CASCADE` without review.
+
+---
+
+## CLI: Baselines and Verification
+
+The repository also contains a companion CLI in [`cli/`](cli/README.md)
+(Go 1.23+).  It captures versioned JSON baselines, verifies them, shows diffs
+and updates a baseline explicitly after review.  It uses the SQL functions
+above and does not install additional database objects.
+
+```bash
+cd cli
+go build ./cmd/pg_integrity_checksums
+
+pg_integrity_checksums capture --db "$DATABASE_URL" --schema public \
+  --output baseline.json
+
+pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
+```
+
+The CLI is released independently from the extension with `cli-v*` tags;
+its source is included in the PGXN source archive.  Logical checksums are the
+default; physical baselines are opt-in and tied to one cluster.  See the
+[CLI contract](cli/README.md) for commands, flags, exit codes and the
+baseline JSON schema.
 
 ---
 
@@ -799,7 +825,8 @@ ARM64.  [CodeQL](.github/workflows/codeql.yml) analyzes the C sources, the
 [Quality workflow](.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
 builds for PostgreSQL 12–19, and the
 [Docker workflow](.github/workflows/docker.yml) builds PG 12–18 images and
-smoke-tests PostgreSQL 16 on pull requests.
+smoke-tests PostgreSQL 16 on pull requests.  The CLI has its own
+[CLI workflow](.github/workflows/cli.yml) and independent `cli-v*` releases.
 
 Logical checksums are canonical across endianness: the same schema and data
 produce the same logical values on little-endian and big-endian systems.

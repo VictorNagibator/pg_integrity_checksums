@@ -24,3 +24,9 @@ pg_stat_tmp/
 .idea/
 *.swp
 .DS_Store
+
+# Local Go toolchain and test cluster
+.tools/
+cli/dist/
+cli/pg_integrity_checksums
+cli/pg_integrity_checksums.exe

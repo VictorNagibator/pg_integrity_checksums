@@ -31,3 +31,6 @@ cli/dist/
 cli/pg_integrity_checksums
 cli/pg_integrity_checksums.exe
 cli/release-notes.md
+
+# Go coverage
+cli/coverage.out

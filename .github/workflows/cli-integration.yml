@@ -39,9 +39,9 @@ jobs:
     env:
       PG: ${{ matrix.pg }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
@@ -51,19 +51,39 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex curl ca-certificates
 
-      - name: Build PostgreSQL from source
+      - name: Restore PostgreSQL build cache
+        id: pg-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: pg${{ matrix.pg }}
+          key: cli-pg-${{ matrix.pg }}-v1
+
+      - name: Fetch PostgreSQL source
         run: |
-          curl -L -o pg.tar.gz "https://github.com/postgres/postgres/archive/refs/heads/REL_$PG"_STABLE.tar.gz
+          curl -L -o pg.tar.gz "https://github.com/postgres/postgres/archive/refs/heads/REL_${PG}_STABLE.tar.gz"
           tar -xzf pg.tar.gz
+
+      - name: Build PostgreSQL ${{ matrix.pg }} if not cached
+        if: steps.pg-cache.outputs.cache-hit != 'true'
+        run: |
           PG_SRC="$PWD/postgres-REL_$PG"_STABLE
           PREFIX="$PWD/pg$PG"
           cd "$PG_SRC"
-          ./configure             --prefix="$PREFIX"             --disable-nls             --without-icu             --without-readline             --without-zlib             --without-llvm
+          ./configure \
+            --prefix="$PREFIX" \
+            --disable-nls \
+            --without-icu \
+            --without-readline \
+            --without-zlib \
+            --without-llvm
           make -j"$(nproc)"
           make install
+
+      - name: Configure PostgreSQL environment
+        run: |
+          PREFIX="$PWD/pg$PG"
           echo "PG_CONFIG=$PREFIX/bin/pg_config" >> "$GITHUB_ENV"
           echo "PATH=$PREFIX/bin:$PATH" >> "$GITHUB_ENV"
-
       - name: Build and install extension
         run: |
           make PG_CONFIG="$PG_CONFIG" with_llvm=no
@@ -90,6 +110,24 @@ jobs:
         run: |
           cd cli
           go test -count=1 ./internal/cli -run TestIntegration -v
+
+      - name: Prepare composite action smoke test
+        if: matrix.pg == 16
+        run: |
+          PGBIN="$(dirname "$PG_CONFIG")"
+          "$PGBIN/psql" -h 127.0.0.1 -p 5433 -U postgres -d cli_test             -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS action_smoke (id int primary key)"
+          cd cli
+          go build -trimpath -o /tmp/pgics-action ./cmd/pg_integrity_checksums
+          /tmp/pgics-action capture --dsn "host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable"             --schema public --output /tmp/action-baseline.json --quiet
+
+      - name: Run composite action
+        if: matrix.pg == 16
+        uses: ./cli
+        with:
+          baseline: /tmp/action-baseline.json
+          dsn: host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable
+          format: json
+          fail_on: any
 
       - name: Show server log on failure
         if: failure()

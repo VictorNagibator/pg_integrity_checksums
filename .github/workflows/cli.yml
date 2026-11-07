@@ -1,15 +1,10 @@
-# Fast unit/compile checks for the Go CLI. Database integration is in cli-integration.yml.
+# Fast unit/race/coverage checks for the Go CLI. Database integration is in
+# cli-integration.yml.
 name: CLI
 
 on:
   push:
-    paths:
-      - "cli/**"
-      - ".github/workflows/cli.yml"
   pull_request:
-    paths:
-      - "cli/**"
-      - ".github/workflows/cli.yml"
 
 permissions:
   contents: read
@@ -21,18 +16,34 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: cli
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: cli/go.mod
           cache-dependency-path: cli/go.sum
-      - name: Test
-        run: go test ./...
+      - name: Test with coverage
+        run: go test -count=1 -coverprofile=coverage.out ./...
+      - name: Race
+        run: go test -race -count=1 ./...
+      - name: Coverage report
+        run: go tool cover -func=coverage.out
+      - name: Upload coverage
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: cli-coverage
+          path: cli/coverage.out
+          if-no-files-found: error
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        with:
+          files: cli/coverage.out
+          flags: cli
+          fail_ci_if_error: false
       - name: Vet
         run: go vet ./...
       - name: Build

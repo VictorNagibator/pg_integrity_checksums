@@ -1,0 +1,33 @@
+name: CLI Docker
+
+on:
+  push:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-docker.yml"
+  pull_request:
+    paths:
+      - "cli/**"
+      - ".github/workflows/cli-docker.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cli-docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    name: Docker CLI smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Build CLI image
+        run: docker build -t pgics-cli ./cli
+      - name: Smoke test CLI image
+        run: |
+          docker run --rm pgics-cli version
+          docker run --rm pgics-cli completion bash >/dev/null

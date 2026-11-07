@@ -2,7 +2,10 @@ module github.com/VictorNagibator/pg_integrity_checksums/cli
 
 go 1.23.6
 
-require github.com/jackc/pgx/v5 v5.7.2
+require (
+	github.com/jackc/pgx/v5 v5.7.2
+	gopkg.in/yaml.v3 v3.0.1
+)
 
 require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect

@@ -97,6 +97,27 @@ func TestLoadNormalizesNullScope(t *testing.T) {
 	}
 }
 
+func TestSaveGzip(t *testing.T) {
+	b := New("0.1.0", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{{
+		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "1",
+	}})
+	path := filepath.Join(t.TempDir(), "baseline.json.gz")
+	if err := Save(path, b, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) < 2 || data[0] != 0x1f || data[1] != 0x8b {
+		t.Fatalf("not gzip: %x", data[:2])
+	}
+	loaded, err := Load(path)
+	if err != nil || len(loaded.Objects) != 1 {
+		t.Fatalf("load gzip: %v %#v", err, loaded)
+	}
+}
+
 func TestValidateRejectsBadDocuments(t *testing.T) {
 	tests := []struct {
 		name string
@@ -186,6 +207,12 @@ func TestFailOn(t *testing.T) {
 	}
 	if !FailOn(s, "changed") || !FailOn(s, "new") || !FailOn(s, "missing") || !FailOn(s, "any") {
 		t.Fatal("expected failure")
+	}
+	if FailOn(Summary{Changed: 1}, "schema-changed") {
+		t.Fatal("data change must not match schema-changed")
+	}
+	if !FailOn(Summary{SchemaChanged: 1}, "schema-changed") {
+		t.Fatal("schema change must match schema-changed")
 	}
 	if FailOn(Summary{OK: 1}, "any") {
 		t.Fatal("unchanged should not fail")

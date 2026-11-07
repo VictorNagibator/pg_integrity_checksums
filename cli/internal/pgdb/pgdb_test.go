@@ -47,6 +47,25 @@ func TestMatchesScopeFilters(t *testing.T) {
 	}
 }
 
+func TestMatchesScopeGlobs(t *testing.T) {
+	scope := baseline.NewScope()
+	scope.Schemas = []string{"app_*"}
+	scope.Tables = []string{"orders_*"}
+	scope.ExcludeTables = []string{"orders_tmp_*"}
+	if !matchesScope(Candidate{Kind: baseline.ObjectTable, Schema: "app_prod", Name: "orders_2026"}, scope) {
+		t.Fatal("glob should match")
+	}
+	if matchesScope(Candidate{Kind: baseline.ObjectTable, Schema: "app_prod", Name: "customers"}, scope) {
+		t.Fatal("table glob should not match")
+	}
+	if matchesScope(Candidate{Kind: baseline.ObjectTable, Schema: "other", Name: "orders_2026"}, scope) {
+		t.Fatal("schema glob should not match")
+	}
+	if matchesScope(Candidate{Kind: baseline.ObjectTable, Schema: "app_prod", Name: "orders_tmp_1"}, scope) {
+		t.Fatal("excluded glob should not match")
+	}
+}
+
 func TestMatchesScopeTableFilterAppliesToIndexes(t *testing.T) {
 	scope := baseline.NewScope()
 	scope.Tables = []string{"app.orders"}

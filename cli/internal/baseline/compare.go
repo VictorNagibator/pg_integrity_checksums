@@ -162,6 +162,8 @@ func FailOn(summary Summary, mode string) bool {
 		return false
 	case "changed":
 		return summary.Changed > 0 || summary.SchemaChanged > 0
+	case "schema-changed", "schema_changed":
+		return summary.SchemaChanged > 0
 	case "new":
 		return summary.New > 0
 	case "missing":

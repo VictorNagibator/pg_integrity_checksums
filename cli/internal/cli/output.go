@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
@@ -81,4 +82,17 @@ func writeDiffJSON(w io.Writer, oldB, newB *baseline.Baseline, changes []baselin
 		"summary":  summary,
 		"changes":  baseline.FilterChanges(changes, showOK),
 	})
+}
+
+// outputWriter returns stdout for "" or "-", or creates a report file.
+// Reports are not baselines, so plain os.Create is sufficient here.
+func outputWriter(stdout io.Writer, path string) (io.Writer, func() error, error) {
+	if path == "" || path == "-" {
+		return stdout, func() error { return nil }, nil
+	}
+	f, err := os.Create(path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return f, f.Close, nil
 }

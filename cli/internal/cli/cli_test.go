@@ -27,7 +27,7 @@ func runCLI(args ...string) (int, string, string) {
 
 func TestVersionAndUsage(t *testing.T) {
 	code, out, _ := runCLI("version")
-	if code != 0 || !strings.Contains(out, "pg_integrity_checksums 0.1.0-dev") {
+	if code != 0 || !strings.Contains(out, "pg_integrity_checksums 0.2.0-dev") {
 		t.Fatalf("version: code=%d out=%q", code, out)
 	}
 	code, out, _ = runCLI("help")
@@ -109,6 +109,32 @@ func TestUpdateRefusesWithoutYes(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "without --yes") {
 		t.Fatalf("unexpected error: %q", errOut)
+	}
+}
+
+func TestOutputDoesNotOverwriteInput(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "baseline.json")
+	writeBaseline(t, path, []baseline.Object{{
+		Kind: baseline.ObjectTable, Schema: "public", Name: "t", Status: baseline.StatusOK, Checksum: "1",
+	}})
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{
+		{"show", path, "--output", path},
+		{"diff", path, path, "--output", path},
+		{"verify", "--baseline", path, "--output", path},
+		{"update", "--baseline", path, "--output", path, "--yes"},
+	} {
+		if code, _, _ := runCLI(args...); code != 2 {
+			t.Fatalf("%v: code=%d", args, code)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("baseline changed: %v", err)
 	}
 }
 

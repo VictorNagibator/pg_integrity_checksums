@@ -368,7 +368,18 @@ func Save(path string, b *Baseline, stdout io.Writer) error {
 		tmp.Close()
 		return err
 	}
-	if _, err := tmp.Write(data); err != nil {
+	if strings.HasSuffix(path, ".gz") {
+		gz := gzip.NewWriter(tmp)
+		if _, err := gz.Write(data); err != nil {
+			gz.Close()
+			tmp.Close()
+			return err
+		}
+		if err := gz.Close(); err != nil {
+			tmp.Close()
+			return err
+		}
+	} else if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
 		return err
 	}

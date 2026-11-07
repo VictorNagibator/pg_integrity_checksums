@@ -1,0 +1,5 @@
+dist/
+release-notes.md
+*.json
+*.xml
+*.log

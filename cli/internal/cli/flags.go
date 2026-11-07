@@ -38,7 +38,7 @@ func parseKind(value string) (string, error) {
 
 func parseFormat(value string) (string, error) {
 	switch value {
-	case "text", "json":
+	case "text", "json", "junit":
 		return value, nil
 	default:
 		return "", fmt.Errorf("invalid --format %q (want text or json)", value)
@@ -47,7 +47,7 @@ func parseFormat(value string) (string, error) {
 
 func parseFailOn(value string) (string, error) {
 	switch value {
-	case "changed", "new", "missing", "any", "none":
+	case "changed", "schema-changed", "new", "missing", "any", "none":
 		return value, nil
 	default:
 		return "", fmt.Errorf("invalid --fail-on %q", value)
@@ -66,6 +66,7 @@ func usage(w io.Writer) {
 		"  pg_integrity_checksums show    FILE [options]\n" +
 		"  pg_integrity_checksums update  [options]\n" +
 		"  pg_integrity_checksums doctor  [options]\n" +
+		"  pg_integrity_checksums completion bash|zsh|fish|powershell\n" +
 		"  pg_integrity_checksums version\n" +
 		"\n" +
 		"Run pg_integrity_checksums <command> --help for command flags.\n" +

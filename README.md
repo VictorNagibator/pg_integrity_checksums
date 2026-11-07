@@ -258,10 +258,11 @@ pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 ```
 
 The CLI is released independently from the extension with `cli-v*` tags;
-its source is included in the PGXN source archive.  Logical checksums are the
-default; physical baselines are opt-in and tied to one cluster.  See the
-[CLI contract](cli/README.md) for commands, flags, exit codes and the
-baseline JSON schema. CLI release notes are kept in [cli/Changes](cli/Changes).
+its source is included in the PGXN source archive.  Profiles, glob filters,
+JUnit reports, shell completion and a composite GitHub Action are documented
+in the [CLI contract](cli/README.md).  Logical checksums are the default;
+physical baselines are opt-in and tied to one cluster.  CLI release notes are
+kept in [cli/Changes](cli/Changes).
 
 ---
 

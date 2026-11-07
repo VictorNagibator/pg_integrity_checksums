@@ -1,0 +1,66 @@
+name: pg_integrity_checksums verify
+description: Build the CLI and verify a baseline against PostgreSQL
+author: VictorNagibator
+branding:
+  icon: shield
+  color: blue
+
+inputs:
+  baseline:
+    description: Path to the JSON baseline
+    required: true
+  dsn:
+    description: PostgreSQL connection string (defaults to DATABASE_URL)
+    required: false
+    default: ""
+  format:
+    description: text, json or junit
+    required: false
+    default: json
+  fail_on:
+    description: changed, schema-changed, new, missing, any or none
+    required: false
+    default: any
+  changed_since:
+    description: Reuse unchanged logical objects
+    required: false
+    default: "false"
+  output:
+    description: Optional report file
+    required: false
+    default: ""
+  quiet:
+    description: Suppress progress
+    required: false
+    default: "true"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version-file: ${{ github.action_path }}/go.mod
+        cache-dependency-path: ${{ github.action_path }}/go.sum
+
+    - name: Build and verify
+      shell: bash
+      env:
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_DSN: ${{ inputs.dsn }}
+        INPUT_FORMAT: ${{ inputs.format }}
+        INPUT_FAIL_ON: ${{ inputs.fail_on }}
+        INPUT_CHANGED_SINCE: ${{ inputs.changed_since }}
+        INPUT_OUTPUT: ${{ inputs.output }}
+        INPUT_QUIET: ${{ inputs.quiet }}
+      run: |
+        set -euo pipefail
+        bin="$RUNNER_TEMP/pg_integrity_checksums"
+        (cd "$GITHUB_ACTION_PATH" && go build -trimpath -o "$bin" ./cmd/pg_integrity_checksums)
+
+        set -- verify --baseline "$INPUT_BASELINE" --format "$INPUT_FORMAT" --fail-on "$INPUT_FAIL_ON"
+        if [ -n "$INPUT_DSN" ]; then set -- "$@" --dsn "$INPUT_DSN"; fi
+        if [ "$INPUT_CHANGED_SINCE" = "true" ]; then set -- "$@" --changed-since; fi
+        if [ -n "$INPUT_OUTPUT" ]; then set -- "$@" --output "$INPUT_OUTPUT"; fi
+        if [ "$INPUT_QUIET" = "true" ]; then set -- "$@" --quiet; fi
+        "$bin" "$@"

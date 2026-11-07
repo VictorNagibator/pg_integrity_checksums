@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -66,9 +67,26 @@ type Info struct {
 // capture and verify must run in one repeatable-read transaction and must not
 // read different tables from different snapshots. If dsn is empty,
 // DATABASE_URL and then the normal PG* variables are used.
+// ConnectOptions controls connection setup. ApplicationName is visible in
+// pg_stat_activity and is useful for identifying CLI sessions.
+type ConnectOptions struct {
+	Timeout         time.Duration
+	ApplicationName string
+}
+
 func Open(ctx context.Context, dsn string) (*sql.DB, error) {
+	return OpenWithOptions(ctx, dsn, ConnectOptions{})
+}
+
+// OpenWithOptions is Open with a configurable connect timeout and
+// application_name. The pool is limited to one connection because the CLI
+// intentionally keeps capture/verify on a single snapshot.
+func OpenWithOptions(ctx context.Context, dsn string, opts ConnectOptions) (*sql.DB, error) {
 	if dsn == "" {
 		dsn = strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	}
+	if opts.Timeout <= 0 {
+		opts.Timeout = 15 * time.Second
 	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
@@ -76,11 +94,19 @@ func Open(ctx context.Context, dsn string) (*sql.DB, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	pingCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	pingCtx, cancel := context.WithTimeout(ctx, opts.Timeout)
 	defer cancel()
 	if err := db.PingContext(pingCtx); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("connect (timeout %s): %w", opts.Timeout, err)
+	}
+	if opts.ApplicationName != "" {
+		if _, err := db.ExecContext(ctx,
+			"SELECT set_config('application_name', $1, false)",
+			opts.ApplicationName); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("set application_name: %w", err)
+		}
 	}
 	return db, nil
 }
@@ -366,6 +392,77 @@ func Discover(ctx context.Context, q Querier, scope baseline.Scope) ([]Candidate
 	return out, nil
 }
 
+// Inspection is a preflight result for doctor: whether capture can read the
+// object and whether row-level security would make its data unavailable.
+type Inspection struct {
+	Candidate
+	CanSelect bool
+	RLS       bool
+	Reason    string
+}
+
+// Inspect discovers objects in scope and checks SELECT privilege and RLS
+// without computing any checksums. It is intentionally cheap.
+func Inspect(ctx context.Context, q Querier, scope baseline.Scope) ([]Inspection, error) {
+	query := "SELECT c.oid::bigint, n.nspname, c.relname, c.relkind, " +
+		"COALESCE(tn.nspname, ''), COALESCE(tc.relname, ''), " +
+		"CASE WHEN c.relkind IN ('i', 'I') THEN has_table_privilege(ix.indrelid, 'SELECT') " +
+		"ELSE has_table_privilege(c.oid, 'SELECT') END, " +
+		"CASE WHEN c.relkind IN ('r', 'p', 'm') THEN c.relrowsecurity ELSE false END " +
+		"FROM pg_class c " +
+		"JOIN pg_namespace n ON n.oid = c.relnamespace " +
+		"LEFT JOIN pg_index ix ON ix.indexrelid = c.oid " +
+		"LEFT JOIN pg_class tc ON tc.oid = ix.indrelid " +
+		"LEFT JOIN pg_namespace tn ON tn.oid = tc.relnamespace " +
+		"WHERE c.relkind IN ('r', 'p', 'm', 'i', 'I') " +
+		"AND NOT c.relispartition " +
+		"ORDER BY n.nspname, c.relname"
+	rows, err := q.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("inspect relations: %w", err)
+	}
+	defer rows.Close()
+	out := make([]Inspection, 0)
+	for rows.Next() {
+		var item Inspection
+		var relkind string
+		if err := rows.Scan(&item.OID, &item.Schema, &item.Name, &relkind,
+			&item.TableSchema, &item.TableName, &item.CanSelect, &item.RLS); err != nil {
+			return nil, err
+		}
+		switch relkind {
+		case "r", "p", "m":
+			item.Kind = baseline.ObjectTable
+		case "i", "I":
+			item.Kind = baseline.ObjectIndex
+		default:
+			continue
+		}
+		if !matchesScope(item.Candidate, scope) {
+			continue
+		}
+		if !item.CanSelect {
+			item.Reason = "no SELECT privilege"
+		} else if item.RLS {
+			item.Reason = "row-level security"
+		}
+		out = append(out, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		if out[i].Schema != out[j].Schema {
+			return out[i].Schema < out[j].Schema
+		}
+		return out[i].Name < out[j].Name
+	})
+	return out, nil
+}
+
 // Querier is implemented by both *sql.DB and *sql.Tx. Discover must work
 // inside the snapshot transaction and from doctor's plain connection.
 type Querier interface {
@@ -384,21 +481,23 @@ func matchesScope(c Candidate, scope baseline.Scope) bool {
 			return false
 		}
 	}
-	if len(scope.Schemas) > 0 && !contains(scope.Schemas, c.Schema) {
+	if len(scope.Schemas) > 0 && !matchesSchema(scope.Schemas, c.Schema) {
 		return false
 	}
-	if contains(scope.ExcludeSchemas, c.Schema) {
+	if matchesSchema(scope.ExcludeSchemas, c.Schema) {
 		return false
 	}
 
-	tableIdentity := c.TableSchema + "." + c.TableName
-	if c.Kind == baseline.ObjectTable {
-		tableIdentity = c.Schema + "." + c.Name
+	tableSchema := c.Schema
+	tableName := c.Name
+	if c.Kind == baseline.ObjectIndex {
+		tableSchema = c.TableSchema
+		tableName = c.TableName
 	}
-	if len(scope.Tables) > 0 && !contains(scope.Tables, tableIdentity) {
+	if len(scope.Tables) > 0 && !matchesTable(scope.Tables, tableSchema, tableName) {
 		return false
 	}
-	if contains(scope.ExcludeTables, tableIdentity) {
+	if matchesTable(scope.ExcludeTables, tableSchema, tableName) {
 		return false
 	}
 	return true
@@ -422,9 +521,26 @@ func isAlwaysExcludedSchema(s string) bool {
 		strings.HasPrefix(s, "pg_toast_temp_")
 }
 
-func contains(list []string, value string) bool {
-	for _, item := range list {
-		if item == value {
+// matchesSchema applies shell-style glob patterns such as app_*.
+func matchesSchema(patterns []string, schema string) bool {
+	for _, pattern := range patterns {
+		if ok, _ := path.Match(pattern, schema); ok {
+			return true
+		}
+	}
+	return false
+}
+
+// matchesTable accepts both schema-qualified patterns (public.orders_*) and
+// bare table patterns (orders_*), which then match in every schema.
+func matchesTable(patterns []string, schema, table string) bool {
+	identity := schema + "." + table
+	for _, pattern := range patterns {
+		target := identity
+		if !strings.Contains(pattern, ".") {
+			target = table
+		}
+		if ok, _ := path.Match(pattern, target); ok {
 			return true
 		}
 	}

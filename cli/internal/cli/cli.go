@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,12 +9,13 @@ import (
 	"strings"
 
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
+	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/config"
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/pgdb"
 )
 
 // Version is overridden at release time with -ldflags -X. The default is
 // used by local builds and tests.
-var Version = "0.1.0-dev"
+var Version = "0.2.0-dev"
 
 // Run dispatches one CLI invocation and returns the process exit code.
 // stdout is reserved for data (JSON, diffs, reports); progress and errors go to
@@ -44,6 +44,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runUpdate(ctx, args[1:], stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, args[1:], stdout, stderr)
+	case "completion":
+		return runCompletion(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "error: unknown command %q\n", args[0])
 		usage(stderr)
@@ -81,10 +83,6 @@ func parseFlags(fs *flag.FlagSet, args []string, stderr io.Writer) int {
 	return -1
 }
 
-func openDB(ctx context.Context, dsn string) (*sql.DB, error) {
-	return pgdb.Open(ctx, dsn)
-}
-
 // progress returns nil in quiet mode; Snapshot checks for nil before calling
 // it, so the rest of the code does not need quiet-mode branches.
 func progress(quiet bool, stderr io.Writer) func(string) {
@@ -101,13 +99,18 @@ func progress(quiet bool, stderr io.Writer) func(string) {
 func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("capture", stderr)
 	dsn := fs.String("db", "", "connection string")
+	dsnAlias := fs.String("dsn", "", "connection string (alias for --db)")
+	configPath := fs.String("config", "", "config file (default: .pgics.yaml)")
+	profileName := fs.String("profile", "", "config profile")
+	connectTimeout := fs.Duration("connect-timeout", 0, "connect timeout")
+	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	output := fs.String("output", "baseline.json", "output file, or - for stdout")
 	kindValue := fs.String("kind", baseline.KindLogical, "logical or physical")
 	var schemas, excludeSchemas, tables, excludeTables stringList
-	fs.Var(&schemas, "schema", "include schema (repeatable or comma-separated)")
-	fs.Var(&excludeSchemas, "exclude-schema", "exclude schema (repeatable)")
-	fs.Var(&tables, "table", "include schema.table (repeatable)")
-	fs.Var(&excludeTables, "exclude-table", "exclude schema.table (repeatable)")
+	fs.Var(&schemas, "schema", "include schema (repeatable or comma-separated; globs allowed)")
+	fs.Var(&excludeSchemas, "exclude-schema", "exclude schema (repeatable; globs allowed)")
+	fs.Var(&tables, "table", "include schema.table (repeatable; globs allowed)")
+	fs.Var(&excludeTables, "exclude-table", "exclude schema.table (repeatable; globs allowed)")
 	includeSystem := fs.Bool("include-system", false, "include system schemas")
 	noIndexes := fs.Bool("no-indexes", false, "do not capture indexes")
 	workers := fs.Int("workers", 0, "pg_integrity_checksums.workers")
@@ -116,6 +119,68 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	quiet := fs.Bool("quiet", false, "suppress progress")
 	if code := parseFlags(fs, args, stderr); code >= 0 {
 		return code
+	}
+
+	profile, cfgPath, err := loadProfile(*configPath, *profileName)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	set := flagSet(fs)
+	base := config.BaseDir(cfgPath)
+
+	if !set["db"] && !set["dsn"] {
+		if value := profile.ResolveDSN(); value != "" {
+			*dsn = value
+		}
+	}
+	if effective, err := resolveDSN(*dsn, *dsnAlias); err != nil {
+		return commandError(stderr, err)
+	} else {
+		*dsn = effective
+	}
+	if !set["kind"] && profile.Kind != "" {
+		*kindValue = profile.Kind
+	}
+	if !set["output"] && profile.Output != "" {
+		*output = profilePath(base, profile.Output)
+	}
+	if !set["schema"] {
+		schemas = append(schemas, profile.Schemas...)
+	}
+	if !set["exclude-schema"] {
+		excludeSchemas = append(excludeSchemas, profile.ExcludeSchemas...)
+	}
+	if !set["table"] {
+		tables = append(tables, profile.Tables...)
+	}
+	if !set["exclude-table"] {
+		excludeTables = append(excludeTables, profile.ExcludeTables...)
+	}
+	*includeSystem = boolValue(set, "include-system", *includeSystem, profile.IncludeSystem)
+	if !set["no-indexes"] && profile.IncludeIndexes != nil {
+		*noIndexes = !*profile.IncludeIndexes
+	}
+	*workers = intValue(set, "workers", *workers, profile.Workers)
+	if !set["timeout"] && profile.Timeout != "" {
+		parsed, err := profileDuration(profile.Timeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*timeout = parsed
+	}
+	*strict = boolValue(set, "strict", *strict, profile.Strict)
+	if !set["connect-timeout"] && profile.ConnectTimeout != "" {
+		parsed, err := profileDuration(profile.ConnectTimeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*connectTimeout = parsed
+	}
+	if !set["application-name"] && profile.ApplicationName != "" {
+		*applicationName = profile.ApplicationName
+	}
+	if *connectTimeout < 0 {
+		return commandError(stderr, errors.New("--connect-timeout must be >= 0"))
 	}
 
 	kind, err := parseKind(*kindValue)
@@ -129,8 +194,6 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		return commandError(stderr, errors.New("--timeout must be >= 0"))
 	}
 
-	// Start from the documented defaults and then apply user filters. The
-	// same Scope is serialized into the baseline for later verification.
 	scope := baseline.NewScope()
 	scope.Schemas = append(scope.Schemas, schemas...)
 	scope.ExcludeSchemas = append(scope.ExcludeSchemas, excludeSchemas...)
@@ -139,7 +202,10 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	scope.IncludeSystem = *includeSystem
 	scope.IncludeIndexes = !*noIndexes
 
-	db, err := openDB(ctx, *dsn)
+	db, err := pgdb.OpenWithOptions(ctx, *dsn, pgdb.ConnectOptions{
+		Timeout:         *connectTimeout,
+		ApplicationName: *applicationName,
+	})
 	if err != nil {
 		return commandError(stderr, err)
 	}
@@ -181,9 +247,15 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("verify", stderr)
 	dsn := fs.String("db", "", "connection string")
+	dsnAlias := fs.String("dsn", "", "connection string (alias for --db)")
+	configPath := fs.String("config", "", "config file (default: .pgics.yaml)")
+	profileName := fs.String("profile", "", "config profile")
+	connectTimeout := fs.Duration("connect-timeout", 0, "connect timeout")
+	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	baselinePath := fs.String("baseline", "", "baseline file")
-	formatValue := fs.String("format", "text", "text or json")
-	failOnValue := fs.String("fail-on", "any", "changed, new, missing, any or none")
+	formatValue := fs.String("format", "text", "text, json or junit")
+	outputPath := fs.String("output", "-", "report file, or - for stdout")
+	failOnValue := fs.String("fail-on", "any", "changed, schema-changed, new, missing, any or none")
 	showOK := fs.Bool("show-ok", false, "include unchanged objects")
 	allowVersion := fs.Bool("allow-version-mismatch", false, "allow a different PostgreSQL major")
 	changedSince := fs.Bool("changed-since", false, "reuse unchanged objects from the baseline (logical only; heuristic)")
@@ -193,8 +265,54 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if code := parseFlags(fs, args, stderr); code >= 0 {
 		return code
 	}
+
+	profile, cfgPath, err := loadProfile(*configPath, *profileName)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	set := flagSet(fs)
+	base := config.BaseDir(cfgPath)
+	if !set["db"] && !set["dsn"] {
+		if value := profile.ResolveDSN(); value != "" {
+			*dsn = value
+		}
+	}
+	if effective, err := resolveDSN(*dsn, *dsnAlias); err != nil {
+		return commandError(stderr, err)
+	} else {
+		*dsn = effective
+	}
+	if !set["baseline"] && profile.Baseline != "" {
+		*baselinePath = profilePath(base, profile.Baseline)
+	}
+	if !set["format"] && profile.Format != "" {
+		*formatValue = profile.Format
+	}
+	if !set["fail-on"] && profile.FailOn != "" {
+		*failOnValue = profile.FailOn
+	}
+	*showOK = boolValue(set, "show-ok", *showOK, profile.ShowOK)
+	*changedSince = boolValue(set, "changed-since", *changedSince, profile.ChangedSince)
+	*workers = intValue(set, "workers", *workers, profile.Workers)
+	if !set["timeout"] && profile.Timeout != "" {
+		parsed, err := profileDuration(profile.Timeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*timeout = parsed
+	}
+	if !set["connect-timeout"] && profile.ConnectTimeout != "" {
+		parsed, err := profileDuration(profile.ConnectTimeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*connectTimeout = parsed
+	}
+	if !set["application-name"] && profile.ApplicationName != "" {
+		*applicationName = profile.ApplicationName
+	}
 	if *baselinePath == "" {
-		return commandError(stderr, errors.New("--baseline is required"))
+		return commandError(stderr, errors.New("--baseline is required (or set baseline in the config profile)"))
 	}
 	format, err := parseFormat(*formatValue)
 	if err != nil {
@@ -204,9 +322,18 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if err != nil {
 		return commandError(stderr, err)
 	}
-	if *workers < 0 || *timeout < 0 {
-		return commandError(stderr, errors.New("--workers and --timeout must be >= 0"))
+	if *workers < 0 || *timeout < 0 || *connectTimeout < 0 {
+		return commandError(stderr, errors.New("--workers, --timeout and --connect-timeout must be >= 0"))
 	}
+
+	if sameFilePath(*outputPath, *baselinePath) {
+		return commandError(stderr, errors.New("--output must not overwrite the baseline file"))
+	}
+	out, closeOutput, err := outputWriter(stdout, *outputPath)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	defer closeOutput()
 
 	oldB, err := baseline.Load(*baselinePath)
 	if err != nil {
@@ -221,7 +348,10 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		prior[o.Key()] = o
 	}
 
-	db, err := openDB(ctx, *dsn)
+	db, err := pgdb.OpenWithOptions(ctx, *dsn, pgdb.ConnectOptions{
+		Timeout:         *connectTimeout,
+		ApplicationName: *applicationName,
+	})
 	if err != nil {
 		return commandError(stderr, err)
 	}
@@ -264,12 +394,16 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	changes, summary := baseline.Compare(oldB.Objects, curB.Objects)
 	if format == "json" {
-		if err := writeVerifyJSON(stdout, oldB, changes, summary, *showOK); err != nil {
+		if err := writeVerifyJSON(out, oldB, changes, summary, *showOK); err != nil {
+			return commandError(stderr, err)
+		}
+	} else if format == "junit" {
+		if err := writeVerifyJUnit(out, oldB, changes, summary, *showOK); err != nil {
 			return commandError(stderr, err)
 		}
 	} else {
-		writeChangesText(stdout, changes, *showOK)
-		writeSummary(stdout, summary)
+		writeChangesText(out, changes, *showOK)
+		writeSummary(out, summary)
 	}
 
 	if baseline.FailOn(summary, failOn) {
@@ -309,6 +443,7 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: pg_integrity_checksums diff [--format text|json] [--show-ok] [--no-fail] OLD NEW")
 	}
 	formatValue := "text"
+	outputPath := "-"
 	showOK := false
 	noFail := false
 	files := make([]string, 0, 2)
@@ -327,6 +462,14 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			formatValue = args[i]
 		case strings.HasPrefix(a, "--format="):
 			formatValue = strings.TrimPrefix(a, "--format=")
+		case a == "--output":
+			i++
+			if i >= len(args) {
+				return commandError(stderr, errors.New("--output requires a value"))
+			}
+			outputPath = args[i]
+		case strings.HasPrefix(a, "--output="):
+			outputPath = strings.TrimPrefix(a, "--output=")
 		case a == "--show-ok":
 			showOK = true
 		case a == "--no-fail":
@@ -349,6 +492,14 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	if sameFilePath(outputPath, files[0]) || sameFilePath(outputPath, files[1]) {
+		return commandError(stderr, errors.New("--output must not overwrite a baseline input"))
+	}
+	out, closeOutput, err := outputWriter(stdout, outputPath)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	defer closeOutput()
 	oldB, err := baseline.Load(files[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "error: invalid old baseline: %v\n", err)
@@ -365,12 +516,16 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	changes, summary := baseline.Compare(oldB.Objects, newB.Objects)
 	if format == "json" {
-		if err := writeDiffJSON(stdout, oldB, newB, changes, summary, showOK); err != nil {
+		if err := writeDiffJSON(out, oldB, newB, changes, summary, showOK); err != nil {
+			return commandError(stderr, err)
+		}
+	} else if format == "junit" {
+		if err := writeDiffJUnit(out, oldB, newB, changes, summary, showOK); err != nil {
 			return commandError(stderr, err)
 		}
 	} else {
-		writeChangesText(stdout, changes, showOK)
-		writeSummary(stdout, summary)
+		writeChangesText(out, changes, showOK)
+		writeSummary(out, summary)
 	}
 	if !noFail && summary.HasChanges() {
 		return 1
@@ -387,6 +542,7 @@ func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "usage: pg_integrity_checksums show [--format text|json] [--objects] FILE")
 	}
 	formatValue := "text"
+	outputPath := "-"
 	showObjects := false
 	files := make([]string, 0, 1)
 
@@ -404,6 +560,14 @@ func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 			formatValue = args[i]
 		case strings.HasPrefix(a, "--format="):
 			formatValue = strings.TrimPrefix(a, "--format=")
+		case a == "--output":
+			i++
+			if i >= len(args) {
+				return commandError(stderr, errors.New("--output requires a value"))
+			}
+			outputPath = args[i]
+		case strings.HasPrefix(a, "--output="):
+			outputPath = strings.TrimPrefix(a, "--output=")
 		case a == "--objects":
 			showObjects = true
 		case a == "--":
@@ -424,6 +588,18 @@ func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	if format == "junit" {
+		return commandError(stderr, errors.New("show does not support --format junit"))
+	}
+	if sameFilePath(outputPath, files[0]) {
+		return commandError(stderr, errors.New("--output must not overwrite the baseline input"))
+	}
+	out, closeOutput, err := outputWriter(stdout, outputPath)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	defer closeOutput()
+	stdout = out
 	b, err := baseline.Load(files[0])
 	if err != nil {
 		fmt.Fprintf(stderr, "error: invalid baseline: %v\n", err)
@@ -482,10 +658,16 @@ func runShow(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("update", stderr)
 	dsn := fs.String("db", "", "connection string")
+	dsnAlias := fs.String("dsn", "", "connection string (alias for --db)")
+	configPath := fs.String("config", "", "config file (default: .pgics.yaml)")
+	profileName := fs.String("profile", "", "config profile")
+	connectTimeout := fs.Duration("connect-timeout", 0, "connect timeout")
+	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	baselinePath := fs.String("baseline", "", "baseline file")
 	yes := fs.Bool("yes", false, "confirm replacing the baseline")
 	dryRun := fs.Bool("dry-run", false, "print the diff without writing")
-	formatValue := fs.String("format", "text", "text or json")
+	formatValue := fs.String("format", "text", "text, json or junit")
+	outputPath := fs.String("output", "-", "diff report file, or - for stdout")
 	showOK := fs.Bool("show-ok", false, "include unchanged objects")
 	workers := fs.Int("workers", 0, "pg_integrity_checksums.workers")
 	timeout := fs.Duration("timeout", 0, "statement timeout")
@@ -493,24 +675,80 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	if code := parseFlags(fs, args, stderr); code >= 0 {
 		return code
 	}
+
+	profile, cfgPath, err := loadProfile(*configPath, *profileName)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	set := flagSet(fs)
+	base := config.BaseDir(cfgPath)
+	if !set["db"] && !set["dsn"] {
+		if value := profile.ResolveDSN(); value != "" {
+			*dsn = value
+		}
+	}
+	if effective, err := resolveDSN(*dsn, *dsnAlias); err != nil {
+		return commandError(stderr, err)
+	} else {
+		*dsn = effective
+	}
+	if !set["baseline"] && profile.Baseline != "" {
+		*baselinePath = profilePath(base, profile.Baseline)
+	}
+	if !set["format"] && profile.Format != "" {
+		*formatValue = profile.Format
+	}
+	*showOK = boolValue(set, "show-ok", *showOK, profile.ShowOK)
+	*workers = intValue(set, "workers", *workers, profile.Workers)
+	if !set["timeout"] && profile.Timeout != "" {
+		parsed, err := profileDuration(profile.Timeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*timeout = parsed
+	}
+	if !set["connect-timeout"] && profile.ConnectTimeout != "" {
+		parsed, err := profileDuration(profile.ConnectTimeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*connectTimeout = parsed
+	}
+	if !set["application-name"] && profile.ApplicationName != "" {
+		*applicationName = profile.ApplicationName
+	}
 	if *baselinePath == "" {
-		return commandError(stderr, errors.New("--baseline is required"))
+		return commandError(stderr, errors.New("--baseline is required (or set baseline in the config profile)"))
 	}
 	format, err := parseFormat(*formatValue)
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	if *workers < 0 || *timeout < 0 || *connectTimeout < 0 {
+		return commandError(stderr, errors.New("--workers, --timeout and --connect-timeout must be >= 0"))
+	}
 	if !*yes && !*dryRun {
 		fmt.Fprintln(stderr, "error: refusing to replace baseline without --yes (use --dry-run to preview)")
 		return 4
 	}
+	if sameFilePath(*outputPath, *baselinePath) {
+		return commandError(stderr, errors.New("--output must not overwrite the baseline file"))
+	}
+	out, closeOutput, err := outputWriter(stdout, *outputPath)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	defer closeOutput()
 
 	oldB, err := baseline.Load(*baselinePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "error: invalid baseline: %v\n", err)
 		return 3
 	}
-	db, err := openDB(ctx, *dsn)
+	db, err := pgdb.OpenWithOptions(ctx, *dsn, pgdb.ConnectOptions{
+		Timeout:         *connectTimeout,
+		ApplicationName: *applicationName,
+	})
 	if err != nil {
 		return commandError(stderr, err)
 	}
@@ -533,12 +771,16 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	changes, summary := baseline.Compare(oldB.Objects, newB.Objects)
 	if format == "json" {
-		if err := writeDiffJSON(stdout, oldB, newB, changes, summary, *showOK); err != nil {
+		if err := writeDiffJSON(out, oldB, newB, changes, summary, *showOK); err != nil {
+			return commandError(stderr, err)
+		}
+	} else if format == "junit" {
+		if err := writeDiffJUnit(out, oldB, newB, changes, summary, *showOK); err != nil {
 			return commandError(stderr, err)
 		}
 	} else {
-		writeChangesText(stdout, changes, *showOK)
-		writeSummary(stdout, summary)
+		writeChangesText(out, changes, *showOK)
+		writeSummary(out, summary)
 	}
 	if *dryRun {
 		if !*quiet {
@@ -561,15 +803,79 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("doctor", stderr)
 	dsn := fs.String("db", "", "connection string")
+	dsnAlias := fs.String("dsn", "", "connection string (alias for --db)")
+	configPath := fs.String("config", "", "config file (default: .pgics.yaml)")
+	profileName := fs.String("profile", "", "config profile")
+	connectTimeout := fs.Duration("connect-timeout", 0, "connect timeout")
+	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	timeout := fs.Duration("timeout", 0, "statement timeout")
+	verbose := fs.Bool("verbose", false, "list every discovered object")
+	strict := fs.Bool("strict", false, "exit 1 when a preflight problem is found")
+	formatValue := fs.String("format", "text", "text or json")
+	outputPath := fs.String("output", "-", "report file, or - for stdout")
 	quiet := fs.Bool("quiet", false, "suppress progress")
 	if code := parseFlags(fs, args, stderr); code >= 0 {
 		return code
 	}
-	if *timeout < 0 {
-		return commandError(stderr, errors.New("--timeout must be >= 0"))
+
+	profile, _, err := loadProfile(*configPath, *profileName)
+	if err != nil {
+		return commandError(stderr, err)
 	}
-	db, err := openDB(ctx, *dsn)
+	set := flagSet(fs)
+	if !set["db"] && !set["dsn"] {
+		if value := profile.ResolveDSN(); value != "" {
+			*dsn = value
+		}
+	}
+	if effective, err := resolveDSN(*dsn, *dsnAlias); err != nil {
+		return commandError(stderr, err)
+	} else {
+		*dsn = effective
+	}
+	if !set["timeout"] && profile.Timeout != "" {
+		parsed, err := profileDuration(profile.Timeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*timeout = parsed
+	}
+	if !set["connect-timeout"] && profile.ConnectTimeout != "" {
+		parsed, err := profileDuration(profile.ConnectTimeout)
+		if err != nil {
+			return commandError(stderr, err)
+		}
+		*connectTimeout = parsed
+	}
+	if !set["application-name"] && profile.ApplicationName != "" {
+		*applicationName = profile.ApplicationName
+	}
+	*verbose = boolValue(set, "verbose", *verbose, profile.Verbose)
+	if !set["format"] && profile.Format != "" {
+		*formatValue = profile.Format
+	}
+	format, err := parseFormat(*formatValue)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	if format == "junit" {
+		return commandError(stderr, errors.New("doctor does not support --format junit"))
+	}
+	if *timeout < 0 || *connectTimeout < 0 {
+		return commandError(stderr, errors.New("--timeout and --connect-timeout must be >= 0"))
+	}
+
+	out, closeOutput, err := outputWriter(stdout, *outputPath)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	defer closeOutput()
+	stdout = out
+
+	db, err := pgdb.OpenWithOptions(ctx, *dsn, pgdb.ConnectOptions{
+		Timeout:         *connectTimeout,
+		ApplicationName: *applicationName,
+	})
 	if err != nil {
 		return commandError(stderr, err)
 	}
@@ -590,17 +896,66 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return commandError(stderr, err)
 	}
 	scope := baseline.NewScope()
-	candidates, err := pgdb.Discover(ctx, db, scope)
+	scope.Schemas = append(scope.Schemas, profile.Schemas...)
+	scope.ExcludeSchemas = append(scope.ExcludeSchemas, profile.ExcludeSchemas...)
+	scope.Tables = append(scope.Tables, profile.Tables...)
+	scope.ExcludeTables = append(scope.ExcludeTables, profile.ExcludeTables...)
+	if profile.IncludeSystem != nil {
+		scope.IncludeSystem = *profile.IncludeSystem
+	}
+	if profile.IncludeIndexes != nil {
+		scope.IncludeIndexes = *profile.IncludeIndexes
+	}
+	items, err := pgdb.Inspect(ctx, db, scope)
 	if err != nil {
 		return commandError(stderr, err)
 	}
-	if !*quiet {
-		fmt.Fprintf(stderr, "checking extension and scope\n")
+	problems := 0
+	for _, item := range items {
+		if item.Reason != "" {
+			problems++
+		}
 	}
-	fmt.Fprintf(stdout, "extension: %s\n", info.ExtensionVersion)
-	fmt.Fprintf(stdout, "postgres: %d\n", info.PostgresVersion)
-	fmt.Fprintf(stdout, "database: %s\n", info.Database)
-	fmt.Fprintf(stdout, "current_user: %s\n", info.CurrentUser)
-	fmt.Fprintf(stdout, "objects_in_default_scope: %d\n", len(candidates))
+	if !*quiet {
+		fmt.Fprintln(stderr, "checking extension and scope")
+	}
+	if format == "json" {
+		objects := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			objects = append(objects, map[string]any{
+				"kind": item.Kind, "schema": item.Schema, "name": item.Name,
+				"table_schema": item.TableSchema, "table_name": item.TableName,
+				"can_select": item.CanSelect, "rls": item.RLS, "reason": item.Reason,
+			})
+		}
+		if err := encodeJSON(stdout, map[string]any{
+			"extension": info.ExtensionVersion, "postgres": info.PostgresVersion,
+			"database": info.Database, "current_user": info.CurrentUser,
+			"objects": objects, "preflight_problems": problems,
+		}); err != nil {
+			return commandError(stderr, err)
+		}
+	} else {
+		fmt.Fprintf(stdout, "extension: %s\n", info.ExtensionVersion)
+		fmt.Fprintf(stdout, "postgres: %d\n", info.PostgresVersion)
+		fmt.Fprintf(stdout, "database: %s\n", info.Database)
+		fmt.Fprintf(stdout, "current_user: %s\n", info.CurrentUser)
+		fmt.Fprintf(stdout, "objects_in_default_scope: %d\n", len(items))
+		fmt.Fprintf(stdout, "preflight_problems: %d\n", problems)
+		if *verbose {
+			for _, item := range items {
+				line := fmt.Sprintf("%-5s %s.%s", item.Kind, item.Schema, item.Name)
+				if item.Reason != "" {
+					line += " WARN " + item.Reason
+				} else {
+					line += " OK"
+				}
+				fmt.Fprintln(stdout, line)
+			}
+		}
+	}
+	if *strict && problems > 0 {
+		return 1
+	}
 	return 0
 }

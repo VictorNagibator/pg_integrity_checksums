@@ -1,5 +1,18 @@
 Revision history for pg_integrity_checksums CLI
 
+0.2.0   2026-11-07
+
+    - Add .pgics.yaml profiles with environment-referenced DSNs and
+      config-relative baseline/output paths.
+    - Add shell-style glob filters for schemas and tables.
+    - Add --dsn, --connect-timeout and --application-name.
+    - Add --output and JUnit output for verify, diff and update.
+    - Add doctor preflight checks for SELECT privileges and RLS.
+    - Add --fail-on schema-changed.
+    - Write gzip baselines automatically for .gz output paths.
+    - Add shell completion generation for bash, zsh, fish and PowerShell.
+    - Add a standalone CLI Docker image and a composite GitHub Action.
+
 0.1.0   2026-11-07
 
     - First standalone release of the Go CLI.

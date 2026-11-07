@@ -11,20 +11,52 @@ the pushed `cli-v*` tag automatically.
 
 ## Status
 
-Contract and initial implementation are versioned separately from the
+The CLI is currently **0.2.0-dev**.  It is versioned separately from the
 extension.  The baseline format is **v1**.
 
 ## Commands
 
 ```text
-pg_integrity_checksums capture   --db DSN --output FILE [options]
-pg_integrity_checksums verify    --db DSN --baseline FILE [options]
+pg_integrity_checksums capture   [--config FILE] [--profile NAME] [options]
+pg_integrity_checksums verify    [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums diff      OLD.json NEW.json [options]
 pg_integrity_checksums show      FILE [options]
-pg_integrity_checksums update    --db DSN --baseline FILE --yes [options]
-pg_integrity_checksums doctor    --db DSN [options]
+pg_integrity_checksums update    [--config FILE] [--profile NAME] [options]
+pg_integrity_checksums doctor    [--config FILE] [--profile NAME] [options]
+pg_integrity_checksums completion bash|zsh|fish|powershell
 pg_integrity_checksums version
 ```
+
+### Configuration profiles
+
+`.pgics.yaml` profiles provide defaults for repeated commands:
+
+```yaml
+default: prod
+
+profiles:
+  prod:
+    dsn: env:DATABASE_URL
+    schema: [public]
+    exclude_table: [audit.*]
+    baseline: baselines/prod.json
+    output: baselines/prod.json
+    workers: 4
+    timeout: 5m
+    connect_timeout: 10s
+    application_name: pg_integrity_checksums
+    fail_on: changed
+```
+
+```bash
+pg_integrity_checksums verify --profile prod
+PGICS_PROFILE=prod pg_integrity_checksums verify
+```
+
+Precedence: command-line flags, environment, profile, built-in defaults.
+`PGICS_CONFIG` and `--config` select the file.  Relative `baseline` and
+`output` paths resolve against the config file directory.  `env:NAME` DSNs
+read a connection string from the environment.
 
 ### `capture`
 
@@ -43,12 +75,17 @@ Options:
 | Flag | Default | Meaning |
 |---|---|---|
 | `--db` | `DATABASE_URL`/PG env | PostgreSQL connection string |
-| `--output` | `baseline.json` | Output file; `-` means stdout |
+| `--dsn` | | Alias for `--db` |
+| `--config` | `.pgics.yaml` | Config file |
+| `--profile` | config default | Profile name |
+| `--connect-timeout` | 15s | Connection timeout |
+| `--application-name` | | Value for `pg_stat_activity.application_name` |
+| `--output` | `baseline.json` | Output file; `-` means stdout; `.gz` is compressed |
 | `--kind` | `logical` | `logical` or `physical` |
-| `--schema` | all non-system | Schemas to include; repeatable |
-| `--exclude-schema` | | Schemas to exclude; repeatable |
-| `--table` | all | `schema.table` to include; repeatable |
-| `--exclude-table` | | `schema.table` to exclude; repeatable |
+| `--schema` | all non-system | Schemas to include; globs allowed |
+| `--exclude-schema` | | Schemas to exclude; globs allowed |
+| `--table` | all | `schema.table` or table glob to include |
+| `--exclude-table` | | `schema.table` or table glob to exclude |
 | `--no-indexes` | false | Do not discover indexes |
 | `--include-system` | false | Include system schemas |
 | `--workers` | 0 | Extension parallel workers (GUC) |
@@ -74,8 +111,15 @@ Options:
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--format` | `text` | `text` or `json` |
-| `--fail-on` | `any` | `changed`, `new`, `missing`, `any`, `none` |
+| `--db` | `DATABASE_URL`/PG env | PostgreSQL connection string |
+| `--dsn` | | Alias for `--db` |
+| `--config` | `.pgics.yaml` | Config file |
+| `--profile` | config default | Profile name |
+| `--connect-timeout` | 15s | Connection timeout |
+| `--application-name` | | Value for `pg_stat_activity.application_name` |
+| `--format` | `text` | `text`, `json` or `junit` |
+| `--output` | `-` | Report file; `-` means stdout |
+| `--fail-on` | `any` | `changed`, `schema-changed`, `new`, `missing`, `any`, `none` |
 | `--show-ok` | false | Include unchanged objects in text output |
 | `--allow-version-mismatch` | false | Allow a different PostgreSQL major |
 | `--changed-since` | false | Reuse unchanged tables/indexes (logical only, heuristic) |
@@ -91,7 +135,8 @@ Compares two baseline files without connecting to PostgreSQL.
 pg_integrity_checksums diff before.json after.json
 ```
 
-Flags and the two files may appear in any order.  Exit code is `1` when
+Flags and the two files may appear in any order.  `--format` accepts `text`,
+`json` or `junit`.  `--output` writes a report file.  Exit code is `1` when
 changes are found and `0` when the object maps match.  `--no-fail` makes a
 change-only diff exit 0.
 
@@ -99,7 +144,7 @@ change-only diff exit 0.
 
 Prints baseline metadata and a compact object summary.  With `--format json`
 it prints the baseline document as JSON.  `--objects` lists every object,
-including skipped ones.
+including skipped ones.  `--output` writes the report to a file.
 
 Flags and the file may appear in any order, for example:
 
@@ -111,7 +156,10 @@ pg_integrity_checksums show baseline.json --objects
 
 Captures a new baseline using the old baseline's scope.  It prints the diff and
 requires `--yes` before replacing the file.  There is no automatic update on
-DML or DDL.  The file is replaced atomically.
+DML or DDL.  The file is replaced atomically.  `--format` accepts `text`,
+`json` and `junit`; `--output` writes the diff report to a file.  `--config`,
+`--profile`, `--dsn`, `--connect-timeout` and `--application-name` work as in
+`capture`.
 
 ```bash
 pg_integrity_checksums update \
@@ -129,8 +177,40 @@ pg_integrity_checksums update \
 ### `doctor`
 
 Checks that the extension is installed, reports versions, the current
-database, and the number of objects that would be captured.  `--timeout`
-sets `statement_timeout` on the diagnostic connection.
+database, and the number of objects that would be captured.  `--verbose`
+lists every object with its preflight status; `--strict` exits 1 when a
+problem is found.  `--format json` and `--output` are supported.  The preflight
+checks at least SELECT privileges and row-level security.  `--timeout` sets
+`statement_timeout` on the diagnostic connection.
+
+### `completion`
+
+Prints a shell completion script:
+
+```bash
+pg_integrity_checksums completion bash > /etc/bash_completion.d/pg_integrity_checksums
+pg_integrity_checksums completion zsh
+pg_integrity_checksums completion fish
+pg_integrity_checksums completion powershell
+```
+
+### Docker
+
+```bash
+docker build -t pgics-cli ./cli
+docker run --rm -e DATABASE_URL -v "$PWD:/work" pgics-cli verify --baseline /work/baseline.json
+```
+
+### GitHub Action
+
+The composite action at `cli/action.yml` builds the CLI and runs verify:
+
+```yaml
+- uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.2.0
+  with:
+    baseline: baselines/prod.json
+    fail_on: changed
+```
 
 ## Exit codes
 
@@ -157,7 +237,7 @@ Example:
   "format": "pg_integrity_checksums.baseline/v1",
   "baseline_id": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "created_at": "2026-11-06T16:18:40Z",
-  "tool_version": "0.1.0-dev",
+  "tool_version": "0.2.0-dev",
   "kind": "logical",
   "extension_version": "2.1.0",
   "postgres_version": 160014,

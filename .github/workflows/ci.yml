@@ -44,7 +44,7 @@ jobs:
 
       - name: Restore PostgreSQL build cache
         id: pg-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pg${{ matrix.pg }}
           key: pg-linux-${{ matrix.pg }}-${{ matrix.arch }}-v1
@@ -427,7 +427,7 @@ jobs:
 
       - name: Cache PostgreSQL ${{ matrix.pg_version }} build
         id: pg-cache
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pg-${{ matrix.pg_version }}
           key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-v2

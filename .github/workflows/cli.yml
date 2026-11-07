@@ -42,7 +42,7 @@ jobs:
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
         with:
           files: cli/coverage.out
-          flags: cli
+          flags: unit
           fail_ci_if_error: false
       - name: Vet
         run: go vet ./...

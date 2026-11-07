@@ -34,3 +34,4 @@ cli/release-notes.md
 
 # Go coverage
 cli/coverage.out
+cli/coverage-integration.out

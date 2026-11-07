@@ -109,7 +109,19 @@ jobs:
           PGICS_TEST_DSN: host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable
         run: |
           cd cli
-          go test -count=1 ./internal/cli -run TestIntegration -v
+          if [ "${{ matrix.pg }}" = "16" ]; then
+            go test -count=1 -coverpkg=./... -coverprofile=coverage-integration.out ./internal/cli -run TestIntegration -v
+          else
+            go test -count=1 ./internal/cli -run TestIntegration -v
+          fi
+
+      - name: Upload integration coverage
+        if: matrix.pg == 16
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5
+        with:
+          files: cli/coverage-integration.out
+          flags: integration
+          fail_ci_if_error: false
 
       - name: Prepare composite action smoke test
         if: matrix.pg == 16

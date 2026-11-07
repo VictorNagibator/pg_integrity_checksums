@@ -59,7 +59,7 @@ jobs:
           mkdir -p dist
           VERSION_CLEAN=$(printf '%s' "$VERSION" | sed 's/^cli-v//')
           go build -trimpath -ldflags "-s -w -X github.com/VictorNagibator/pg_integrity_checksums/cli/internal/cli.Version=$VERSION_CLEAN" -o "dist/pg_integrity_checksums-$VERSION-$GOOS-$GOARCH$EXT" ./cmd/pg_integrity_checksums
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: cli/dist/pg_integrity_checksums-*

@@ -7,9 +7,12 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
-      github-actions:
+      github-actions-minor:
         patterns:
           - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: gomod
     directory: /cli

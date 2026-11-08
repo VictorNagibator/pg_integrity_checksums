@@ -2,6 +2,8 @@ version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
+    commit-message:
+      prefix: "chore(deps)"
     schedule:
       interval: weekly
       day: monday
@@ -16,6 +18,8 @@ updates:
 
   - package-ecosystem: gomod
     directory: /cli
+    commit-message:
+      prefix: "chore(deps)"
     schedule:
       interval: weekly
       day: monday
@@ -27,6 +31,8 @@ updates:
 
   - package-ecosystem: docker
     directory: /cli
+    commit-message:
+      prefix: "chore(deps)"
     schedule:
       interval: weekly
       day: monday

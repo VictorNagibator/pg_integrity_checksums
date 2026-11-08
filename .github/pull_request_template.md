@@ -2,6 +2,9 @@
 
 <!-- What does this PR change and why? -->
 
+> PR title must follow Conventional Commits, for example:
+> `feat(cli): add baseline signing`.
+
 ## Type of change
 
 - [ ] Bug fix

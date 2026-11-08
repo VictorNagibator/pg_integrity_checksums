@@ -10,6 +10,7 @@ on:
       - "pg_integrity_checksums.h"
       - "Makefile"
       - "sql/**"
+      - "pg_integrity_checksums--*.sql"
   pull_request:
     paths:
       - "cli/**"
@@ -18,6 +19,7 @@ on:
       - "pg_integrity_checksums.h"
       - "Makefile"
       - "sql/**"
+      - "pg_integrity_checksums--*.sql"
   workflow_dispatch:
 
 permissions:

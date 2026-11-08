@@ -7,7 +7,8 @@
 [![PostgreSQL 12-19](https://img.shields.io/badge/postgres-12--19-336791)](https://www.postgresql.org/)
 [![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![codecov CLI](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg?flag=cli)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
+[![Docs](https://img.shields.io/badge/docs-online-blue)](https://victornagibator.github.io/pg_integrity_checksums/)
+[![coverage](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
 [![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/VictorNagibator/badge.svg)](https://hub.xerj.org/contributors/VictorNagibator)
 
 ## Overview
@@ -47,6 +48,7 @@ pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 
 ## Documentation
 
+- [Documentation site](https://victornagibator.github.io/pg_integrity_checksums/)
 - [Architecture](docs/architecture.md)
 - [Installation](docs/installation.md)
 - [Functions and algorithms](docs/functions.md)

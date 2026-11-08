@@ -251,7 +251,7 @@ CI runs regression and TAP tests for PostgreSQL 12–19 on:
 - macOS arm64
 - Windows x86_64
 - FreeBSD amd64 and arm64
-- Linux s390x (big-endian, manually triggered [Big-endian workflow](../.github/workflows/big-endian.yml))
+- Linux s390x (big-endian, manually triggered [Big-endian workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/big-endian.yml))
 
 Logical checksums use a canonical little-endian encoding for the few fixed-width
 integers in the canonical form (array shape, composite field count and

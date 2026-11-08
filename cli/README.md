@@ -1,6 +1,6 @@
 # pg_integrity_checksums CLI
 
-[![codecov CLI](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg?flag=cli)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
+[![coverage](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
 
 Companion command-line tool for the `pg_integrity_checksums` PostgreSQL
 extension.  The extension provides checksum functions; this tool adds

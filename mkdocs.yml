@@ -1,0 +1,51 @@
+site_name: pg_integrity_checksums
+site_description: Online integrity checks for PostgreSQL at page, tuple, table, index and database level.
+site_url: https://victornagibator.github.io/pg_integrity_checksums/
+repo_url: https://github.com/VictorNagibator/pg_integrity_checksums
+repo_name: VictorNagibator/pg_integrity_checksums
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+    - search.highlight
+  palette:
+    - scheme: default
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: teal
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Architecture: architecture.md
+  - Functions: functions.md
+  - CLI: cli.md
+  - Operations: operations.md
+  - Testing: testing.md
+  - Troubleshooting: troubleshooting.md
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+
+plugins:
+  - search

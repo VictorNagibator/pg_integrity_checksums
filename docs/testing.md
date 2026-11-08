@@ -15,13 +15,13 @@ make installcheck enable_tap_tests=yes PROVE=prove
 
 CI runs both suites on every supported major version (PostgreSQL 12 through 19)
 on Linux x86_64 and ARM64, macOS ARM64, Windows x64, and FreeBSD amd64 and
-ARM64.  [CodeQL](../.github/workflows/codeql.yml) analyzes the C and Go sources, the
-[Quality workflow](../.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
+ARM64.  [CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/codeql.yml) analyzes the C and Go sources, the
+[Quality workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
 builds for PostgreSQL 12–19, and the
-[Docker workflow](../.github/workflows/docker.yml) builds PG 12–18 images and
+[Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml) builds PG 12–18 images and
 smoke-tests PostgreSQL 16 on pull requests.  The CLI has its own
-[CLI workflow](../.github/workflows/cli.yml), the
-[CLI integration matrix](../.github/workflows/cli-integration.yml) for PostgreSQL
+[CLI workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/cli.yml), the
+[CLI integration matrix](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/cli-integration.yml) for PostgreSQL
 12–19, and independent `cli-v*` releases.
 
 Logical checksums are canonical across endianness: the same schema and data
@@ -82,7 +82,7 @@ make dist
 
 ### Automated releases
 
-Pushing a `v*` tag runs the [Release workflow](../.github/workflows/release.yml),
+Pushing a `v*` tag runs the [Release workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release.yml),
 which:
 
 1. checks that the tag, `pg_integrity_checksums.control` and `META.json` all carry the

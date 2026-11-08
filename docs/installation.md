@@ -59,7 +59,7 @@ docker build --build-arg PG_MAJOR=17 -t pg-integrity-checksums:pg17 .
 ```
 
 Images are built by the
-[Docker workflow](../.github/workflows/docker.yml); pull requests and releases are
+[Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml); pull requests and releases are
 smoke-tested with PostgreSQL 16.
 
 ### Prerequisites
@@ -123,7 +123,7 @@ The extension is also listed in
 The extension was renamed in 2.0.0 to avoid confusion with PostgreSQL's core
 `pg_checksums` utility.  PostgreSQL has no `ALTER EXTENSION ... RENAME`, so
 migrate by reinstalling the extension and updating the GUC prefix.  See
-[MIGRATION.md](../MIGRATION.md) for the full checklist:
+[MIGRATION.md](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/MIGRATION.md) for the full checklist:
 
 ```sql
 DROP EXTENSION pg_checksums;

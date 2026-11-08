@@ -26,4 +26,4 @@ pg_integrity_checksums verify --workers 4 --timeout 30m --baseline baseline.json
 ~~~
 
 For repeated verification of a logical baseline, see --changed-since in the
-[CLI contract](../cli/README.md).
+[CLI contract](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/cli/README.md).

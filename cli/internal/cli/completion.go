@@ -34,7 +34,7 @@ _pg_integrity_checksums() {
   cur="$2"
   prev="$3"
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=( $(compgen -W "capture verify diff show update doctor completion version help" -- "$cur") )
+    COMPREPLY=( $(compgen -W "init config capture verify diff show update doctor completion version help" -- "$cur") )
     return 0
   fi
   case "$prev" in
@@ -52,7 +52,7 @@ complete -F _pg_integrity_checksums pg_integrity_checksums
 func zshCompletion() string {
 	return `#compdef pg_integrity_checksums
 _pg_integrity_checksums() {
-  _arguments '1:command:(capture verify diff show update doctor completion version help)' '*::arg:->args'
+  _arguments '1:command:(init config capture verify diff show update doctor completion version help)' '*::arg:->args'
 }
 compdef _pg_integrity_checksums pg_integrity_checksums
 `
@@ -60,7 +60,7 @@ compdef _pg_integrity_checksums pg_integrity_checksums
 
 func fishCompletion() string {
 	return `# fish completion for pg_integrity_checksums
-complete -c pg_integrity_checksums -f -n '__fish_use_subcommand' -a 'capture verify diff show update doctor completion version help'
+complete -c pg_integrity_checksums -f -n '__fish_use_subcommand' -a 'init config capture verify diff show update doctor completion version help'
 complete -c pg_integrity_checksums -l db -l dsn -l config -l profile -l baseline -l output -l table -l schema -r
 `
 }

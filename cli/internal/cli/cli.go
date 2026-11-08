@@ -15,7 +15,7 @@ import (
 
 // Version is overridden at release time with -ldflags -X. The default is
 // used by local builds and tests.
-var Version = "0.2.0-dev"
+var Version = "0.3.0-dev"
 
 // Run dispatches one CLI invocation and returns the process exit code.
 // stdout is reserved for data (JSON, diffs, reports); progress and errors go to
@@ -32,6 +32,10 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version", "--version":
 		fmt.Fprintf(stdout, "pg_integrity_checksums %s\n", Version)
 		return 0
+	case "init":
+		return runInit(args[1:], stdout, stderr)
+	case "config":
+		return runConfig(args[1:], stdout, stderr)
 	case "capture":
 		return runCapture(ctx, args[1:], stdout, stderr)
 	case "verify":

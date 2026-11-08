@@ -13,12 +13,14 @@ the pushed `cli-v*` tag automatically.
 
 ## Status
 
-The CLI is currently **0.2.0-dev**.  It is versioned separately from the
+The CLI is currently **0.3.0-dev**.  It is versioned separately from the
 extension.  The baseline format is **v1**.
 
 ## Commands
 
 ```text
+pg_integrity_checksums init      [options]
+pg_integrity_checksums config    validate|show [options]
 pg_integrity_checksums capture   [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums verify    [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums diff      OLD.json NEW.json [options]
@@ -28,6 +30,34 @@ pg_integrity_checksums doctor    [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums completion bash|zsh|fish|powershell
 pg_integrity_checksums version
 ```
+
+### `init`
+
+Creates a starter `.pgics.yaml` without connecting to PostgreSQL:
+
+```bash
+pg_integrity_checksums init \
+  --profile prod \
+  --dsn env:DATABASE_URL \
+  --baseline baselines/prod.json \
+  --schema public
+```
+
+The command refuses to overwrite an existing file unless `--force` is used.
+Relative `baseline` paths are written into the profile; directories are
+created as needed.
+
+### `config`
+
+```bash
+pg_integrity_checksums config validate
+pg_integrity_checksums config validate --config .pgics.yaml --profile prod
+pg_integrity_checksums config show --profile prod
+```
+
+`validate` checks the YAML, profiles, durations, DSN environment references and
+known format/kind/fail-on values. `show` prints the effective profile with the
+DSN password masked.
 
 ### Configuration profiles
 

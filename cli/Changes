@@ -1,5 +1,10 @@
 Revision history for pg_integrity_checksums CLI
 
+0.3.0   2026-11-08
+
+    - Add init to generate a .pgics.yaml with a default profile.
+    - Add config validate and config show with DSN masking.
+
 0.2.0   2026-11-07
 
     - Add .pgics.yaml profiles with environment-referenced DSNs and

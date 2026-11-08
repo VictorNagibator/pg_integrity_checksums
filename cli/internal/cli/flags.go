@@ -60,6 +60,8 @@ func usage(w io.Writer) {
 	text := "pg_integrity_checksums - baseline and verification tool\n" +
 		"\n" +
 		"Usage:\n" +
+		"  pg_integrity_checksums init    [options]\n" +
+		"  pg_integrity_checksums config  validate|show [options]\n" +
 		"  pg_integrity_checksums capture [options]\n" +
 		"  pg_integrity_checksums verify  [options]\n" +
 		"  pg_integrity_checksums diff    OLD.json NEW.json [options]\n" +

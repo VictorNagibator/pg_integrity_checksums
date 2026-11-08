@@ -11,6 +11,7 @@ import (
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/config"
 )
 
+// runConfig dispatches the config subcommands.
 func runConfig(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "usage: pg_integrity_checksums config validate|show [options]")
@@ -29,6 +30,9 @@ func runConfig(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// runConfigValidate checks one profile or every profile in the file. It does
+// not connect to PostgreSQL; DSN environment references are checked only for
+// presence.
 func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("config validate", stderr)
 	configPath := fs.String("config", "", "config file")
@@ -73,6 +77,7 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// runConfigShow prints the effective profile without revealing passwords.
 func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("config show", stderr)
 	configPath := fs.String("config", "", "config file")
@@ -128,6 +133,8 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+// validateProfileRuntime covers values that config.Load cannot validate
+// without the CLI parsers, such as durations and report formats.
 func validateProfileRuntime(name string, p config.Profile) error {
 	if strings.HasPrefix(p.DSN, "env:") && p.ResolveDSN() == "" {
 		return fmt.Errorf("profile %q: environment variable %s is empty", name, strings.TrimPrefix(p.DSN, "env:"))
@@ -160,6 +167,8 @@ func validateProfileRuntime(name string, p config.Profile) error {
 	return nil
 }
 
+// maskDSN removes passwords from URL and key/value DSNs before printing a
+// profile. env:NAME references are returned as-is and never resolved.
 func maskDSN(value string) string {
 	if value == "" {
 		return "-"
@@ -181,6 +190,7 @@ func maskDSN(value string) string {
 	return re.ReplaceAllString(value, "${1}***")
 }
 
+// valueOrDash renders empty profile fields compactly in config show.
 func valueOrDash(value string) string {
 	if value == "" {
 		return "-"
@@ -188,6 +198,7 @@ func valueOrDash(value string) string {
 	return value
 }
 
+// joinOrDash renders lists compactly in config show.
 func joinOrDash(values []string) string {
 	if len(values) == 0 {
 		return "-"

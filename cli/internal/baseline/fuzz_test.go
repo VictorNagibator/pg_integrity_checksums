@@ -7,8 +7,9 @@ import (
 	"testing"
 )
 
+// FuzzLoad checks that arbitrary baseline bytes never panic the JSON/validation path.
 func FuzzLoad(f *testing.F) {
-	b := New("0.2.0-dev", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{{
+	b := New("0.3.0-dev", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{{
 		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "1",
 	}})
 	seed, err := json.Marshal(b)

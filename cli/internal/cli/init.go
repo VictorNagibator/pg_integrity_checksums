@@ -10,6 +10,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// initProfile is the intentionally small profile written by init. It avoids
+// marshaling every optional config field and keeps the starter file readable.
 type initProfile struct {
 	DSN      string   `yaml:"dsn"`
 	Baseline string   `yaml:"baseline"`
@@ -18,11 +20,14 @@ type initProfile struct {
 	FailOn   string   `yaml:"fail_on"`
 }
 
+// initConfig is the YAML document produced by init.
 type initConfig struct {
 	Default  string                 `yaml:"default"`
 	Profiles map[string]initProfile `yaml:"profiles"`
 }
 
+// runInit writes a starter .pgics.yaml. It never connects to PostgreSQL and
+// refuses to overwrite an existing config unless --force is set.
 func runInit(args []string, stdout, stderr io.Writer) int {
 	fs := newFlagSet("init", stderr)
 	configPath := fs.String("output", ".pgics.yaml", "config file to create, or - for stdout")

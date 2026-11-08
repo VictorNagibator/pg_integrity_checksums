@@ -7,6 +7,7 @@ import (
 	"testing"
 )
 
+// TestInitCreatesConfig verifies the generated profile, overwrite protection and baseline directory.
 func TestInitCreatesConfig(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "nested", ".pgics.yaml")
@@ -43,6 +44,7 @@ func TestInitCreatesConfig(t *testing.T) {
 	}
 }
 
+// TestInitStdout allows init to be used as a pipe-friendly config generator.
 func TestInitStdout(t *testing.T) {
 	code, out, errOut := runCLI("init", "--output", "-", "--profile", "demo", "--dsn", "env:DATABASE_URL", "--schema", "public")
 	if code != 0 || !strings.Contains(out, "default: demo") || !strings.Contains(out, "dsn: env:DATABASE_URL") {
@@ -50,6 +52,7 @@ func TestInitStdout(t *testing.T) {
 	}
 }
 
+// TestConfigValidateAndShow checks runtime validation and password masking.
 func TestConfigValidateAndShow(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pgics.yaml")
@@ -88,6 +91,7 @@ profiles:
 	}
 }
 
+// TestConfigValidateRejectsBadValues covers missing env DSNs and unreadable configs.
 func TestConfigValidateRejectsBadValues(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "pgics.yaml")

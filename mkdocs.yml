@@ -38,6 +38,7 @@ nav:
   - Troubleshooting: troubleshooting.md
 
 markdown_extensions:
+  - attr_list
   - admonition
   - tables
   - toc:

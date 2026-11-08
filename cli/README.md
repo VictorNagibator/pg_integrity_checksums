@@ -8,7 +8,7 @@ baselines, verification, diffs, filters and CI-friendly exit codes.
 
 The CLI is released independently from the extension.  It talks to the
 database through SQL and does not install or modify extension objects.  Release
-notes live in [Changes](Changes) and the release workflow reads the section for
+notes live in [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/cli/Changes) and the release workflow reads the section for
 the pushed `cli-v*` tag automatically.
 
 ## Status

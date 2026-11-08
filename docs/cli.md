@@ -13,7 +13,7 @@ the pushed `cli-v*` tag automatically.
 
 ## Status
 
-The CLI is currently **0.3.0-dev**.  It is versioned separately from the
+The CLI is currently **0.3.1-dev**.  It is versioned separately from the
 extension.  The baseline format is **v1**.
 
 ## Commands
@@ -429,13 +429,12 @@ pg_integrity_checksums capture --db "$DATABASE_URL" \
 ## Release artifacts
 
 Each `cli-v*` release contains the platform binaries, `SHA256SUMS`,
-`SHA256SUMS.sig`, `SHA256SUMS.pem` and `sbom.spdx.json`.  Verify a download:
+`SHA256SUMS.bundle` and `sbom.spdx.json`.  Verify a download:
 
 ```bash
 sha256sum -c SHA256SUMS
 cosign verify-blob \
-  --certificate SHA256SUMS.pem \
-  --signature SHA256SUMS.sig \
+  --bundle SHA256SUMS.bundle \
   --certificate-identity-regexp 'https://github.com/VictorNagibator/pg_integrity_checksums/.github/workflows/cli-release.yml@refs/tags/cli-v.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   SHA256SUMS

@@ -1,5 +1,11 @@
 Revision history for pg_integrity_checksums CLI
 
+0.3.1   2026-11-09
+
+    - Publish the 0.3.0 init and config commands after the failed 0.3.0
+      release tag.
+    - Fix the cosign bundle format used by the release workflow.
+
 0.3.0   2026-11-08
 
     - Add init to generate a .pgics.yaml with a default profile.

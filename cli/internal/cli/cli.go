@@ -15,7 +15,7 @@ import (
 
 // Version is overridden at release time with -ldflags -X. The default is
 // used by local builds and tests.
-var Version = "0.3.0-dev"
+var Version = "0.3.1-dev"
 
 // Run dispatches one CLI invocation and returns the process exit code.
 // stdout is reserved for data (JSON, diffs, reports); progress and errors go to

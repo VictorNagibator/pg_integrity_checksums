@@ -3,8 +3,36 @@ name: CI
 on:
   push:
     branches: [ main, master, develop ]
+    paths:
+      - "pg_integrity_checksums.c"
+      - "pg_integrity_checksums.h"
+      - "Makefile"
+      - "*.control"
+      - "pg_integrity_checksums--*.sql"
+      - "META.json"
+      - "sql/**"
+      - "expected/**"
+      - "t/**"
+      - "run_tests.sh"
+      - "Dockerfile"
+      - "docker/**"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [ main, master ]
+    paths:
+      - "pg_integrity_checksums.c"
+      - "pg_integrity_checksums.h"
+      - "Makefile"
+      - "*.control"
+      - "pg_integrity_checksums--*.sql"
+      - "META.json"
+      - "sql/**"
+      - "expected/**"
+      - "t/**"
+      - "run_tests.sh"
+      - "Dockerfile"
+      - "docker/**"
+      - ".github/workflows/ci.yml"
 
 permissions:
   contents: read

@@ -51,7 +51,7 @@ pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 - [Architecture](docs/architecture.md)
 - [Installation](docs/installation.md)
 - [Functions and algorithms](docs/functions.md)
-- [CLI contract](cli/README.md)
+- [CLI documentation](docs/cli.md)
 - [Operations](docs/operations.md)
 - [Testing and releases](docs/testing.md)
 - [Troubleshooting](docs/troubleshooting.md)

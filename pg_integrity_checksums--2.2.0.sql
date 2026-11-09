@@ -283,3 +283,11 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_checksum_bigint(bytea, boolean) IS
 'Convert a digest to bigint. The second argument selects unsigned interpretation for 4-byte fnv32 digests.';
+
+CREATE OR REPLACE FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_tuple_physical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean, text) IS
+'Generic physical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';

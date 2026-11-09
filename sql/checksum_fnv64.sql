@@ -28,6 +28,8 @@ SELECT pg_checksum_bigint(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'f
 SELECT length(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv64')) = 8 AS cell64_len;
 SELECT pg_checksum_bigint(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv32')) = pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2) AS cell32_legacy_ok;
 SELECT length(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv64')) = 8 AS tuple64_len;
+SELECT length(pg_tuple_physical_checksum('fnv64_a'::regclass, '(0,1)', false, 'fnv64')) = 8 AS tuple_physical64_len;
+SELECT pg_checksum_bigint(pg_tuple_physical_checksum('fnv64_a'::regclass, '(0,1)', false, 'fnv32')) = pg_tuple_physical_checksum('fnv64_a'::regclass, '(0,1)', false) AS tuple_physical32_legacy_ok;
 SELECT pg_checksum_bigint(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv32')) = pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)') AS tuple32_legacy_ok;
 SELECT length(pg_database_logical_checksum(false, true, 'fnv64')) = 8 AS database64_len;
 SELECT pg_checksum_bigint(pg_database_logical_checksum(false, true, 'fnv32'), true) = pg_database_logical_checksum(false, true) AS database32_legacy_ok;

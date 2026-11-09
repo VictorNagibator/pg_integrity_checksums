@@ -41,3 +41,19 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_index_logical_checksum(regclass, text) IS
 'Generic logical index checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_cell_checksum(regclass, tid, integer, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_cell_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_cell_checksum(regclass, tid, integer, text) IS
+'Generic logical cell checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_tuple_logical_checksum(regclass, tid, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_tuple_logical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_tuple_logical_checksum(regclass, tid, text) IS
+'Generic logical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';

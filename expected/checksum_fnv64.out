@@ -77,4 +77,28 @@ SELECT pg_checksum_bigint(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'f
  t
 (1 row)
 
+SELECT length(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv64')) = 8 AS cell64_len;
+ cell64_len 
+------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv32')) = pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2) AS cell32_legacy_ok;
+ cell32_legacy_ok 
+------------------
+ t
+(1 row)
+
+SELECT length(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv64')) = 8 AS tuple64_len;
+ tuple64_len 
+-------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv32')) = pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)') AS tuple32_legacy_ok;
+ tuple32_legacy_ok 
+-------------------
+ t
+(1 row)
+
 DROP TABLE fnv64_a, fnv64_b;

@@ -2,8 +2,8 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 2.2.0   2026-11-09
 
-    - Add generic algorithm overloads for data, text, table and index
-      logical checksums.
+    - Add generic algorithm overloads for data, text, cell, tuple, table
+      and index logical checksums.
     - Add FNV-1a 64-bit digests and the pg_checksum_bigint conversion helper.
     - Add upgrade script from 2.1.0 to 2.2.0.
 

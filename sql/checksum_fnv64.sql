@@ -25,4 +25,8 @@ SELECT length(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64')) = 8 
 SELECT pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = pg_index_logical_checksum('fnv64_b_pkey'::regclass, 'fnv64') AS index64_order_ok;
 SELECT pg_checksum_bigint(pg_table_logical_checksum('fnv64_a'::regclass, 'fnv32')) = pg_table_logical_checksum('fnv64_a'::regclass) AS table32_legacy_ok;
 SELECT pg_checksum_bigint(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv32')) = pg_index_logical_checksum('fnv64_a_pkey'::regclass) AS index32_legacy_ok;
+SELECT length(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv64')) = 8 AS cell64_len;
+SELECT pg_checksum_bigint(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv32')) = pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2) AS cell32_legacy_ok;
+SELECT length(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv64')) = 8 AS tuple64_len;
+SELECT pg_checksum_bigint(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv32')) = pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)') AS tuple32_legacy_ok;
 DROP TABLE fnv64_a, fnv64_b;

@@ -2002,14 +2002,17 @@ pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
  * Returns: 32-bit checksum, or NULL if the tuple doesn't exist or
  *          attnum is out of range
  */
-PG_FUNCTION_INFO_V1(pg_cell_checksum);
-
-Datum
-pg_cell_checksum(PG_FUNCTION_ARGS)
+/*
+ * pg_cell_checksum_common - shared implementation for cell checksums
+ *
+ * Returns false for missing tuples, dropped columns and invalid TIDs. The
+ * algorithm selects the canonical hash width; *out is only valid when the
+ * function returns true.
+ */
+static bool
+pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
+                        int algo, uint64 *out)
 {
-    Oid         reloid;
-    ItemPointer tid;
-    int32       attnum_arg;
     Relation    rel;
     Buffer      buffer;
     Page        page;
@@ -2020,34 +2023,22 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
     HeapTupleData heapTuple;
     TupleDesc   tupdesc;
     Form_pg_attribute attr;
-    uint32      checksum;
     BlockNumber blkno;
     OffsetNumber offnum;
     Size        tuple_len;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
-
-    reloid = PG_GETARG_OID(0);
-    tid = PG_GETARG_ITEMPOINTER(1);
-    attnum_arg = PG_GETARG_INT32(2);
-
     if (attnum_arg <= 0 || !ItemPointerIsValid(tid))
-        PG_RETURN_NULL();
+        return false;
 
-    /* Open relation and get tuple descriptor */
     rel = relation_open(reloid, AccessShareLock);
-
     pg_integrity_checksums_require_select(reloid);
     pg_integrity_checksums_check_relation_kind(rel, false, false);
-
     tupdesc = RelationGetDescr(rel);
 
-    /* Validate attribute number */
     if (attnum_arg > tupdesc->natts)
     {
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     blkno = ItemPointerGetBlockNumber(tid);
@@ -2056,20 +2047,18 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
     if (blkno >= RelationGetNumberOfBlocks(rel))
     {
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
-    /* Read the page containing the tuple */
     buffer = ReadBuffer(rel, blkno);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
-
     page = BufferGetPage(buffer);
 
     if (PageIsNew(page))
     {
         UnlockReleaseBuffer(buffer);
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     pg_integrity_checksums_check_page(rel, blkno, page);
@@ -2078,17 +2067,15 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
     {
         UnlockReleaseBuffer(buffer);
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     lp = PageGetItemId(page, offnum);
-
-    /* Only normal heap tuples carry data; skip dead/redirect/unused items */
     if (!ItemIdIsNormal(lp))
     {
         UnlockReleaseBuffer(buffer);
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     if (!pg_integrity_checksums_item_is_sane(page, lp))
@@ -2099,37 +2086,68 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
 
     tuple = (HeapTupleHeader) PageGetItem(page, lp);
     tuple_len = ItemIdGetLength(lp);
-
     pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple, tuple_len);
 
-    /* Create temporary HeapTuple structure for heap_getattr */
     heapTuple.t_len = tuple_len;
     heapTuple.t_data = tuple;
     heapTuple.t_tableOid = reloid;
     heapTuple.t_self = *tid;
 
-    /* Get attribute value using the tuple descriptor */
     attr = TupleDescAttr(tupdesc, attnum_arg - 1);
-
     if (attr->attisdropped)
     {
         UnlockReleaseBuffer(buffer);
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     value = heap_getattr(&heapTuple, attnum_arg, tupdesc, &isnull);
+    *out = pg_cell_checksum_canonical_algo(value, isnull,
+                                           attr->atttypid,
+                                           attr->atttypmod,
+                                           attnum_arg, algo);
 
-    checksum = pg_cell_checksum_canonical(value, isnull,
-                                          attr->atttypid,
-                                          attr->atttypmod,
-                                          attnum_arg);
-
-    /* Clean up resources */
     UnlockReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
+    return true;
+}
+
+PG_FUNCTION_INFO_V1(pg_cell_checksum);
+
+Datum
+pg_cell_checksum(PG_FUNCTION_ARGS)
+{
+    uint64      checksum;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
+        PG_RETURN_NULL();
+
+    if (!pg_cell_checksum_common(PG_GETARG_OID(0), PG_GETARG_ITEMPOINTER(1),
+                                 PG_GETARG_INT32(2), 0, &checksum))
+        PG_RETURN_NULL();
 
     PG_RETURN_INT32((int32) checksum);
+}
+
+PG_FUNCTION_INFO_V1(pg_cell_checksum_algo);
+
+Datum
+pg_cell_checksum_algo(PG_FUNCTION_ARGS)
+{
+    int         algorithm;
+    uint64      checksum;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) ||
+        PG_ARGISNULL(3))
+        PG_RETURN_NULL();
+
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(3));
+
+    if (!pg_cell_checksum_common(PG_GETARG_OID(0), PG_GETARG_ITEMPOINTER(1),
+                                 PG_GETARG_INT32(2), algorithm, &checksum))
+        PG_RETURN_NULL();
+
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == 0 ? 4 : 8));
 }
 
 /*-------------------------------------------------------------------------
@@ -2413,49 +2431,37 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, int algo)
  * Public interface for computing logical tuple checksums.
  * Returns NULL for a missing tuple or a TOAST relation.
  */
-PG_FUNCTION_INFO_V1(pg_tuple_logical_checksum);
-
-Datum
-pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
+/*
+ * pg_tuple_logical_checksum_common - shared implementations for tuple checksums
+ */
+static bool
+pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, int algo,
+                                 uint64 *out)
 {
-    Oid         reloid;
-    ItemPointer tid;
     Relation    rel;
     volatile Buffer buffer = InvalidBuffer;
     Page        page;
     ItemId      lp;
     HeapTupleData heapTuple;
     HeapTupleHeader tuple;
-    volatile uint32 checksum = 0;
+    volatile uint64 checksum = 0;
     volatile bool lock_held = false;
     volatile bool missing = false;
     BlockNumber blkno;
     OffsetNumber offnum;
     Size        tuple_len;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
-
-    reloid = PG_GETARG_OID(0);
-    tid = PG_GETARG_ITEMPOINTER(1);
-
     if (!ItemPointerIsValid(tid))
-        PG_RETURN_NULL();
+        return false;
 
-    /* Open relation */
     rel = relation_open(reloid, AccessShareLock);
-
     pg_integrity_checksums_require_select(reloid);
     pg_integrity_checksums_check_relation_kind(rel, true, false);
 
-    /*
-     * TOAST tuples are not heap tuples; their logical content is already
-     * covered when the parent table detoasts the values.
-     */
     if (rel->rd_rel->relkind == RELKIND_TOASTVALUE)
     {
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     blkno = ItemPointerGetBlockNumber(tid);
@@ -2464,16 +2470,14 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
     if (blkno >= RelationGetNumberOfBlocks(rel))
     {
         relation_close(rel, AccessShareLock);
-        PG_RETURN_NULL();
+        return false;
     }
 
     PG_TRY();
     {
-        /* Read page */
         buffer = ReadBuffer(rel, blkno);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         lock_held = true;
-
         page = BufferGetPage(buffer);
 
         if (PageIsNew(page))
@@ -2500,18 +2504,16 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
                 {
                     tuple = (HeapTupleHeader) PageGetItem(page, lp);
                     tuple_len = ItemIdGetLength(lp);
+                    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum,
+                                                  tuple, tuple_len);
 
-                    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple,
-                                                  tuple_len);
-
-                    /* Create temporary HeapTuple structure */
                     heapTuple.t_len = tuple_len;
                     heapTuple.t_data = tuple;
                     heapTuple.t_tableOid = reloid;
                     heapTuple.t_self = *tid;
 
-                    /* Compute logical checksum */
-                    checksum = (uint32) pg_tuple_logical_checksum_internal(rel, &heapTuple, 0);
+                    checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple,
+                                                                  algo);
                 }
             }
         }
@@ -2530,9 +2532,49 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
     relation_close(rel, AccessShareLock);
 
     if (missing || checksum == 0)
+        return false;
+
+    *out = checksum;
+    return true;
+}
+
+PG_FUNCTION_INFO_V1(pg_tuple_logical_checksum);
+
+Datum
+pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
+{
+    uint64      checksum;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        PG_RETURN_NULL();
+
+    if (!pg_tuple_logical_checksum_common(PG_GETARG_OID(0),
+                                          PG_GETARG_ITEMPOINTER(1), 0,
+                                          &checksum))
         PG_RETURN_NULL();
 
     PG_RETURN_INT32((int32) checksum);
+}
+
+PG_FUNCTION_INFO_V1(pg_tuple_logical_checksum_algo);
+
+Datum
+pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS)
+{
+    int         algorithm;
+    uint64      checksum;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
+        PG_RETURN_NULL();
+
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
+
+    if (!pg_tuple_logical_checksum_common(PG_GETARG_OID(0),
+                                          PG_GETARG_ITEMPOINTER(1), algorithm,
+                                          &checksum))
+        PG_RETURN_NULL();
+
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == 0 ? 4 : 8));
 }
 
 /*-------------------------------------------------------------------------

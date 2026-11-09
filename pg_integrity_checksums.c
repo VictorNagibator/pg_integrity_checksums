@@ -427,6 +427,7 @@ typedef struct ChecksumParallelState
     ChecksumTaskType task_type;
     Oid         reloid;
     bool        include_header;
+    int         algo;
     uint32      nitems;
     uint32      snapshot_size;
     pg_atomic_uint32 next_item;
@@ -567,13 +568,17 @@ static void compute_database_items(ChecksumRelationItem *items, uint32 start,
 static void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type,
                                               Oid reloid, bool include_header,
                                               uint32 nblocks, int workers,
-                                              ChecksumAccum *acc,
-                                              ChecksumLogicalAccum *logical_acc);
+                                              int algo, ChecksumAccum *acc,
+                                              ChecksumLogicalAccum *logical_acc,
+                                              ChecksumAccum64 *acc64,
+                                              ChecksumLogicalAccum64 *logical_acc64);
 static void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                 ChecksumRelationItem *items,
                                                 uint32 nitems, int workers,
+                                                int algo,
                                                 ChecksumAccum64 *acc,
                                                 ChecksumLogicalAccum *logical_acc,
+                                                ChecksumLogicalAccum64 *logical_acc64,
                                                 bool *had_error);
 
 /* Parallel worker entry point (must be a globally visible symbol). */
@@ -2945,7 +2950,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     {
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
                                           reloid, include_header, nblocks,
-                                          workers, &acc, NULL);
+                                          workers, 0, &acc, NULL, NULL, NULL);
     }
 
     relation_close(rel, AccessShareLock);
@@ -2983,6 +2988,7 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
     uint64      aggregate;
     uint64      relation_hash;
     uint32      nblocks;
+    int         workers;
 
     rel = relation_open(reloid, AccessShareLock);
 
@@ -3037,6 +3043,10 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
                                          (uint64) rel->rd_rel->reltablespace);
 
     nblocks = RelationGetNumberOfBlocks(rel);
+    workers = pg_integrity_checksums_worker_count();
+    if (IsInParallelMode())
+        workers = 0;
+    if (workers < 1)
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
@@ -3045,6 +3055,11 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
                                      &acc, bstrategy);
         FreeAccessStrategy(bstrategy);
     }
+    else
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
+                                                    reloid, include_header,
+                                                    nblocks, workers, 1,
+                                                    NULL, NULL, &acc, NULL);
 
     relation_close(rel, AccessShareLock);
 
@@ -3221,7 +3236,7 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
         else
             pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
                                               reloid, false, nblocks, workers,
-                                              NULL, acc);
+                                              0, NULL, acc, NULL, NULL);
     }
 
     relation_close(rel, AccessShareLock);
@@ -3230,9 +3245,9 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
 /*
  * pg_table_logical_checksum_accum64 - accumulate 64-bit canonical rows
  *
- * The 64-bit path is deliberately serial for now. The result is still
- * order-independent because rows are folded through a commutative logical
- * accumulator; parallelism can be added without changing the checksum.
+ * The result is order-independent because rows are folded through a
+ * commutative logical accumulator, so the parallel and serial paths produce
+ * the same checksum.
  */
 static void
 pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
@@ -3240,6 +3255,7 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
 {
     Relation    rel;
     char        relkind;
+    int         workers;
 
     *is_null = false;
 
@@ -3284,12 +3300,25 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
     }
 
     {
-        Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
-        BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-        scan_table_blocks_logical64(rel, 0, nblocks, snapshot, acc, bstrategy);
-        FreeAccessStrategy(bstrategy);
+        workers = pg_integrity_checksums_worker_count();
+        if (IsInParallelMode())
+            workers = 0;
+        if (workers < 1)
+        {
+            Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
+            BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+            scan_table_blocks_logical64(rel, 0, nblocks, snapshot, acc,
+                                        bstrategy);
+            FreeAccessStrategy(bstrategy);
+        }
+        else
+            pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
+                                                        reloid, false, nblocks,
+                                                        workers, 1, NULL, NULL,
+                                                        NULL, acc);
     }
 
     relation_close(rel, AccessShareLock);
@@ -3481,7 +3510,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
     else
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
                                           indexoid, false, nblocks, workers,
-                                          &acc, NULL);
+                                          0, &acc, NULL, NULL, NULL);
 
     index_checksum = checksum_accum_finalize(&acc);
 
@@ -4011,7 +4040,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
         pg_index_logical_scan_end(&scanstate);
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
                                           indexoid, false, nblocks, workers,
-                                          NULL, acc);
+                                          0, NULL, acc, NULL, NULL);
     }
 }
 
@@ -4044,6 +4073,7 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
     Snapshot    snapshot;
     IndexLogicalScanState scanstate;
     BlockNumber nblocks;
+    int         workers;
 
     *is_null = false;
 
@@ -4091,8 +4121,22 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
     }
 
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
-    pg_index_logical_scan_blocks64(&scanstate, 0, nblocks, acc);
-    pg_index_logical_scan_end(&scanstate);
+    workers = pg_integrity_checksums_worker_count();
+    if (IsInParallelMode())
+        workers = 0;
+    if (workers < 1)
+    {
+        pg_index_logical_scan_blocks64(&scanstate, 0, nblocks, acc);
+        pg_index_logical_scan_end(&scanstate);
+    }
+    else
+    {
+        pg_index_logical_scan_end(&scanstate);
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
+                                                    indexoid, false, nblocks,
+                                                    workers, 1, NULL, NULL,
+                                                    NULL, acc);
+    }
 }
 
 /*
@@ -4789,8 +4833,6 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
                 pg_integrity_checksums_report_skipped_relation(relid);
             else if (logical_acc64 != NULL)
                 logical_accum_add64(logical_acc64, rel_checksum);
-            else if (logical_acc64 != NULL)
-                logical_accum_add64(logical_acc64, rel_checksum);
             else if (logical_acc != NULL)
                 logical_accum_add(logical_acc, (uint32) rel_checksum);
             else
@@ -4822,6 +4864,8 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
 
             if (skip)
                 pg_integrity_checksums_report_skipped_relation(relid);
+            else if (logical_acc64 != NULL)
+                logical_accum_add64(logical_acc64, rel_checksum);
             else if (logical_acc != NULL)
                 logical_accum_add(logical_acc, (uint32) rel_checksum);
             else
@@ -4932,6 +4976,22 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 ChecksumAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
+                if (state->algo == 1)
+                {
+                    ChecksumAccum64 acc64 = {0, 0};
+
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                &start, &end))
+                        scan_table_blocks_physical64(rel, start, end,
+                                                     state->include_header,
+                                                     snapshot, &acc64, bstrategy);
+                    relation_close(rel, AccessShareLock);
+                    FreeAccessStrategy(bstrategy);
+                    myresult->partial = acc64.partial;
+                    myresult->count = acc64.count;
+                    break;
+                }
+
                 while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     scan_table_blocks_physical(rel, start, end,
@@ -4950,6 +5010,21 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 ChecksumLogicalAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
+                if (state->algo == 1)
+                {
+                    ChecksumLogicalAccum64 acc64 = {0, 0};
+
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                &start, &end))
+                        scan_table_blocks_logical64(rel, start, end, snapshot,
+                                                    &acc64, bstrategy);
+                    relation_close(rel, AccessShareLock);
+                    FreeAccessStrategy(bstrategy);
+                    myresult->partial = acc64.sum;
+                    myresult->count = acc64.count;
+                    break;
+                }
+
                 while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     scan_table_blocks_logical(rel, start, end, snapshot, &acc,
@@ -4967,6 +5042,21 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 bool        is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
                 ChecksumAccum acc = {0, 0};
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+                if (state->algo == 1)
+                {
+                    ChecksumAccum64 acc64 = {0, 0};
+
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                &start, &end))
+                        scan_index_blocks_physical64(idxRel, start, end, is_brin,
+                                                     &acc64, bstrategy);
+                    index_close(idxRel, AccessShareLock);
+                    FreeAccessStrategy(bstrategy);
+                    myresult->partial = acc64.partial;
+                    myresult->count = acc64.count;
+                    break;
+                }
 
                 while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
@@ -4990,6 +5080,20 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     elog(ERROR, "could not initialize logical index scan for index %u",
                          state->reloid);
 
+                if (state->algo == 1)
+                {
+                    ChecksumLogicalAccum64 acc64 = {0, 0};
+
+                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                &start, &end))
+                        pg_index_logical_scan_blocks64(&scanstate, start, end,
+                                                       &acc64);
+                    pg_index_logical_scan_end(&scanstate);
+                    myresult->partial = acc64.sum;
+                    myresult->count = acc64.count;
+                    break;
+                }
+
                 while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                             &start, &end))
                     pg_index_logical_scan_blocks(&scanstate, start, end, &acc);
@@ -5006,6 +5110,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 bool        physical = (state->task_type == CHECKSUM_TASK_DATABASE_PHYSICAL);
                 ChecksumAccum64 acc64 = {0, 0};
                 ChecksumLogicalAccum lacc = {0, 0};
+                ChecksumLogicalAccum64 lacc64 = {0, 0};
                 bool        pushed = false;
 
                 /*
@@ -5020,8 +5125,10 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 }
 
                 while (pg_integrity_checksums_consume(state, 1, &start, &end))
-                    compute_database_items(items, start, end, physical, 0, &acc64,
-                                           physical ? NULL : &lacc, NULL,
+                    compute_database_items(items, start, end, physical,
+                                           state->algo, &acc64,
+                                           physical ? NULL : &lacc,
+                                           (!physical && state->algo == 1) ? &lacc64 : NULL,
                                            &myresult->had_error);
 
                 if (pushed)
@@ -5031,6 +5138,11 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 {
                     myresult->partial = acc64.partial;
                     myresult->count = acc64.count;
+                }
+                else if (state->algo == 1)
+                {
+                    myresult->partial = lacc64.sum;
+                    myresult->count = lacc64.count;
                 }
                 else
                 {
@@ -5056,8 +5168,10 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 static void
 pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid reloid,
                                   bool include_header, uint32 nblocks,
-                                  int workers, ChecksumAccum *acc,
-                                  ChecksumLogicalAccum *logical_acc)
+                                  int workers, int algo, ChecksumAccum *acc,
+                                  ChecksumLogicalAccum *logical_acc,
+                                  ChecksumAccum64 *acc64,
+                                  ChecksumLogicalAccum64 *logical_acc64)
 {
     ParallelContext *pcxt;
     ParallelContext *volatile pcxt_cleanup = NULL;
@@ -5131,6 +5245,7 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
         state->task_type = task_type;
         state->reloid = reloid;
         state->include_header = include_header;
+        state->algo = algo;
         state->nitems = nblocks;
         state->snapshot_size = snapshot_size;
         pg_atomic_init_u32(&state->next_item, 0);
@@ -5160,10 +5275,21 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
                     Relation    rel = relation_open(reloid, AccessShareLock);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
-                        scan_table_blocks_physical(rel, start, end, include_header,
-                                                   snapshot, acc, bstrategy);
+                    if (algo == 1)
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_table_blocks_physical64(rel, start, end,
+                                                         include_header, snapshot,
+                                                         acc64, bstrategy);
+                    }
+                    else
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_table_blocks_physical(rel, start, end, include_header,
+                                                       snapshot, acc, bstrategy);
+                    }
 
                     relation_close(rel, AccessShareLock);
                     FreeAccessStrategy(bstrategy);
@@ -5174,10 +5300,20 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
                     Relation    rel = relation_open(reloid, AccessShareLock);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
-                        scan_table_blocks_logical(rel, start, end, snapshot,
-                                                  logical_acc, bstrategy);
+                    if (algo == 1)
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_table_blocks_logical64(rel, start, end, snapshot,
+                                                        logical_acc64, bstrategy);
+                    }
+                    else
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_table_blocks_logical(rel, start, end, snapshot,
+                                                      logical_acc, bstrategy);
+                    }
 
                     relation_close(rel, AccessShareLock);
                     FreeAccessStrategy(bstrategy);
@@ -5189,10 +5325,21 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
                     bool        is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
                     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
-                        scan_index_blocks_physical(idxRel, start, end, is_brin,
-                                                   acc, bstrategy);
+                    if (algo == 1)
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_index_blocks_physical64(idxRel, start, end,
+                                                         is_brin, acc64,
+                                                         bstrategy);
+                    }
+                    else
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            scan_index_blocks_physical(idxRel, start, end, is_brin,
+                                                       acc, bstrategy);
+                    }
 
                     index_close(idxRel, AccessShareLock);
                     FreeAccessStrategy(bstrategy);
@@ -5207,10 +5354,20 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
                         elog(ERROR, "could not initialize logical index scan for index %u",
                              reloid);
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
-                        pg_index_logical_scan_blocks(&scanstate, start, end,
-                                                     logical_acc);
+                    if (algo == 1)
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            pg_index_logical_scan_blocks64(&scanstate, start, end,
+                                                           logical_acc64);
+                    }
+                    else
+                    {
+                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                    &start, &end))
+                            pg_index_logical_scan_blocks(&scanstate, start, end,
+                                                         logical_acc);
+                    }
 
                     pg_index_logical_scan_end(&scanstate);
                     break;
@@ -5227,8 +5384,20 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
         {
             if (pcxt->worker[i].bgwhandle != NULL)
             {
-                if (task_type == CHECKSUM_TASK_TABLE_LOGICAL ||
-                    task_type == CHECKSUM_TASK_INDEX_LOGICAL)
+                if (algo == 1)
+                {
+                    if (task_type == CHECKSUM_TASK_TABLE_LOGICAL ||
+                        task_type == CHECKSUM_TASK_INDEX_LOGICAL)
+                    {
+                        logical_acc64->sum += results[i].partial;
+                        logical_acc64->count += results[i].count;
+                    }
+                    else
+                        checksum_accum64_merge(acc64, results[i].partial,
+                                               results[i].count);
+                }
+                else if (task_type == CHECKSUM_TASK_TABLE_LOGICAL ||
+                         task_type == CHECKSUM_TASK_INDEX_LOGICAL)
                 {
                     logical_acc->sum += results[i].partial;
                     logical_acc->count += results[i].count;
@@ -5258,8 +5427,10 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
 static void
 pg_integrity_checksums_parallel_scan_database(bool physical,
                                     ChecksumRelationItem *items, uint32 nitems,
-                                    int workers, ChecksumAccum64 *acc,
+                                    int workers, int algo,
+                                    ChecksumAccum64 *acc,
                                     ChecksumLogicalAccum *logical_acc,
+                                    ChecksumLogicalAccum64 *logical_acc64,
                                     bool *had_error)
 {
     ParallelContext *pcxt;
@@ -5311,6 +5482,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                                     : CHECKSUM_TASK_DATABASE_LOGICAL;
         state->reloid = InvalidOid;
         state->include_header = false;
+        state->algo = algo;
         state->nitems = nitems;
         state->snapshot_size = snapshot_size;
         pg_atomic_init_u32(&state->next_item, 0);
@@ -5341,8 +5513,8 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
 
         /* The leader processes its own share of the relations. */
         while (pg_integrity_checksums_consume(state, 1, &start, &end))
-            compute_database_items(items, start, end, physical, 0, acc,
-                                   logical_acc, NULL, &local_had_error);
+            compute_database_items(items, start, end, physical, algo, acc,
+                                   logical_acc, logical_acc64, &local_had_error);
 
         if (pcxt->nworkers_launched > 0)
             WaitForParallelWorkersToFinish(pcxt);
@@ -5354,6 +5526,11 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                 if (physical)
                     checksum_accum64_merge(acc, results[i].partial,
                                            results[i].count);
+                else if (algo == 1)
+                {
+                    logical_acc64->sum += results[i].partial;
+                    logical_acc64->count += results[i].count;
+                }
                 else
                 {
                     logical_acc->sum += results[i].partial;
@@ -5506,15 +5683,16 @@ compute_database_checksum_internal(bool physical, bool include_system,
     if (nitems < (uint32) workers)
         workers = (int) nitems;
 
-    if (workers < 1 || algo == 1)
+    if (workers < 1)
         compute_database_items(items, 0, nitems, physical, algo, &acc,
                                physical ? NULL : &lacc,
                                (!physical && algo == 1) ? &lacc64 : NULL,
                                &had_error);
     else
         pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
-                                            workers, &acc,
+                                            workers, algo, &acc,
                                             physical ? NULL : &lacc,
+                                            (!physical && algo == 1) ? &lacc64 : NULL,
                                             &had_error);
 
     pfree(items);
@@ -5714,6 +5892,7 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
     uint64      index_type_hash;
     bool        is_brin;
     uint32      nblocks;
+    int         workers;
 
     *is_null = false;
     idxRel = index_open(indexoid, AccessShareLock);
@@ -5766,6 +5945,10 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
 
     is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
     nblocks = RelationGetNumberOfBlocks(idxRel);
+    workers = pg_integrity_checksums_worker_count();
+    if (IsInParallelMode())
+        workers = 0;
+    if (workers < 1)
     {
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
@@ -5773,6 +5956,11 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
                                      bstrategy);
         FreeAccessStrategy(bstrategy);
     }
+    else
+        pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
+                                                    indexoid, false, nblocks,
+                                                    workers, 1, NULL, NULL,
+                                                    &acc, NULL);
 
     index_checksum = checksum_accum64_finalize(&acc);
 

@@ -31,6 +31,26 @@ SELECT pg_checksum_bigint(pg_database_physical_checksum(false, false, 'fnv32')) 
 SELECT pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = pg_index_logical_checksum('fnv64_b_pkey'::regclass, 'fnv64') AS index64_order_ok;
 SELECT pg_checksum_bigint(pg_table_logical_checksum('fnv64_a'::regclass, 'fnv32')) = pg_table_logical_checksum('fnv64_a'::regclass) AS table32_legacy_ok;
 SELECT pg_checksum_bigint(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv32')) = pg_index_logical_checksum('fnv64_a_pkey'::regclass) AS index32_legacy_ok;
+
+-- Parallel and serial 64-bit paths must agree.
+SET pg_integrity_checksums.workers = 0;
+SELECT pg_table_physical_checksum('fnv64_a'::regclass, false, 'fnv64') AS tp64_serial,
+       pg_table_logical_checksum('fnv64_a'::regclass, 'fnv64') AS tl64_serial,
+       pg_index_physical_checksum('fnv64_a_pkey'::regclass, 'fnv64') AS ip64_serial,
+       pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') AS il64_serial \gset
+SET pg_integrity_checksums.workers = 2;
+SELECT pg_table_physical_checksum('fnv64_a'::regclass, false, 'fnv64') = :'tp64_serial'::bytea AS table_physical_parallel64,
+       pg_table_logical_checksum('fnv64_a'::regclass, 'fnv64') = :'tl64_serial'::bytea AS table_logical_parallel64,
+       pg_index_physical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = :'ip64_serial'::bytea AS index_physical_parallel64,
+       pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = :'il64_serial'::bytea AS index_logical_parallel64;
+SET pg_integrity_checksums.workers = 0;
+SELECT pg_database_physical_checksum(false, false, 'fnv64') AS dp64_serial,
+       pg_database_logical_checksum(false, true, 'fnv64') AS dl64_serial \gset
+SET pg_integrity_checksums.workers = 2;
+SELECT pg_database_physical_checksum(false, false, 'fnv64') = :'dp64_serial'::bytea AS database_physical_parallel64,
+       pg_database_logical_checksum(false, true, 'fnv64') = :'dl64_serial'::bytea AS database_logical_parallel64;
+SET pg_integrity_checksums.workers = 0;
+SET pg_integrity_checksums.workers = 0;
 SELECT length(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv64')) = 8 AS cell64_len;
 SELECT pg_checksum_bigint(pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2, 'fnv32')) = pg_cell_checksum('fnv64_a'::regclass, '(0,1)', 2) AS cell32_legacy_ok;
 SELECT length(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)', 'fnv64')) = 8 AS tuple64_len;

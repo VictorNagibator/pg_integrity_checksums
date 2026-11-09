@@ -6,6 +6,8 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
       index and database logical checksums, plus physical tuple, table,
       index and database checksums.
     - Add FNV-1a 64-bit digests and the pg_checksum_bigint conversion helper.
+    - Add parallel execution for 64-bit checksums; the 64-bit database path
+      also reuses the existing parallel worker pool.
     - Add upgrade script from 2.1.0 to 2.2.0.
 
 2.1.0   2026-10-31

@@ -235,3 +235,19 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_checksum_bigint(bytea) IS
 'Convert a 4- or 8-byte checksum digest to signed bigint. Four-byte values are sign-extended to match the legacy int32 functions.';
+
+CREATE OR REPLACE FUNCTION pg_table_logical_checksum(regclass, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_table_logical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_table_logical_checksum(regclass, text) IS
+'Generic logical table checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_index_logical_checksum(regclass, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_index_logical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_index_logical_checksum(regclass, text) IS
+'Generic logical index checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';

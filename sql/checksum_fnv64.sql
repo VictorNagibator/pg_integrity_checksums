@@ -11,3 +11,18 @@ SELECT pg_checksum_bigint(pg_data_checksum('hello'::bytea, 0, 'fnv32')) = pg_dat
 SELECT length(pg_data_checksum('hello'::bytea, 0, 'fnv32')) = 4 AND length(pg_data_checksum('hello'::bytea, 0, 'fnv64')) = 8 AS lengths_ok;
 
 SELECT encode(pg_text_checksum('hello', 0, 'fnv64'), 'hex') = encode(pg_data_checksum('hello'::bytea, 0, 'fnv64'), 'hex') AS text_ok;
+
+-- Logical table/index digests are selectable and stay compatible with the
+-- legacy 32-bit wrappers.
+CREATE TABLE fnv64_a (id integer PRIMARY KEY, value text);
+INSERT INTO fnv64_a SELECT i, 'v' || i FROM generate_series(1, 20) i;
+CREATE TABLE fnv64_b (id integer PRIMARY KEY, value text);
+INSERT INTO fnv64_b SELECT i, 'v' || i FROM generate_series(20, 1, -1) i;
+
+SELECT length(pg_table_logical_checksum('fnv64_a'::regclass, 'fnv64')) = 8 AS table64_len;
+SELECT pg_table_logical_checksum('fnv64_a'::regclass, 'fnv64') = pg_table_logical_checksum('fnv64_b'::regclass, 'fnv64') AS table64_order_ok;
+SELECT length(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64')) = 8 AS index64_len;
+SELECT pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = pg_index_logical_checksum('fnv64_b_pkey'::regclass, 'fnv64') AS index64_order_ok;
+SELECT pg_checksum_bigint(pg_table_logical_checksum('fnv64_a'::regclass, 'fnv32')) = pg_table_logical_checksum('fnv64_a'::regclass) AS table32_legacy_ok;
+SELECT pg_checksum_bigint(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv32')) = pg_index_logical_checksum('fnv64_a_pkey'::regclass) AS index32_legacy_ok;
+DROP TABLE fnv64_a, fnv64_b;

@@ -13,7 +13,7 @@
  *
  * 2. CELL LEVEL (pg_cell_checksum):
  *    - Logical only (depends only on cell value and attribute number)
- *    - Legacy 32-bit calls encode NULL as CHECKSUM_NULL (0xFFFFFFFF);
+ *    - Default 32-bit calls encode NULL as CHECKSUM_NULL (0xFFFFFFFF);
  *      generic cell calls return a bytea digest and use the 64-bit sentinel
  *      for the fnv64 path
  *    - Handles all PostgreSQL data types
@@ -73,7 +73,7 @@
  *
  * Algorithm Details:
  * - Page checksums wrap PostgreSQL's built-in 32-bit page checksum.
- * - Legacy logical/physical SQL functions use FNV-1a 32-bit, preserving the
+ * - Default logical/physical SQL functions use FNV-1a 32-bit, preserving the
  *   original 2.x values.
  * - Generic overloads accept "fnv32" or "fnv64" and return big-endian raw
  *   digests: 4 bytes for fnv32 and 8 bytes for fnv64.  Table/database physical
@@ -348,7 +348,7 @@ typedef struct ChecksumAccum64
  * ChecksumLogicalAccum - aggregate for canonical logical checksums
  *
  * Uses addition plus a count so duplicate rows/index entries are preserved.
- * The legacy finalizer produces a 32-bit FNV-1a checksum; the 64-bit variant
+ * The default finalizer produces a 32-bit FNV-1a checksum; the 64-bit variant
  * below uses the same commutative aggregation with a 64-bit finalizer.
  */
 typedef struct ChecksumLogicalAccum
@@ -2170,7 +2170,7 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
 }
 
 /*
- * pg_cell_checksum - legacy SQL function for cell-level checksums
+ * pg_cell_checksum - default SQL function for cell-level checksums
  *
  * Returns a 32-bit integer.  The generic pg_cell_checksum(..., text)
  * overload returns a bytea digest.

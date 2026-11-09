@@ -69,41 +69,45 @@ physical checksums between different clusters, replicas or databases.
 
 ## Which API should I use?
 
-There are two SQL API styles.
+The extension provides two forms of the same functions.
 
-### Generic API (`fnv64` or `fnv32`)
+### Default 32-bit API
 
-Generic overloads take an algorithm name and return a raw `bytea` digest:
+The default functions use FNV-1a 32-bit and return an ordinary SQL `integer`
+or `bigint`:
+
+~~~sql
+SELECT pg_table_logical_checksum('orders'::regclass);
+SELECT pg_table_physical_checksum('orders'::regclass, false);
+~~~
+
+This is the simplest interface and the right default for most users.  A
+32-bit checksum is sufficient for detecting accidental data changes and
+corruption; it is also the format used by v1 CLI baselines.
+
+### Optional 64-bit API
+
+The generic overloads take an algorithm name and return raw `bytea`:
 
 ~~~sql
 SELECT pg_table_logical_checksum('orders'::regclass, 'fnv64');
 SELECT pg_table_logical_checksum('orders'::regclass, 'fnv32');
 ~~~
 
-Use `fnv64` for new work when a 64-bit digest is useful.  `fnv32` is the
-generic form of the historical 32-bit algorithm.  The generic API is also the
-only way to select an algorithm explicitly.
+Choose this form when you need:
 
-Digests are big-endian bytes:
+- a wider 64-bit digest (`fnv64`);
+- an explicit algorithm in the call;
+- a cross-system format that is not tied to a SQL integer type;
+- a v2 CLI baseline.
 
-- `fnv32` — 4 bytes;
-- `fnv64` — 8 bytes.
-
+Digests are big-endian bytes: `fnv32` is 4 bytes and `fnv64` is 8 bytes.
 Table and database physical checksums always return 8 bytes because the
 relation/database identity is part of the value.
 
-### Original numeric API
-
-The original functions return `integer` or `bigint` and always use FNV-1a
-32-bit:
-
-~~~sql
-SELECT pg_table_logical_checksum('orders'::regclass);
-~~~
-
-These functions remain supported for existing baselines and integrations.
-They are documented in the [numeric API reference](functions.md#numeric-api-and-page-checksums).
-New code that needs 64-bit digests should use the generic API.
+The 32-bit and 64-bit paths share the same canonical value handling and
+aggregation rules.  A 64-bit digest is wider, but FNV-1a remains a
+non-cryptographic checksum.
 
 ### Converting a digest to `bigint`
 
@@ -113,7 +117,9 @@ SELECT pg_checksum_bigint(pg_table_logical_checksum('orders'::regclass, 'fnv64')
 
 For 4-byte `fnv32` digests, the one-argument form sign-extends.  Use
 `pg_checksum_bigint(digest, true)` when you need the unsigned value (for
-example, to compare with a historical table logical checksum).
+example, to compare with a table logical checksum from the default API).
+
+The detailed signatures are in the [function reference](functions.md).
 
 ## How aggregation works
 

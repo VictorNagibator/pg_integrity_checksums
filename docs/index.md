@@ -22,22 +22,30 @@ corruption within one cluster.
 | Index | yes | yes | Missing index entries vs corrupt pages |
 | Database | yes | yes | Whole-database fingerprint |
 
-Page checksums are PostgreSQL’s built-in 32-bit page checksum.  Other levels
-support 64-bit FNV-1a digests through the generic API.
+Page checksums are PostgreSQL’s built-in 32-bit page checksum.  The other
+levels use FNV-1a 32-bit by default and optionally expose 64-bit digests
+through the generic API.
 
 ## First checksum
 
 ~~~sql
 CREATE EXTENSION pg_integrity_checksums;
 
+SELECT pg_table_logical_checksum('public.orders'::regclass);
+~~~
+
+The default functions return ordinary SQL integers.  A 64-bit digest is
+available when needed:
+
+~~~sql
 SELECT encode(
     pg_table_logical_checksum('public.orders'::regclass, 'fnv64'),
     'hex'
-) AS logical_checksum;
+);
 ~~~
 
-The result is raw `bytea`; use `encode(..., 'hex')` for display or
-`pg_checksum_bigint(...)` for a SQL integer.
+See [Concepts](concepts.md#which-api-should-i-use) for when to choose 32-bit
+or 64-bit.
 
 ## Why teams use it
 

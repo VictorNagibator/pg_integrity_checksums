@@ -49,7 +49,7 @@ Then, from another terminal:
 ```bash
 psql -h localhost -U postgres -d demo \
   -c "SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';" \
-  -c "SELECT encode(pg_table_logical_checksum('pg_class'::regclass, 'fnv64'), 'hex');"
+  -c "SELECT pg_table_logical_checksum('pg_class'::regclass);"
 ```
 
 To build an image for another PostgreSQL major version locally:
@@ -120,21 +120,28 @@ The extension is also listed in
 
 ## Verify installation
 
-After `CREATE EXTENSION`, check the installed version and compute one digest:
+After `CREATE EXTENSION`, check the installed version and compute one
+checksum with the default 32-bit API:
 
 ~~~sql
 SELECT extversion
 FROM pg_extension
 WHERE extname = 'pg_integrity_checksums';
 
+SELECT pg_table_logical_checksum('pg_class'::regclass);
+~~~
+
+Extension 2.2 and newer also provide the optional generic API:
+
+~~~sql
 SELECT encode(
     pg_table_logical_checksum('pg_class'::regclass, 'fnv64'),
     'hex'
 );
 ~~~
 
-If you see `function pg_table_logical_checksum(regclass, unknown) does not exist`,
-the installed extension is older than 2.2 or the upgrade did not run.  See
+If the generic call reports that the function does not exist, the installed
+extension is older than 2.2 or the upgrade did not run.  See
 [Upgrading to 2.2](#upgrading-to-22).
 
 ## Upgrading to 2.2

@@ -35,7 +35,7 @@ These limitations are documented rather than silently ignored.
   `include_system = true`), FSM/VM forks or relation free space.  Foreign
   table partitions are skipped by partitioned table checksums because they
   have no local storage in this database.
-* **Non-cryptographic hashes.** The legacy SQL API uses 32-bit FNV-1a;
+* **Non-cryptographic hashes.** The default SQL API uses 32-bit FNV-1a;
   generic overloads support 32-bit and 64-bit FNV-1a.  Page checksums remain
   PostgreSQL's built-in 32-bit checksum.  None of these are cryptographic
   hashes or provide tamper evidence.

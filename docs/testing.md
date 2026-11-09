@@ -69,6 +69,10 @@ Physical checksums are storage- and architecture-dependent by design.
     literals, ranges, composites and enums, plus repeated scans of random data
 20. Endian-stable logical checksums for arrays, composites and multiranges,
     with fixed baselines checked on a big-endian Linux s390x test
+21. FNV-1a 64-bit vectors, generic `fnv32`/`fnv64` overloads, empty/NULL
+    inputs, TOAST, partitioning, and serial/parallel 64-bit consistency
+22. CLI v2 baselines: `capture --hash fnv64`, verify/update inheritance and
+    rejection of mixed-hash diffs
 
 ## Building a Release
 

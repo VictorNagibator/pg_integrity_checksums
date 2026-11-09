@@ -20,6 +20,16 @@ Logical checksums are canonical across endianness, VACUUM/REINDEX/physical
 movement and database OIDs.  Physical checksums are for on-disk corruption in
 one specific cluster.
 
+The legacy SQL API uses FNV-1a 32-bit.  Generic overloads add FNV-1a 64-bit
+and return raw `bytea` digests:
+
+```sql
+SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
+SELECT pg_checksum_bigint(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'));
+```
+
+Page checksums remain PostgreSQL's built-in 32-bit page checksum.
+
 ## Quick start
 
 ```sql
@@ -44,6 +54,8 @@ go build ./cmd/pg_integrity_checksums
 pg_integrity_checksums capture --db "$DATABASE_URL" --output baseline.json
 pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 ```
+
+Add `--hash fnv64` to `capture` for a v2 baseline with 64-bit digests.
 
 ## Documentation
 

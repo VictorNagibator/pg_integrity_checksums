@@ -228,3 +228,30 @@ func TestLoadRejectsBadJSON(t *testing.T) {
 		t.Fatal("expected parse error")
 	}
 }
+
+func TestNewWithHashV2(t *testing.T) {
+	b := NewWithHash("0.4.0", KindLogical, HashFNV64, "2.2.0", 160009, "app", testScope(), []Object{{
+		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "-1",
+	}})
+	if b.Format != FormatV2 || b.Hash != HashFNV64 {
+		t.Fatalf("bad v2 metadata: format=%q hash=%q", b.Format, b.Hash)
+	}
+	if err := b.Validate(); err != nil {
+		t.Fatalf("v2 validation: %v", err)
+	}
+	data, err := json.Marshal(b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"hash":"fnv64"`) {
+		t.Fatalf("v2 JSON has no hash: %s", data)
+	}
+}
+
+func TestValidateRejectsBadV2Hash(t *testing.T) {
+	b := NewWithHash("0.4.0", KindLogical, HashFNV64, "2.2.0", 160009, "app", testScope(), nil)
+	b.Hash = "sha256"
+	if err := b.Validate(); err == nil {
+		t.Fatal("expected invalid hash error")
+	}
+}

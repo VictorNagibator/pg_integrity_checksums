@@ -1,5 +1,13 @@
 Revision history for pg_integrity_checksums CLI
 
+0.4.0   2026-11-09
+
+    - Add capture --hash fnv64 and the v2 baseline format with an explicit
+      checksum algorithm.
+    - Keep fnv32/v1 as the default and continue reading v1 baselines.
+    - Verify and update inherit the hash algorithm from the baseline.
+    - Reject diff comparisons between baselines that use different hashes.
+
 0.3.1   2026-11-09
 
     - Publish the 0.3.0 init and config commands after the failed 0.3.0

@@ -26,6 +26,9 @@
 * **All Logical Index Access Methods**: Logical index checksums are derived
   from table data and the index definition, so B-tree, Hash, GiST, GIN,
   SP-GiST, BRIN and custom AMs are supported
+* **Selectable Hash Width**: Legacy SQL functions use FNV-1a 32-bit;
+  generic overloads add FNV-1a 64-bit raw `bytea` digests.  Page checksums
+  remain PostgreSQL's built-in 32-bit checksum.
 * **Parallel Computation**: Table, index and database checksums can be
   computed with PostgreSQL parallel workers for faster scans of large
   relations

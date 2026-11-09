@@ -13,8 +13,9 @@ the pushed `cli-v*` tag automatically.
 
 ## Status
 
-The CLI is currently **0.3.1-dev**.  It is versioned separately from the
-extension.  The baseline format is **v1**.
+The CLI is currently **0.4.0-dev**.  It is versioned separately from the
+extension.  It writes **v1** (FNV-1a 32-bit) by default and **v2** with
+`capture --hash fnv64`.
 
 ## Commands
 
@@ -74,6 +75,7 @@ profiles:
     baseline: baselines/prod.json
     output: baselines/prod.json
     workers: 4
+    hash: fnv64
     timeout: 5m
     connect_timeout: 10s
     application_name: pg_integrity_checksums
@@ -114,6 +116,7 @@ Options:
 | `--application-name` | | Value for `pg_stat_activity.application_name` |
 | `--output` | `baseline.json` | Output file; `-` means stdout; `.gz` is compressed |
 | `--kind` | `logical` | `logical` or `physical` |
+| `--hash` | `fnv32` | `fnv32` (v1) or `fnv64` (v2) |
 | `--schema` | all non-system | Schemas to include; globs allowed |
 | `--exclude-schema` | | Schemas to exclude; globs allowed |
 | `--table` | all | `schema.table` or table glob to include |
@@ -127,6 +130,10 @@ Options:
 
 `--kind physical` is opt-in.  A physical baseline is tied to one cluster;
 it records `system_identifier` and cannot be used against another cluster.
+
+`--hash fnv64` writes a **v2** baseline.  The default `--hash fnv32` keeps
+writing the historical **v1** format.  `verify` and `update` inherit the
+hash algorithm from the baseline they read; there is no separate verify flag.
 
 ### `verify`
 
@@ -254,13 +261,18 @@ The composite action at `cli/action.yml` builds the CLI and runs verify:
 | 3 | Invalid baseline: format, JSON, kind or incompatible version |
 | 4 | `update`/destructive operation refused without `--yes` |
 
-## Baseline format v1
+## Baseline formats
 
-The canonical format identifier is:
+### v1 — FNV-1a 32-bit
+
+The historical format identifier is:
 
 ```text
 pg_integrity_checksums.baseline/v1
 ```
+
+v1 has no `hash` field and always uses the legacy numeric FNV-1a 32-bit
+wrappers.  The CLI continues to read and write it by default.
 
 Example:
 
@@ -311,6 +323,28 @@ Example:
 }
 ```
 
+### v2 — explicit checksum algorithm
+
+v2 adds a required `hash` field and stores the algorithm explicitly:
+
+```text
+pg_integrity_checksums.baseline/v2
+```
+
+```json
+{
+  "format": "pg_integrity_checksums.baseline/v2",
+  "hash": "fnv64",
+  "kind": "logical",
+  "extension_version": "2.2.0"
+}
+```
+
+The supported values are `fnv32` and `fnv64`.  The CLI writes `fnv64` v2
+baselines when `capture --hash fnv64` is used.  Older CLI releases reject v2
+instead of silently comparing incompatible digests.  The current CLI reads
+both v1 and v2 baselines.
+
 Rules:
 
 - Checksums are **JSON strings**, because SQL `bigint` values do not fit
@@ -328,14 +362,15 @@ Rules:
 - A comparison adds `schema_changed` when the stored and current
   `schema_hash` differ; `--fail-on changed` counts it as a change.
 - `baseline_id` is `sha256:` plus the SHA-256 of the canonical JSON encoding
-  of `kind`, `extension_version`, `postgres_version`, `database` and the
-  sorted object list.
+  of `kind`, `hash` (when present), `extension_version`, `postgres_version`,
+  `database` and the sorted object list.
 - Physical baselines additionally contain `system_identifier` (string) and
   `database_oid` (number).
 - Unknown fields are rejected only by schema validation tooling; the CLI
   ignores unknown fields when reading, for forward compatibility.
 
-The full JSON Schema is in `docs/baseline-v1.schema.json`.
+The full JSON Schemas are in `docs/baseline-v1.schema.json` and
+`docs/baseline-v2.schema.json`.
 
 ## Semantics
 
@@ -445,7 +480,7 @@ Sigstore signing through the GitHub OIDC token.
 
 ## Versioning
 
-- Baseline format version: `v1`.
+- Baseline formats: `v1` (FNV-1a 32-bit) and `v2` (explicit `hash`).
 - CLI version: independent `0.x.y` / `1.x.y` semver.
 - Extension compatibility is checked at runtime and recorded in the baseline.
 - New optional fields may be added without a format bump; breaking changes

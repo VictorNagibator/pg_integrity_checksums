@@ -118,6 +118,19 @@ pgxn install pg_integrity_checksums
 The extension is also listed in
 [PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums).
 
+### Upgrading to 2.2
+
+2.2 adds generic algorithm overloads for FNV-1a 32-bit and 64-bit digests.
+Existing SQL functions and their 32-bit values are unchanged; page checksums
+remain 32-bit.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.2.0';
+```
+
+Older CLI releases cannot read v2 baselines created with `--hash fnv64`; the
+0.4 CLI reads both v1 (fnv32) and v2 (fnv64).
+
 ### Migrating from pg_checksums 1.x
 
 The extension was renamed in 2.0.0 to avoid confusion with PostgreSQL's core

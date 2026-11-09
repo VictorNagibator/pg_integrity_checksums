@@ -251,3 +251,51 @@ func TestIntegrationSchemaGzipVersionAndPhysical(t *testing.T) {
 		t.Fatalf("physical changed-since should be 2, got %d", code)
 	}
 }
+
+// TestIntegrationFNV64Baseline covers the v2 baseline format and the
+// generic fnv64 extension API. It requires an extension build that includes
+// the version 2.2 generic overloads.
+func TestIntegrationFNV64Baseline(t *testing.T) {
+	if os.Getenv("PGICS_TEST_DSN") == "" {
+		t.Skip("PGICS_TEST_DSN is not set")
+	}
+	db, schema := setupCLITestSchema(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	v2Path := filepath.Join(dir, "baseline-v2.json")
+	capturePath(t, schema, v2Path, "--hash", "fnv64")
+	v2 := loadBaselineForTest(t, v2Path)
+	if v2.Format != baseline.FormatV2 || v2.Hash != baseline.HashFNV64 {
+		t.Fatalf("bad v2 metadata: format=%q hash=%q", v2.Format, v2.Hash)
+	}
+	if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", v2Path, "--quiet"); code != 0 {
+		t.Fatalf("v2 verify: code=%d err=%s", code, errOut)
+	}
+
+	v1Path := filepath.Join(dir, "baseline-v1.json")
+	capturePath(t, schema, v1Path)
+	if code, _, errOut := runCLI("diff", v1Path, v2Path); code != 3 {
+		t.Fatalf("v1/v2 diff: code=%d err=%s", code, errOut)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE "+schema+".accounts SET amount = amount + 1 WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", v2Path, "--quiet"); code != 1 {
+		t.Fatalf("v2 changed verify: code=%d err=%s", code, errOut)
+	}
+	if code, _, errOut := runCLI("update", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", v2Path, "--yes", "--quiet"); code != 0 {
+		t.Fatalf("v2 update: code=%d err=%s", code, errOut)
+	}
+	v2After := loadBaselineForTest(t, v2Path)
+	if v2After.Format != baseline.FormatV2 || v2After.Hash != baseline.HashFNV64 {
+		t.Fatalf("update lost v2 metadata: format=%q hash=%q", v2After.Format, v2After.Hash)
+	}
+
+	physicalPath := filepath.Join(dir, "physical-v2.json")
+	capturePath(t, schema, physicalPath, "--hash", "fnv64", "--kind", "physical")
+	if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--quiet"); code != 0 {
+		t.Fatalf("physical v2 verify: code=%d err=%s", code, errOut)
+	}
+}

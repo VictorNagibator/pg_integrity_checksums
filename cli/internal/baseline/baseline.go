@@ -20,8 +20,14 @@ import (
 )
 
 const (
-	// FormatV1 is the only baseline format this CLI knows how to write.
+	// FormatV1 is the numeric FNV-1a 32-bit baseline format.
 	FormatV1 = "pg_integrity_checksums.baseline/v1"
+	// FormatV2 adds an explicit checksum algorithm field.
+	FormatV2 = "pg_integrity_checksums.baseline/v2"
+
+	// HashFNV32 and HashFNV64 are the supported baseline algorithms.
+	HashFNV32 = "fnv32"
+	HashFNV64 = "fnv64"
 
 	// KindLogical is stable across physical reorganization and is the default.
 	KindLogical = "logical"
@@ -100,6 +106,7 @@ type Baseline struct {
 
 	ToolVersion      string `json:"tool_version"`
 	Kind             string `json:"kind"`
+	Hash             string `json:"hash,omitempty"`
 	ExtensionVersion string `json:"extension_version"`
 	PostgresVersion  int    `json:"postgres_version"`
 	Database         string `json:"database"`
@@ -183,12 +190,23 @@ func SortObjects(objects []Object) {
 // New builds a complete baseline in memory. The caller still has to write it
 // with Save; New never touches the filesystem.
 func New(toolVersion, kind, extensionVersion string, postgresVersion int, database string, scope Scope, objects []Object) *Baseline {
+	return NewWithHash(toolVersion, kind, "", extensionVersion, postgresVersion, database, scope, objects)
+}
+
+// NewWithHash builds a v2 baseline when hash is non-empty. An empty hash keeps
+// the v1 behaviour for callers that still emit numeric FNV-1a 32-bit baselines.
+func NewWithHash(toolVersion, kind, hash, extensionVersion string, postgresVersion int, database string, scope Scope, objects []Object) *Baseline {
 	SortObjects(objects)
+	format := FormatV1
+	if hash != "" {
+		format = FormatV2
+	}
 	b := &Baseline{
-		Format:           FormatV1,
+		Format:           format,
 		CreatedAt:        time.Now().UTC().Format(time.RFC3339),
 		ToolVersion:      toolVersion,
 		Kind:             kind,
+		Hash:             hash,
 		ExtensionVersion: extensionVersion,
 		PostgresVersion:  postgresVersion,
 		Database:         database,
@@ -205,12 +223,14 @@ func New(toolVersion, kind, extensionVersion string, postgresVersion int, databa
 func ComputeID(b *Baseline) string {
 	payload := struct {
 		Kind             string   `json:"kind"`
+		Hash             string   `json:"hash,omitempty"`
 		ExtensionVersion string   `json:"extension_version"`
 		PostgresVersion  int      `json:"postgres_version"`
 		Database         string   `json:"database"`
 		Objects          []Object `json:"objects"`
 	}{
 		Kind:             b.Kind,
+		Hash:             b.Hash,
 		ExtensionVersion: b.ExtensionVersion,
 		PostgresVersion:  b.PostgresVersion,
 		Database:         b.Database,
@@ -235,8 +255,14 @@ func (b *Baseline) Finalize() {
 // connect to PostgreSQL. It checks structure and required physical metadata; it
 // intentionally does not reject unknown JSON fields so newer files stay readable.
 func (b *Baseline) Validate() error {
-	if b.Format != FormatV1 {
-		return fmt.Errorf("unsupported baseline format %q (want %q)", b.Format, FormatV1)
+	if b.Format != FormatV1 && b.Format != FormatV2 {
+		return fmt.Errorf("unsupported baseline format %q", b.Format)
+	}
+	if b.Format == FormatV1 && b.Hash != "" {
+		return errors.New("v1 baseline must not contain a hash algorithm")
+	}
+	if b.Format == FormatV2 && b.Hash != HashFNV32 && b.Hash != HashFNV64 {
+		return fmt.Errorf("v2 baseline has invalid hash %q", b.Hash)
 	}
 	if b.Kind != KindLogical && b.Kind != KindPhysical {
 		return fmt.Errorf("invalid baseline kind %q", b.Kind)

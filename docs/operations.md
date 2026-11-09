@@ -31,9 +31,10 @@ These limitations are documented rather than silently ignored.
   `include_system = true`), FSM/VM forks or relation free space.  Foreign
   table partitions are skipped by partitioned table checksums because they
   have no local storage in this database.
-* **32-bit hashes.** All logical checksums are 32-bit.  This is adequate for
-  accidental corruption detection but not for cryptographic tamper evidence;
-  FNV-1a is not a cryptographic hash.
+* **Non-cryptographic hashes.** The legacy SQL API uses 32-bit FNV-1a;
+  generic overloads support 32-bit and 64-bit FNV-1a.  Page checksums remain
+  PostgreSQL's built-in 32-bit checksum.  None of these are cryptographic
+  hashes or provide tamper evidence.
 * **RLS and column privileges.** Relations protected by row-level security are
   rejected because a direct heap scan cannot apply policies.  Table-level
   `SELECT` is required; column-only privileges are not sufficient.

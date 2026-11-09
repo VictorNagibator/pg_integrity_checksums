@@ -6,9 +6,12 @@
  * This extension provides a comprehensive checksum framework for PostgreSQL
  * at various granularity levels: page, cell, tuple, table, index, and
  * database.  Logical checksums are canonical, primary-key-free and exclude
- * relation OIDs, heap TIDs and type OIDs.  The implementation uses the FNV-1a
- * 32-bit hash algorithm for consistency with PostgreSQL's internal checksum
- * implementation.
+ * relation OIDs, heap TIDs and type OIDs.
+ *
+ * The legacy SQL functions use FNV-1a 32-bit hashes, matching the original
+ * 2.x baselines.  Generic algorithm overloads expose FNV-1a 32-bit and
+ * 64-bit digests.  Page-level checksums remain PostgreSQL's built-in 32-bit
+ * page checksum and are not affected by the generic hash API.
  *
  * CHECKSUM TYPES:
  * 1. Physical Checksums: Depend on physical storage layout
@@ -55,8 +58,15 @@
 #define FNV_PRIME_32 16777619U
 #define FNV_BASIS_32 2166136261U
 
+/* FNV-1a 64-bit hash algorithm constants */
+#define FNV_PRIME_64 UINT64CONST(1099511628211)
+#define FNV_BASIS_64 UINT64CONST(14695981039346656037)
+
 /* Special checksum value for NULL cells (0xFFFFFFFF = -1 in signed int32) */
 #define CHECKSUM_NULL 0xFFFFFFFF
+
+/* 64-bit counterpart used by the generic FNV-1a 64-bit path. */
+#define CHECKSUM_NULL_64 UINT64CONST(18446744073709551615)
 
 /* Function declarations - Public SQL-callable functions */
 extern Datum pg_page_checksum(PG_FUNCTION_ARGS);
@@ -71,5 +81,20 @@ extern Datum pg_database_physical_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_database_logical_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_data_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_text_checksum(PG_FUNCTION_ARGS);
+
+/* Generic algorithm overloads.  Each accepts an algorithm name as its last
+ * text argument: "fnv32" or "fnv64". */
+extern Datum pg_data_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_text_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_cell_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_table_physical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_table_logical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_index_physical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_index_logical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_database_physical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_database_logical_checksum_algo(PG_FUNCTION_ARGS);
+extern Datum pg_checksum_bigint(PG_FUNCTION_ARGS);
 
 #endif /* PG_INTEGRITY_CHECKSUMS_H */

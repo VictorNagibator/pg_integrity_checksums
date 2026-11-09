@@ -20,8 +20,7 @@ Logical checksums are canonical across endianness, VACUUM/REINDEX/physical
 movement and database OIDs.  Physical checksums are for on-disk corruption in
 one specific cluster.
 
-The legacy SQL API uses FNV-1a 32-bit.  Generic overloads add FNV-1a 64-bit
-and return raw `bytea` digests:
+The current API uses FNV-1a 64-bit and returns raw `bytea` digests:
 
 ```sql
 SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
@@ -34,7 +33,7 @@ Page checksums remain PostgreSQL's built-in 32-bit page checksum.
 
 ```sql
 CREATE EXTENSION pg_integrity_checksums;
-SELECT pg_table_logical_checksum('public.orders'::regclass);
+SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
 ```
 
 Install from packages, Docker, PGXN or build with PGXS:
@@ -51,11 +50,12 @@ The CLI lives in [cli/](cli/README.md):
 ```bash
 cd cli
 go build ./cmd/pg_integrity_checksums
-pg_integrity_checksums capture --db "$DATABASE_URL" --output baseline.json
+pg_integrity_checksums capture --db "$DATABASE_URL" --hash fnv64 --output baseline.json
 pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 ```
 
-Add `--hash fnv64` to `capture` for a v2 baseline with 64-bit digests.
+`--hash fnv64` creates a v2 baseline.  Without it, `capture` keeps writing
+the compatible v1 FNV-1a 32-bit format.
 
 ## Documentation
 
@@ -70,6 +70,12 @@ Add `--hash fnv64` to `capture` for a v2 baseline with 64-bit digests.
 - [CLI changelog](cli/Changes)
 - [Extension changelog](Changes)
 - [Migration from 1.x](MIGRATION.md)
+
+## Compatibility
+
+The original numeric 32-bit SQL functions and v1 baselines remain supported
+for existing users.  New code should use the algorithm argument and the
+`bytea` API described in [Functions and algorithms](docs/functions.md).
 
 ## Support
 

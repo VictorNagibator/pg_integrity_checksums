@@ -6,8 +6,8 @@ Security fixes are provided for the latest release of `pg_integrity_checksums`.
 
 | pg_integrity_checksums | Supported |
 | ---------------------- | --------- |
-| 2.0.x                  | Yes       |
-| < 2.0                  | No — upgrade |
+| 2.2.x                  | Yes       |
+| <= 2.1                 | No — upgrade |
 
 The supported PostgreSQL major versions are listed in the README and in the CI
 matrix. Please reproduce security reports on a currently supported PostgreSQL

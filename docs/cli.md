@@ -13,19 +13,19 @@ the pushed `cli-v*` tag automatically.
 
 ## Quick start
 
-The CLI requires the extension in the target database.  Version 0.4 works
-best with extension 2.2, which provides the `fnv64` API.
+The CLI requires the extension in the target database.  The default 32-bit
+baseline works with any supported extension version; the optional `fnv64`
+format requires extension 2.2 or newer.
 
 ~~~bash
 # From the repository (Go 1.25+)
 cd cli
 go build ./cmd/pg_integrity_checksums
 
-# Capture a 64-bit logical baseline
+# Capture a logical baseline (32-bit v1 by default)
 ./pg_integrity_checksums capture \
   --db "$DATABASE_URL" \
   --schema public \
-  --hash fnv64 \
   --output baseline.json
 
 # Verify the database against it
@@ -34,9 +34,10 @@ go build ./cmd/pg_integrity_checksums
   --baseline baseline.json
 ~~~
 
-A clean verify prints `no changes` and exits `0`.  See
-[Getting started](getting-started.md) for the extension side and the
-[command reference](#commands) below for every flag.
+Add `--hash fnv64` to `capture` to create a 64-bit v2 baseline.  A clean verify
+prints `no changes` and exits `0`.  See [Getting started](getting-started.md)
+for the extension side and the [command reference](#commands) below for every
+flag.
 
 ## Status
 
@@ -292,14 +293,14 @@ The composite action at `cli/action.yml` builds the CLI and runs verify:
 
 ### v1 — FNV-1a 32-bit
 
-The historical format identifier is:
+The v1 format identifier is:
 
 ```text
 pg_integrity_checksums.baseline/v1
 ```
 
-v1 has no `hash` field and always uses the legacy numeric FNV-1a 32-bit
-wrappers.  The CLI continues to read and write it by default.
+v1 has no `hash` field and uses the default numeric FNV-1a 32-bit
+functions.  The CLI continues to read and write it by default.
 
 Example:
 

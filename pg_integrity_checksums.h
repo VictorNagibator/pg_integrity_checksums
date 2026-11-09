@@ -8,7 +8,7 @@
  * database.  Logical checksums are canonical, primary-key-free and exclude
  * relation OIDs, heap TIDs and type OIDs.
  *
- * The legacy SQL functions use FNV-1a 32-bit hashes, matching the original
+ * The default SQL functions use FNV-1a 32-bit hashes, matching the original
  * 2.x baselines.  Generic algorithm overloads expose FNV-1a 32-bit and
  * 64-bit digests.  Page-level checksums remain PostgreSQL's built-in 32-bit
  * page checksum and are not affected by the generic hash API.

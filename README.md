@@ -20,12 +20,16 @@ Logical checksums are canonical across endianness, VACUUM/REINDEX/physical
 movement and database OIDs.  Physical checksums are for on-disk corruption in
 one specific cluster.
 
-The current API uses FNV-1a 64-bit and returns raw `bytea` digests:
+The default SQL API uses FNV-1a 32-bit and returns ordinary SQL integers:
 
 ```sql
-SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
-SELECT pg_checksum_bigint(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'));
+SELECT pg_table_logical_checksum('public.orders'::regclass);
+SELECT pg_table_physical_checksum('public.orders'::regclass, false);
 ```
+
+A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
+wider checksum or a raw `bytea` value is required.  It is described in the
+[function reference](docs/functions.md).
 
 Page checksums remain PostgreSQL's built-in 32-bit page checksum.
 
@@ -33,7 +37,7 @@ Page checksums remain PostgreSQL's built-in 32-bit page checksum.
 
 ```sql
 CREATE EXTENSION pg_integrity_checksums;
-SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
+SELECT pg_table_logical_checksum('public.orders'::regclass);
 ```
 
 Install from packages, Docker, PGXN or build with PGXS:
@@ -50,12 +54,12 @@ The CLI lives in [cli/](cli/README.md):
 ```bash
 cd cli
 go build ./cmd/pg_integrity_checksums
-pg_integrity_checksums capture --db "$DATABASE_URL" --hash fnv64 --output baseline.json
+pg_integrity_checksums capture --db "$DATABASE_URL" --output baseline.json
 pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 ```
 
-`--hash fnv64` creates a v2 baseline.  Without it, `capture` keeps writing
-the compatible v1 FNV-1a 32-bit format.
+The CLI uses the 32-bit v1 baseline format by default.  Add
+`--hash fnv64` to `capture` when you explicitly need a 64-bit v2 baseline.
 
 ## Documentation
 
@@ -75,9 +79,10 @@ the compatible v1 FNV-1a 32-bit format.
 
 ## Compatibility
 
-The original numeric 32-bit SQL functions and v1 baselines remain supported
-for existing users.  New code should use the algorithm argument and the
-`bytea` API described in [Functions and algorithms](docs/functions.md).
+The 32-bit numeric SQL functions are the default and remain fully supported,
+as are v1 baselines.  The optional generic API adds explicit `fnv32`/`fnv64`
+digests and v2 baselines; see [Functions and algorithms](docs/functions.md)
+and [Concepts](docs/concepts.md) for selection guidance.
 
 ## Support
 

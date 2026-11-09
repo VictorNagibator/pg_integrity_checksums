@@ -267,3 +267,19 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_tuple_logical_checksum(regclass, tid, text) IS
 'Generic logical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_database_logical_checksum(boolean, boolean, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_database_logical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_database_logical_checksum(boolean, boolean, text) IS
+'Generic logical database checksum. Requires superuser. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_checksum_bigint(bytea, boolean)
+RETURNS bigint
+AS 'MODULE_PATHNAME', 'pg_checksum_bigint'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_checksum_bigint(bytea, boolean) IS
+'Convert a digest to bigint. The second argument selects unsigned interpretation for 4-byte fnv32 digests.';

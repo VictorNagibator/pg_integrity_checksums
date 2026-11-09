@@ -101,4 +101,16 @@ SELECT pg_checksum_bigint(pg_tuple_logical_checksum('fnv64_a'::regclass, '(0,1)'
  t
 (1 row)
 
+SELECT length(pg_database_logical_checksum(false, true, 'fnv64')) = 8 AS database64_len;
+ database64_len 
+----------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_database_logical_checksum(false, true, 'fnv32'), true) = pg_database_logical_checksum(false, true) AS database32_legacy_ok;
+ database32_legacy_ok 
+----------------------
+ t
+(1 row)
+
 DROP TABLE fnv64_a, fnv64_b;

@@ -599,6 +599,186 @@ pg_checksum_data_custom(const char *data, uint32 len, uint32 init_value)
     return fnv1a_32_hash(data, len, init_value);
 }
 
+/*
+ * fnv1a_64_buf - continue an FNV-1a 64-bit hash over a byte range
+ */
+static inline uint64
+fnv1a_64_buf(const unsigned char *bytes, size_t len, uint64 hash)
+{
+    for (size_t i = 0; i < len; i++)
+    {
+        hash ^= bytes[i];
+        hash *= FNV_PRIME_64;
+    }
+
+    return hash;
+}
+
+/*
+ * fnv1a_64_hash - FNV-1a 64-bit hash implementation
+ *
+ * A zero seed selects the standard FNV-1a offset basis, matching the
+ * convention used by the 32-bit helper.
+ */
+static inline uint64
+fnv1a_64_hash(const void *data, size_t len, uint64 seed)
+{
+    return fnv1a_64_buf((const unsigned char *) data, len,
+                        seed == 0 ? FNV_BASIS_64 : seed);
+}
+
+/*
+ * checksum_algorithm - parse the SQL algorithm name
+ *
+ * The generic SQL functions accept the algorithm as text so future built-in
+ * algorithms can be added without creating another family of function names.
+ */
+static int
+checksum_algorithm(text *value)
+{
+    char       *name = text_to_cstring(value);
+    int         result;
+
+    if (strcmp(name, "fnv32") == 0)
+        result = 0;
+    else if (strcmp(name, "fnv64") == 0)
+        result = 1;
+    else
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("unknown checksum algorithm \"%s\"", name)));
+
+    pfree(name);
+    return result;
+}
+
+/*
+ * checksum_bytea - return a digest as big-endian bytes
+ *
+ * Big-endian keeps the SQL representation independent of the server's
+ * native byte order and makes the value easy to render as hex.
+ */
+static bytea *
+checksum_bytea(uint64 value, int len)
+{
+    bytea      *result = palloc(VARHDRSZ + len);
+    unsigned char *bytes;
+    int         i;
+
+    SET_VARSIZE(result, VARHDRSZ + len);
+    bytes = (unsigned char *) VARDATA(result);
+
+    for (i = 0; i < len; i++)
+        bytes[len - 1 - i] = (unsigned char) ((value >> (i * 8)) & 0xFF);
+
+    return result;
+}
+
+/*
+ * pg_data_checksum_algo - generic binary data checksum
+ */
+PG_FUNCTION_INFO_V1(pg_data_checksum_algo);
+
+Datum
+pg_data_checksum_algo(PG_FUNCTION_ARGS)
+{
+    bytea      *data;
+    int64       seed;
+    int         algorithm;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
+        PG_RETURN_NULL();
+
+    data = PG_GETARG_BYTEA_PP(0);
+    seed = PG_GETARG_INT64(1);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
+
+    if (algorithm == 0)
+    {
+        uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(data),
+                                                       VARSIZE_ANY_EXHDR(data),
+                                                       (uint32) seed);
+
+        PG_RETURN_BYTEA_P(checksum_bytea(checksum, 4));
+    }
+
+    PG_RETURN_BYTEA_P(checksum_bytea(fnv1a_64_hash(VARDATA_ANY(data),
+                                                    VARSIZE_ANY_EXHDR(data),
+                                                    (uint64) seed), 8));
+}
+
+/*
+ * pg_text_checksum_algo - generic text checksum
+ */
+PG_FUNCTION_INFO_V1(pg_text_checksum_algo);
+
+Datum
+pg_text_checksum_algo(PG_FUNCTION_ARGS)
+{
+    text       *input_text;
+    int64       seed;
+    int         algorithm;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
+        PG_RETURN_NULL();
+
+    input_text = PG_GETARG_TEXT_PP(0);
+    seed = PG_GETARG_INT64(1);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
+
+    if (algorithm == 0)
+    {
+        uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(input_text),
+                                                       VARSIZE_ANY_EXHDR(input_text),
+                                                       (uint32) seed);
+
+        PG_RETURN_BYTEA_P(checksum_bytea(checksum, 4));
+    }
+
+    PG_RETURN_BYTEA_P(checksum_bytea(fnv1a_64_hash(VARDATA_ANY(input_text),
+                                                    VARSIZE_ANY_EXHDR(input_text),
+                                                    (uint64) seed), 8));
+}
+
+/*
+ * pg_checksum_bigint - convert a 4- or 8-byte digest to a signed bigint
+ *
+ * Four-byte values are sign-extended so the generic fnv32 result matches the
+ * historical int32 SQL functions. Eight-byte values use the two's-complement
+ * representation of uint64.
+ */
+PG_FUNCTION_INFO_V1(pg_checksum_bigint);
+
+Datum
+pg_checksum_bigint(PG_FUNCTION_ARGS)
+{
+    bytea      *value;
+    unsigned char *bytes;
+    int         len;
+    uint64      result = 0;
+    int         i;
+
+    if (PG_ARGISNULL(0))
+        PG_RETURN_NULL();
+
+    value = PG_GETARG_BYTEA_PP(0);
+    len = VARSIZE_ANY_EXHDR(value);
+    bytes = (unsigned char *) VARDATA_ANY(value);
+
+    if (len != 4 && len != 8)
+        ereport(ERROR,
+                (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+                 errmsg("checksum digest must be 4 or 8 bytes, got %d", len)));
+
+    for (i = 0; i < len; i++)
+        result = (result << 8) | bytes[i];
+
+    if (len == 4)
+        PG_RETURN_INT64((int64) (int32) (uint32) result);
+
+    PG_RETURN_INT64((int64) result);
+}
+
 /*-------------------------------------------------------------------------
  * Checksum Combination Functions
  *-------------------------------------------------------------------------

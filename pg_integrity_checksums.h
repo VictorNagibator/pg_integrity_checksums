@@ -55,6 +55,10 @@
 #define FNV_PRIME_32 16777619U
 #define FNV_BASIS_32 2166136261U
 
+/* FNV-1a 64-bit hash algorithm constants */
+#define FNV_PRIME_64 UINT64CONST(1099511628211)
+#define FNV_BASIS_64 UINT64CONST(14695981039346656037)
+
 /* Special checksum value for NULL cells (0xFFFFFFFF = -1 in signed int32) */
 #define CHECKSUM_NULL 0xFFFFFFFF
 

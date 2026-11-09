@@ -476,6 +476,8 @@ static void scan_relation_raw_pages(Relation rel, BlockNumber start,
 /* Table checksum implementations (shared by the SQL wrappers and partitions) */
 static uint64 pg_table_physical_checksum_calc(Oid reloid, bool include_header,
                                               bool check_privileges);
+static uint64 pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
+                                                bool check_privileges);
 static int64 pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
                                             bool *is_null);
 static uint64 pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
@@ -485,6 +487,9 @@ static uint64 pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges
 static uint32 pg_index_physical_checksum_calc(Oid indexoid,
                                               bool check_privileges,
                                               bool *is_null);
+static uint64 pg_index_physical_checksum_calc64(Oid indexoid,
+                                                bool check_privileges,
+                                                bool *is_null);
 static uint32 pg_index_logical_checksum_calc(Oid indexoid,
                                              bool check_privileges,
                                              bool *is_null);
@@ -522,6 +527,11 @@ static void scan_table_blocks_physical(Relation rel, BlockNumber start,
                                        BlockNumber end, bool include_header,
                                        Snapshot snapshot, ChecksumAccum *acc,
                                        BufferAccessStrategy bstrategy);
+static void scan_table_blocks_physical64(Relation rel, BlockNumber start,
+                                         BlockNumber end, bool include_header,
+                                         Snapshot snapshot,
+                                         ChecksumAccum64 *acc,
+                                         BufferAccessStrategy bstrategy);
 static void scan_table_blocks_logical(Relation rel, BlockNumber start,
                                       BlockNumber end, Snapshot snapshot,
                                       ChecksumLogicalAccum *acc,
@@ -540,6 +550,10 @@ static void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
                                        BlockNumber end, bool is_brin,
                                        ChecksumAccum *acc,
                                        BufferAccessStrategy bstrategy);
+static void scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
+                                         BlockNumber end, bool is_brin,
+                                         ChecksumAccum64 *acc,
+                                         BufferAccessStrategy bstrategy);
 static void compute_database_item(Oid relid, char relkind, bool physical,
                                   int algo, uint64 *rel_checksum, bool *skip);
 static void pg_integrity_checksums_report_skipped_relation(Oid relid);
@@ -1300,6 +1314,37 @@ scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
         page_hash = fnv1a_32_hash((const unsigned char *) page, BLCKSZ, 0);
         page_hash = combine_checksums(page_hash, blkno);
         checksum_accum_add(acc, page_hash);
+
+        UnlockReleaseBuffer(buffer);
+
+        if ((blkno & 63) == 0)
+            CHECK_FOR_INTERRUPTS();
+    }
+
+    FreeAccessStrategy(bstrategy);
+}
+
+static void
+scan_relation_raw_pages64(Relation rel, BlockNumber start, BlockNumber end,
+                        ChecksumAccum64 *acc)
+{
+    BlockNumber blkno;
+    BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+    for (blkno = start; blkno < end; blkno++)
+    {
+        Buffer      buffer;
+        Page        page;
+        uint64      page_hash;
+
+        buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+                                    bstrategy);
+        LockBuffer(buffer, BUFFER_LOCK_SHARE);
+        page = BufferGetPage(buffer);
+
+        page_hash = fnv1a_64_hash((const unsigned char *) page, BLCKSZ, 0);
+        page_hash = combine_checksums_64(page_hash, blkno);
+        checksum_accum64_add(acc, page_hash);
 
         UnlockReleaseBuffer(buffer);
 
@@ -2749,6 +2794,38 @@ pg_table_physical_checksum(PG_FUNCTION_ARGS)
 }
 
 /*
+ * pg_table_physical_checksum_algo - generic physical table checksum
+ *
+ * Physical table checksums include relation identity, so their SQL shape is
+ * an 8-byte digest for both fnv32 and fnv64.
+ */
+PG_FUNCTION_INFO_V1(pg_table_physical_checksum_algo);
+
+Datum
+pg_table_physical_checksum_algo(PG_FUNCTION_ARGS)
+{
+    Oid         reloid;
+    bool        include_header;
+    int         algorithm;
+    uint64      result;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
+        PG_RETURN_NULL();
+
+    reloid = PG_GETARG_OID(0);
+    include_header = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
+
+    if (algorithm == 0)
+        result = pg_table_physical_checksum_calc(reloid, include_header, true);
+    else
+        result = pg_table_physical_checksum_calc64(reloid, include_header,
+                                                   true);
+
+    PG_RETURN_BYTEA_P(checksum_bytea(result, 8));
+}
+
+/*
  * pg_table_physical_checksum_calc - implementation shared with partitions
  *
  * check_privileges is false for leaf partitions reached through a
@@ -2892,6 +2969,90 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     final_checksum = ((uint64) aggregate << 32) | reloid;
 
     return final_checksum;
+}
+
+/*
+ * pg_table_physical_checksum_calc64 - serial 64-bit physical table checksum
+ */
+static uint64
+pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
+                                  bool check_privileges)
+{
+    Relation    rel;
+    ChecksumAccum64 acc = {0, 0};
+    uint64      aggregate;
+    uint64      relation_hash;
+    uint32      nblocks;
+
+    rel = relation_open(reloid, AccessShareLock);
+
+    if (check_privileges)
+        pg_integrity_checksums_require_select(reloid);
+
+    pg_integrity_checksums_check_relation_kind(rel, true, true);
+
+    if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+    {
+        List       *parts = pg_integrity_checksums_leaf_partitions(reloid);
+        ChecksumAccum64 pacc = {0, 0};
+        ListCell   *lc;
+
+        foreach(lc, parts)
+        {
+            Oid         partoid = lfirst_oid(lc);
+            uint64      part_checksum;
+
+            part_checksum = pg_table_physical_checksum_calc64(partoid,
+                                                              include_header,
+                                                              false);
+            checksum_accum64_add(&pacc,
+                                 combine_checksums_64(part_checksum,
+                                                      (uint64) partoid));
+        }
+        list_free(parts);
+        relation_close(rel, AccessShareLock);
+
+        aggregate = checksum_accum64_finalize(&pacc);
+        return combine_checksums_64(aggregate, (uint64) reloid);
+    }
+
+    if (rel->rd_rel->relkind == RELKIND_TOASTVALUE)
+    {
+        nblocks = RelationGetNumberOfBlocks(rel);
+        scan_relation_raw_pages64(rel, 0, nblocks, &acc);
+        aggregate = checksum_accum64_finalize(&acc);
+        aggregate = combine_checksums_64(aggregate, (uint64) reloid);
+        aggregate = combine_checksums_64(aggregate,
+                                         (uint64) rel->rd_rel->relfilenode);
+        aggregate = combine_checksums_64(aggregate,
+                                         (uint64) rel->rd_rel->reltablespace);
+        relation_close(rel, AccessShareLock);
+        return aggregate;
+    }
+
+    relation_hash = fnv1a_64_hash(&reloid, sizeof(reloid), FNV_BASIS_64);
+    relation_hash = combine_checksums_64(relation_hash,
+                                         (uint64) rel->rd_rel->relfilenode);
+    relation_hash = combine_checksums_64(relation_hash,
+                                         (uint64) rel->rd_rel->reltablespace);
+
+    nblocks = RelationGetNumberOfBlocks(rel);
+    {
+        Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
+        BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+        scan_table_blocks_physical64(rel, 0, nblocks, include_header, snapshot,
+                                     &acc, bstrategy);
+        FreeAccessStrategy(bstrategy);
+    }
+
+    relation_close(rel, AccessShareLock);
+
+    aggregate = checksum_accum64_finalize(&acc);
+    aggregate = combine_checksums_64(aggregate, relation_hash);
+    aggregate = combine_checksums_64(aggregate, (uint64) reloid);
+
+    return aggregate;
 }
 
 /*
@@ -4080,6 +4241,84 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
 
 }
 
+static void
+scan_table_blocks_physical64(Relation rel, BlockNumber start, BlockNumber end,
+                           bool include_header, Snapshot snapshot,
+                           ChecksumAccum64 *acc,
+                           BufferAccessStrategy bstrategy)
+{
+    BlockNumber blkno;
+
+    for (blkno = start; blkno < end; blkno++)
+    {
+        Buffer      buffer;
+        Page        page;
+        OffsetNumber maxoff;
+        OffsetNumber offnum;
+
+        buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+                                    bstrategy);
+        LockBuffer(buffer, BUFFER_LOCK_SHARE);
+        page = BufferGetPage(buffer);
+
+        if (PageIsNew(page))
+        {
+            UnlockReleaseBuffer(buffer);
+            if ((blkno & 63) == 0)
+                CHECK_FOR_INTERRUPTS();
+            continue;
+        }
+
+        pg_integrity_checksums_check_page(rel, blkno, page);
+
+        maxoff = PageGetMaxOffsetNumber(page);
+        for (offnum = FirstOffsetNumber; offnum <= maxoff;
+             offnum = OffsetNumberNext(offnum))
+        {
+            ItemId      lp = PageGetItemId(page, offnum);
+            HeapTupleHeader htup;
+            HeapTupleData tuple;
+            Size        tuple_len;
+            uint64      tuple_checksum;
+
+            if (!ItemIdIsNormal(lp))
+                continue;
+
+            if (!pg_integrity_checksums_item_is_sane(page, lp))
+                ereport(ERROR,
+                        (errcode(ERRCODE_DATA_CORRUPTED),
+                         errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
+                                RelationGetRelationName(rel), blkno, offnum)));
+
+            htup = (HeapTupleHeader) PageGetItem(page, lp);
+            tuple_len = ItemIdGetLength(lp);
+
+            pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, htup, tuple_len);
+
+            tuple.t_len = tuple_len;
+            tuple.t_data = htup;
+            tuple.t_tableOid = RelationGetRelid(rel);
+            ItemPointerSet(&tuple.t_self, blkno, offnum);
+
+            if (!HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
+                continue;
+
+            tuple_checksum = pg_tuple_physical_checksum_internal(rel, page,
+                                                                 offnum, blkno,
+                                                                 include_header,
+                                                                 false, 1);
+            if (tuple_checksum != 0)
+                checksum_accum64_add(acc, tuple_checksum);
+        }
+
+        UnlockReleaseBuffer(buffer);
+
+        if ((blkno & 63) == 0)
+            CHECK_FOR_INTERRUPTS();
+    }
+
+}
+
 /*
  * scan_table_blocks_logical - logical checksum over a range of heap blocks
  */
@@ -4328,6 +4567,94 @@ scan_index_blocks_physical(Relation idxRel, BlockNumber start, BlockNumber end,
 
 }
 
+static void
+scan_index_blocks_physical64(Relation idxRel, BlockNumber start, BlockNumber end,
+                           bool is_brin, ChecksumAccum64 *acc,
+                           BufferAccessStrategy bstrategy)
+{
+    BlockNumber blkno;
+    Size        page_size;
+
+    for (blkno = start; blkno < end; blkno++)
+    {
+        Buffer      buffer;
+        Page        page;
+        uint64      page_hash;
+
+        buffer = ReadBufferExtended(idxRel, MAIN_FORKNUM, blkno,
+                                    RBM_NORMAL, bstrategy);
+        LockBuffer(buffer, BUFFER_LOCK_SHARE);
+
+        page = BufferGetPage(buffer);
+
+        if (!PageIsNew(page))
+        {
+            PageHeader phdr = (PageHeader) page;
+
+            /*
+             * Always hash a complete block.  PageGetPageSize() comes from
+             * the page header and a corrupted value could make us read past
+             * the buffer.
+             */
+            page_size = BLCKSZ;
+            page_hash = fnv1a_64_hash((char *) page, page_size, 0);
+
+            if (is_brin)
+            {
+                uint8      *special_space;
+                Size        special_size;
+
+                page_hash = combine_checksums_64(page_hash, (uint32) page_size);
+
+                /*
+                 * The BRIN special area can only be inspected when the page
+                 * header is sane; the raw page bytes are still hashed above.
+                 */
+                if (pg_integrity_checksums_page_header_sane(page))
+                {
+                    special_space = (uint8 *) PageGetSpecialPointer(page);
+                    special_size = PageGetSpecialSize(page);
+                    if (special_size >= 4)
+                    {
+                        uint32      brin_info = 0;
+
+                        memcpy(&brin_info, special_space, 4);
+                        page_hash = combine_checksums_64(page_hash, brin_info);
+                    }
+                }
+
+                page_hash = combine_checksums_64(page_hash, blkno);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_lower);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_upper);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_flags);
+            }
+            else
+            {
+                page_hash = combine_checksums_64(page_hash, phdr->pd_lower);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_upper);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_special);
+                page_hash = combine_checksums_64(page_hash, blkno);
+                page_hash = combine_checksums_64(page_hash, phdr->pd_flags);
+                page_hash = combine_checksums_64(page_hash, (uint32) page_size);
+            }
+
+            checksum_accum64_add(acc, page_hash);
+        }
+        else
+        {
+            page_hash = fnv1a_64_hash(is_brin ? "BRIN_NEW" : "NEW_PAGE", 8, blkno);
+            page_hash = combine_checksums_64(page_hash, (uint32) PageGetPageSize(page));
+            checksum_accum64_add(acc, page_hash);
+        }
+
+        UnlockReleaseBuffer(buffer);
+
+        if ((blkno & 63) == 0)
+            CHECK_FOR_INTERRUPTS();
+    }
+
+}
+
 /*
  * compute_database_item - compute the checksum of one relation
  *
@@ -4345,9 +4672,18 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
     if (relkind == RELKIND_INDEX)
     {
         bool        is_null = false;
-        uint32      value;
+        uint32      value = 0;
 
-        if (physical)
+        if (physical && algo == 1)
+        {
+            uint64      value64 = pg_index_physical_checksum_calc64(relid,
+                                                                    false,
+                                                                    &is_null);
+
+            if (!is_null)
+                *rel_checksum = value64;
+        }
+        else if (physical)
             value = pg_index_physical_checksum_calc(relid, false, &is_null);
         else if (algo == 1)
         {
@@ -4363,12 +4699,15 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
 
         if (is_null)
             *skip = true;
-        else if (algo == 0 || physical)
+        else if (algo == 0)
             *rel_checksum = (uint64) value;
     }
     else
     {
-        if (physical)
+        if (physical && algo == 1)
+            *rel_checksum = pg_table_physical_checksum_calc64(relid, false,
+                                                              false);
+        else if (physical)
             *rel_checksum = pg_table_physical_checksum_calc(relid, false,
                                                             false);
         else
@@ -5360,4 +5699,164 @@ pg_text_checksum(PG_FUNCTION_ARGS)
                                        seed);
     
     PG_RETURN_INT32((int32)checksum);
+}
+
+/*
+ * pg_index_physical_checksum_calc64 - serial 64-bit physical index checksum
+ */
+static uint64
+pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
+                                  bool *is_null)
+{
+    Relation    idxRel;
+    ChecksumAccum64 acc = {0, 0};
+    uint64      index_checksum;
+    uint64      index_type_hash;
+    bool        is_brin;
+    uint32      nblocks;
+
+    *is_null = false;
+    idxRel = index_open(indexoid, AccessShareLock);
+
+    if (check_privileges)
+        pg_integrity_checksums_require_select(indexoid);
+
+    if (idxRel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+    {
+        List       *parts = pg_integrity_checksums_leaf_indexes(indexoid);
+        ChecksumAccum64 pacc = {0, 0};
+        ListCell   *lc;
+        bool        supported = index_supports_checksum(idxRel->rd_rel->relam);
+
+        index_close(idxRel, AccessShareLock);
+        if (!supported)
+        {
+            *is_null = true;
+            return 0;
+        }
+
+        foreach(lc, parts)
+        {
+            Oid         partoid = lfirst_oid(lc);
+            bool        part_null = false;
+            uint64      part_checksum;
+
+            part_checksum = pg_index_physical_checksum_calc64(partoid, false,
+                                                              &part_null);
+            if (part_null)
+                *is_null = true;
+            else
+                checksum_accum64_add(&pacc,
+                                     combine_checksums_64(part_checksum,
+                                                          (uint64) partoid));
+        }
+        list_free(parts);
+        if (*is_null)
+            return 0;
+        return combine_checksums_64(checksum_accum64_finalize(&pacc),
+                                    (uint64) indexoid);
+    }
+
+    if (!index_supports_checksum(idxRel->rd_rel->relam))
+    {
+        index_close(idxRel, AccessShareLock);
+        *is_null = true;
+        return 0;
+    }
+
+    is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
+    nblocks = RelationGetNumberOfBlocks(idxRel);
+    {
+        BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+        scan_index_blocks_physical64(idxRel, 0, nblocks, is_brin, &acc,
+                                     bstrategy);
+        FreeAccessStrategy(bstrategy);
+    }
+
+    index_checksum = checksum_accum64_finalize(&acc);
+
+    if (!is_brin)
+    {
+        index_type_hash = fnv1a_64_hash(&idxRel->rd_rel->relam, sizeof(Oid),
+                                        FNV_BASIS_64);
+        index_type_hash = combine_checksums_64(index_type_hash,
+                                               (uint64) idxRel->rd_rel->relnatts);
+        index_checksum = combine_checksums_64(index_checksum, index_type_hash);
+    }
+
+    index_checksum = combine_checksums_64(index_checksum,
+                                          (uint64) idxRel->rd_rel->relfilenode);
+    index_checksum = combine_checksums_64(index_checksum,
+                                          (uint64) idxRel->rd_rel->reltablespace);
+
+    index_close(idxRel, AccessShareLock);
+    return index_checksum;
+}
+
+/*
+ * pg_index_physical_checksum_algo - generic physical index checksum
+ */
+PG_FUNCTION_INFO_V1(pg_index_physical_checksum_algo);
+
+Datum
+pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
+{
+    Oid         indexoid;
+    int         algorithm;
+    bool        is_null = false;
+    uint64      result;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        PG_RETURN_NULL();
+
+    indexoid = PG_GETARG_OID(0);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
+
+    if (algorithm == 0)
+    {
+        uint32      legacy = pg_index_physical_checksum_calc(indexoid, true,
+                                                             &is_null);
+
+        if (is_null)
+            PG_RETURN_NULL();
+        PG_RETURN_BYTEA_P(checksum_bytea(legacy, 4));
+    }
+
+    result = pg_index_physical_checksum_calc64(indexoid, true, &is_null);
+    if (is_null)
+        PG_RETURN_NULL();
+
+    PG_RETURN_BYTEA_P(checksum_bytea(result, 8));
+}
+
+/*
+ * pg_database_physical_checksum_algo - generic physical database checksum
+ */
+PG_FUNCTION_INFO_V1(pg_database_physical_checksum_algo);
+
+Datum
+pg_database_physical_checksum_algo(PG_FUNCTION_ARGS)
+{
+    bool        include_system = false;
+    bool        include_toast = false;
+    int         algorithm;
+    uint64      db_checksum;
+
+    if (PG_NARGS() >= 1)
+        include_system = PG_GETARG_BOOL(0);
+    if (PG_NARGS() >= 2)
+        include_toast = PG_GETARG_BOOL(1);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
+
+    if (!superuser())
+        ereport(ERROR,
+                (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                 errmsg("must be superuser to compute database checksum")));
+
+    db_checksum = compute_database_checksum_internal(true, include_system,
+                                                     include_toast, true,
+                                                     algorithm);
+
+    PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, 8));
 }

@@ -59,6 +59,42 @@ SELECT length(pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64')) = 8 
  t
 (1 row)
 
+SELECT length(pg_table_physical_checksum('fnv64_a'::regclass, false, 'fnv64')) = 8 AS table_physical64_len;
+ table_physical64_len 
+----------------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_table_physical_checksum('fnv64_a'::regclass, false, 'fnv32')) = pg_table_physical_checksum('fnv64_a'::regclass, false) AS table_physical32_legacy_ok;
+ table_physical32_legacy_ok 
+----------------------------
+ t
+(1 row)
+
+SELECT length(pg_index_physical_checksum('fnv64_a_pkey'::regclass, 'fnv64')) = 8 AS index_physical64_len;
+ index_physical64_len 
+----------------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_index_physical_checksum('fnv64_a_pkey'::regclass, 'fnv32')) = pg_index_physical_checksum('fnv64_a_pkey'::regclass) AS index_physical32_legacy_ok;
+ index_physical32_legacy_ok 
+----------------------------
+ t
+(1 row)
+
+SELECT length(pg_database_physical_checksum(false, false, 'fnv64')) = 8 AS database_physical64_len;
+ database_physical64_len 
+-------------------------
+ t
+(1 row)
+
+SELECT pg_checksum_bigint(pg_database_physical_checksum(false, false, 'fnv32')) = pg_database_physical_checksum(false, false) AS database_physical32_legacy_ok;
+ database_physical32_legacy_ok 
+-------------------------------
+ t
+(1 row)
+
 SELECT pg_index_logical_checksum('fnv64_a_pkey'::regclass, 'fnv64') = pg_index_logical_checksum('fnv64_b_pkey'::regclass, 'fnv64') AS index64_order_ok;
  index64_order_ok 
 ------------------

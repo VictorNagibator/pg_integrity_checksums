@@ -81,3 +81,27 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean, text) IS
 'Generic physical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_table_physical_checksum(regclass, boolean, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_table_physical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_table_physical_checksum(regclass, boolean, text) IS
+'Generic physical table checksum. Returns an 8-byte digest for fnv32 and fnv64.';
+
+CREATE OR REPLACE FUNCTION pg_index_physical_checksum(regclass, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_index_physical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_index_physical_checksum(regclass, text) IS
+'Generic physical index checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+CREATE OR REPLACE FUNCTION pg_database_physical_checksum(boolean, boolean, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_database_physical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_database_physical_checksum(boolean, boolean, text) IS
+'Generic physical database checksum. Requires superuser. Returns an 8-byte digest for fnv32 and fnv64.';

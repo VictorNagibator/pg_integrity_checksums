@@ -1,5 +1,9 @@
 # Architecture
 
+This page describes internals for contributors and advanced users.  New
+readers should start with [Getting started](getting-started.md) and
+[Concepts](concepts.md).
+
 ## Overview
 
 `pg_integrity_checksums` is a PostgreSQL extension that provides checksums at six granularity levels. Page checksums are physical, cell checksums are logical, and tuple, table, index and database checksums are available in both physical and logical variants. It enables data integrity verification, change detection, consistency checking, and corruption detection across the database hierarchy.

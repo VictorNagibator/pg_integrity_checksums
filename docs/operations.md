@@ -1,5 +1,9 @@
 # Operations
 
+This page covers correctness, performance and production limitations.  For an
+introduction, read [Getting started](getting-started.md) and
+[Concepts](concepts.md).
+
 ## Limitations and Portability
 
 These limitations are documented rather than silently ignored.

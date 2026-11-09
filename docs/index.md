@@ -1,82 +1,84 @@
 # PostgreSQL integrity checks you can run online
 
-**pg_integrity_checksums** is a PostgreSQL extension for verifying data
-integrity at **page, cell, tuple, table, index and database** level. It adds
-logical checksums that stay stable across `VACUUM`, `REINDEX`, OID changes and
-endianness, plus a CLI for baselines and CI.
+**pg_integrity_checksums** is a PostgreSQL extension and CLI for checking data
+integrity at **page, cell, tuple, table, index and database** level.
 
-[Install](installation.md){ .md-button .md-button--primary }
+It provides logical checksums that stay stable across `VACUUM`, `REINDEX`, OID
+changes and physical row movement, plus physical checksums for on-disk
+corruption within one cluster.
+
+[Get started](getting-started.md){ .md-button .md-button--primary }
+[Concepts](concepts.md){ .md-button }
 [CLI reference](cli.md){ .md-button }
-[GitHub](https://github.com/VictorNagibator/pg_integrity_checksums){ .md-button }
 
-## Why
+## What you can check
 
-`pg_checksums` verifies page checksums offline. `amcheck` verifies B-tree
-structure. Both are useful, but neither gives you a repeatable logical
-checksum of a table that you can compare after a restore, across a replica, or
-between releases.
+| Level | Physical | Logical | Example use |
+|---|---:|---:|---|
+| Page | yes | — | Single-page corruption |
+| Cell | — | yes | One value in one row |
+| Tuple | yes | yes | Physical or logical row fingerprint |
+| Table | yes | yes | Data change detection, restore checks |
+| Index | yes | yes | Missing index entries vs corrupt pages |
+| Database | yes | yes | Whole-database fingerprint |
 
-`pg_integrity_checksums` fills that gap:
+Page checksums are PostgreSQL’s built-in 32-bit page checksum.  Other levels
+support 64-bit FNV-1a digests through the generic API.
 
-- logical checksums are independent of heap TIDs, relation OIDs and type OIDs;
-- partitions and partitioned indexes are aggregated transparently;
-- parallel scans are controlled by `pg_integrity_checksums.workers`;
-- physical and logical variants are available at most levels;
-- the CLI stores baselines as versioned JSON and returns CI-friendly exit codes.
+## First checksum
 
-## Quick start
-
-### Extension
-
-```sql
+~~~sql
 CREATE EXTENSION pg_integrity_checksums;
 
-SELECT pg_table_logical_checksum('public.orders'::regclass);
-SELECT pg_index_logical_checksum('public.orders_pkey'::regclass);
+SELECT encode(
+    pg_table_logical_checksum('public.orders'::regclass, 'fnv64'),
+    'hex'
+) AS logical_checksum;
+~~~
 
--- Generic 64-bit digest
-SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
-```
+The result is raw `bytea`; use `encode(..., 'hex')` for display or
+`pg_checksum_bigint(...)` for a SQL integer.
 
-### CLI
+## Why teams use it
 
-```bash
-cd cli
-go build ./cmd/pg_integrity_checksums
+- **Logical comparison** across a restore, replica, migration or release.
+- **Physical detection** of corrupted pages, tuples, tables and indexes.
+- **No primary key required** for logical table and database checksums.
+- **Partition-aware** table and index checksums.
+- **Parallel scans** through `pg_integrity_checksums.workers`.
+- **CI-friendly baselines** from the companion CLI, with text, JSON and JUnit
+  reports.
 
-pg_integrity_checksums capture \
-  --dsn "$DATABASE_URL" \
-  --output baseline.json
+## Choose your path
 
-pg_integrity_checksums verify \
-  --dsn "$DATABASE_URL" \
-  --baseline baseline.json
-```
-
-See the [installation guide](installation.md) for packages, PGXN, Docker and
-source builds.
+| I want to... | Read |
+|---|---|
+| Install and run my first checksum | [Getting started](getting-started.md) |
+| Understand logical vs physical and 32-bit vs 64-bit | [Concepts](concepts.md) |
+| Look up a function | [Function reference](functions.md) |
+| Use baselines in CI | [CLI reference](cli.md) |
+| Understand performance and correctness limits | [Operations](operations.md) |
+| Debug an error | [Troubleshooting](troubleshooting.md) |
+| Understand the internals | [Architecture](architecture.md) |
 
 ## What it is not
 
-- FNV-1a 32-bit and 64-bit are fast, but neither is **cryptographic** and
-  neither is a substitute for a cryptographic hash.
+- FNV-1a is **not cryptographic**; it is not tamper evidence.
 - Physical checksums are tied to one cluster and database.
-- Logical checksums describe data content, not the physical layout.
-- The extension does not replace backups, `pg_checksums` or `amcheck`.
-  It complements them.
-
-Read [limitations](operations.md) and the [function reference](functions.md)
-before relying on checksums for a compliance process.
+- Logical checksums describe content, not physical layout.
+- It does not replace backups, `pg_checksums` or `amcheck`.
 
 ## Documentation
 
+- [Getting started](getting-started.md)
+- [Concepts](concepts.md)
 - [Installation](installation.md)
-- [Architecture](architecture.md)
-- [Functions and algorithms](functions.md)
+- [Function reference](functions.md)
 - [CLI](cli.md)
 - [Operations](operations.md)
-- [Testing and releases](testing.md)
 - [Troubleshooting](troubleshooting.md)
+- [Architecture](architecture.md)
+- [Testing and releases](testing.md)
 
-Project source and issue tracker:
+Source and issue tracker:
 [github.com/VictorNagibator/pg_integrity_checksums](https://github.com/VictorNagibator/pg_integrity_checksums).

@@ -11,9 +11,36 @@ database through SQL and does not install or modify extension objects.  Release
 notes live in [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/cli/Changes) and the release workflow reads the section for
 the pushed `cli-v*` tag automatically.
 
+## Quick start
+
+The CLI requires the extension in the target database.  Version 0.4 works
+best with extension 2.2, which provides the `fnv64` API.
+
+~~~bash
+# From the repository (Go 1.25+)
+cd cli
+go build ./cmd/pg_integrity_checksums
+
+# Capture a 64-bit logical baseline
+./pg_integrity_checksums capture \
+  --db "$DATABASE_URL" \
+  --schema public \
+  --hash fnv64 \
+  --output baseline.json
+
+# Verify the database against it
+./pg_integrity_checksums verify \
+  --db "$DATABASE_URL" \
+  --baseline baseline.json
+~~~
+
+A clean verify prints `no changes` and exits `0`.  See
+[Getting started](getting-started.md) for the extension side and the
+[command reference](#commands) below for every flag.
+
 ## Status
 
-The CLI is currently **0.4.0-dev**.  It is versioned separately from the
+The CLI is currently **0.4.0**.  It is versioned separately from the
 extension.  It writes **v1** (FNV-1a 32-bit) by default and **v2** with
 `capture --hash fnv64`.
 

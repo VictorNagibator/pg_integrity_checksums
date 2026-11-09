@@ -60,9 +60,11 @@ the compatible v1 FNV-1a 32-bit format.
 ## Documentation
 
 - [Documentation site](https://victornagibator.github.io/pg_integrity_checksums/)
-- [Architecture](docs/architecture.md)
+- [Getting started](docs/getting-started.md)
 - [Installation](docs/installation.md)
-- [Functions and algorithms](docs/functions.md)
+- [Concepts](docs/concepts.md)
+- [Function reference](docs/functions.md)
+- [Architecture](docs/architecture.md)
 - [CLI documentation](docs/cli.md)
 - [Operations](docs/operations.md)
 - [Testing and releases](docs/testing.md)

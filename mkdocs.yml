@@ -29,13 +29,15 @@ theme:
 
 nav:
   - Home: index.md
+  - Getting started: getting-started.md
   - Installation: installation.md
-  - Architecture: architecture.md
-  - Functions: functions.md
+  - Concepts: concepts.md
+  - Function reference: functions.md
   - CLI: cli.md
   - Operations: operations.md
-  - Testing: testing.md
   - Troubleshooting: troubleshooting.md
+  - Architecture: architecture.md
+  - Testing and releases: testing.md
 
 markdown_extensions:
   - attr_list

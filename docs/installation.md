@@ -1,6 +1,6 @@
 # Installation
 
-### Install from packages or Docker (recommended)
+## Install from packages or Docker (recommended)
 
 | Method | PostgreSQL versions | Notes |
 |---|---|---|
@@ -31,7 +31,7 @@ Replace `16` with your PostgreSQL major version.  The package page is
 > after a release and can lag behind PGXN.  Check the installed version with
 > `SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`.
 
-### Docker
+## Docker
 
 Prebuilt images are published to GHCR for PostgreSQL 12–18.  The extension is
 created automatically in `POSTGRES_DB` on first initialization.
@@ -49,7 +49,7 @@ Then, from another terminal:
 ```bash
 psql -h localhost -U postgres -d demo \
   -c "SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';" \
-  -c "SELECT pg_table_logical_checksum('pg_class'::regclass);"
+  -c "SELECT encode(pg_table_logical_checksum('pg_class'::regclass, 'fnv64'), 'hex');"
 ```
 
 To build an image for another PostgreSQL major version locally:
@@ -62,7 +62,7 @@ Images are built by the
 [Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml); pull requests and releases are
 smoke-tested with PostgreSQL 16.
 
-### Prerequisites
+## Prerequisites
 
 * PostgreSQL 12 or later (tested on 12, 13, 14, 15, 16, 17, 18, and 19)
 * C compiler and PostgreSQL development headers
@@ -86,7 +86,7 @@ smoke-tested with PostgreSQL 16.
 > They are unrelated: the core utility verifies data page checksums on disk,
 > while this extension provides SQL functions for computing checksums.
 
-### Build and Install
+## Build and Install
 
 The extension builds with PGXS, so `pg_config` must be on your `PATH`, or you
 can point `make` at a specific installation with `PG_CONFIG=/path/to/pg_config`.
@@ -118,7 +118,26 @@ pgxn install pg_integrity_checksums
 The extension is also listed in
 [PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums).
 
-### Upgrading to 2.2
+## Verify installation
+
+After `CREATE EXTENSION`, check the installed version and compute one digest:
+
+~~~sql
+SELECT extversion
+FROM pg_extension
+WHERE extname = 'pg_integrity_checksums';
+
+SELECT encode(
+    pg_table_logical_checksum('pg_class'::regclass, 'fnv64'),
+    'hex'
+);
+~~~
+
+If you see `function pg_table_logical_checksum(regclass, unknown) does not exist`,
+the installed extension is older than 2.2 or the upgrade did not run.  See
+[Upgrading to 2.2](#upgrading-to-22).
+
+## Upgrading to 2.2
 
 2.2 adds generic algorithm overloads for FNV-1a 32-bit and 64-bit digests.
 Existing SQL functions and their 32-bit values are unchanged; page checksums
@@ -131,7 +150,7 @@ ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.2.0';
 Older CLI releases cannot read v2 baselines created with `--hash fnv64`; the
 0.4 CLI reads both v1 (fnv32) and v2 (fnv64).
 
-### Migrating from pg_checksums 1.x
+## Migrating from pg_checksums 1.x
 
 The extension was renamed in 2.0.0 to avoid confusion with PostgreSQL's core
 `pg_checksums` utility.  PostgreSQL has no `ALTER EXTENSION ... RENAME`, so
@@ -158,4 +177,8 @@ physical baselines remain valid.  If `DROP EXTENSION` fails because of
 dependent objects, remove or recreate those dependencies explicitly rather
 than using `CASCADE` without review.
 
----
+## Next
+
+Continue with [Getting started](getting-started.md) for the first checksum and
+[Concepts](concepts.md) for the logical/physical model.
+

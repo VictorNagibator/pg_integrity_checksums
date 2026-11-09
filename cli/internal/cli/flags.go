@@ -36,6 +36,15 @@ func parseKind(value string) (string, error) {
 	}
 }
 
+func parseHash(value string) (string, error) {
+	switch value {
+	case "fnv32", "fnv64":
+		return value, nil
+	default:
+		return "", fmt.Errorf("invalid --hash %q (want fnv32 or fnv64)", value)
+	}
+}
+
 func parseFormat(value string) (string, error) {
 	switch value {
 	case "text", "json", "junit":

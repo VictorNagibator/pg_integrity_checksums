@@ -15,7 +15,7 @@ import (
 
 // Version is overridden at release time with -ldflags -X. The default is
 // used by local builds and tests.
-var Version = "0.3.1-dev"
+var Version = "0.4.0-dev"
 
 // Run dispatches one CLI invocation and returns the process exit code.
 // stdout is reserved for data (JSON, diffs, reports); progress and errors go to
@@ -110,6 +110,7 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	output := fs.String("output", "baseline.json", "output file, or - for stdout")
 	kindValue := fs.String("kind", baseline.KindLogical, "logical or physical")
+	hashValue := fs.String("hash", baseline.HashFNV32, "fnv32 or fnv64")
 	var schemas, excludeSchemas, tables, excludeTables stringList
 	fs.Var(&schemas, "schema", "include schema (repeatable or comma-separated; globs allowed)")
 	fs.Var(&excludeSchemas, "exclude-schema", "exclude schema (repeatable; globs allowed)")
@@ -144,6 +145,9 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	}
 	if !set["kind"] && profile.Kind != "" {
 		*kindValue = profile.Kind
+	}
+	if !set["hash"] && profile.Hash != "" {
+		*hashValue = profile.Hash
 	}
 	if !set["output"] && profile.Output != "" {
 		*output = profilePath(base, profile.Output)
@@ -191,6 +195,14 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	hash, err := parseHash(*hashValue)
+	if err != nil {
+		return commandError(stderr, err)
+	}
+	baselineHash := ""
+	if hash == baseline.HashFNV64 {
+		baselineHash = baseline.HashFNV64
+	}
 	if *workers < 0 {
 		return commandError(stderr, errors.New("--workers must be >= 0"))
 	}
@@ -218,6 +230,7 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	b, err := pgdb.Snapshot(ctx, db, pgdb.Options{
 		ToolVersion: Version,
 		Kind:        kind,
+		Hash:        baselineHash,
 		Scope:       scope,
 		Workers:     *workers,
 		Timeout:     *timeout,
@@ -368,6 +381,7 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	curB, err := pgdb.Snapshot(ctx, db, pgdb.Options{
 		ToolVersion: Version,
 		Kind:        oldB.Kind,
+		Hash:        oldB.Hash,
 		Scope:       oldB.Scope,
 		Workers:     *workers,
 		Timeout:     *timeout,
@@ -422,6 +436,9 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 func checkCompatibility(oldB, curB *baseline.Baseline, allowVersion bool) error {
 	if oldB.Kind != curB.Kind {
 		return fmt.Errorf("baseline kind %q, current kind %q", oldB.Kind, curB.Kind)
+	}
+	if oldB.Hash != curB.Hash {
+		return fmt.Errorf("baseline hash %q, current hash %q", oldB.Hash, curB.Hash)
 	}
 	if !allowVersion && oldB.PostgresVersion/10000 != curB.PostgresVersion/10000 {
 		return fmt.Errorf("baseline PostgreSQL %d, current PostgreSQL %d",
@@ -516,6 +533,10 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	}
 	if oldB.Kind != newB.Kind {
 		fmt.Fprintf(stderr, "error: baseline kinds differ: %s and %s\n", oldB.Kind, newB.Kind)
+		return 3
+	}
+	if oldB.Hash != newB.Hash {
+		fmt.Fprintf(stderr, "error: baseline hashes differ: %q and %q\n", oldB.Hash, newB.Hash)
 		return 3
 	}
 	changes, summary := baseline.Compare(oldB.Objects, newB.Objects)
@@ -761,6 +782,7 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	newB, err := pgdb.Snapshot(ctx, db, pgdb.Options{
 		ToolVersion: Version,
 		Kind:        oldB.Kind,
+		Hash:        oldB.Hash,
 		Scope:       oldB.Scope,
 		Workers:     *workers,
 		Timeout:     *timeout,

@@ -31,6 +31,7 @@ const (
 type Options struct {
 	ToolVersion string
 	Kind        string
+	Hash        string
 	Scope       baseline.Scope
 	Workers     int
 	Timeout     time.Duration
@@ -120,6 +121,9 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	}
 	if opts.Kind != baseline.KindLogical && opts.Kind != baseline.KindPhysical {
 		return nil, fmt.Errorf("invalid kind %q", opts.Kind)
+	}
+	if opts.Hash != "" && opts.Hash != baseline.HashFNV32 && opts.Hash != baseline.HashFNV64 {
+		return nil, fmt.Errorf("invalid hash %q", opts.Hash)
 	}
 
 	// READ ONLY is a safety net: capture must never touch application data.
@@ -233,7 +237,7 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 			}
 		}
 
-		checksum, reason, err := checksumObject(ctx, tx, c, opts.Kind)
+		checksum, reason, err := checksumObject(ctx, tx, c, opts.Kind, opts.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("%s %s.%s: %w", c.Kind, c.Schema, c.Name, err)
 		}
@@ -256,9 +260,10 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 		objects = append(objects, obj)
 	}
 
-	b := baseline.New(
+	b := baseline.NewWithHash(
 		opts.ToolVersion,
 		opts.Kind,
+		opts.Hash,
 		extVersion,
 		postgresVersion,
 		database,
@@ -683,7 +688,7 @@ func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 // checksumObject calls the extension function for one relation. A NULL result
 // becomes a non-empty reason and is later recorded as skipped; SQL errors are
 // returned to the caller and abort the snapshot.
-func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind string) (string, string, error) {
+func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind, hash string) (string, string, error) {
 	var function string
 	// The function accepts regclass; passing the OID avoids identifier quoting
 	// issues for unusual schema/table names.
@@ -708,9 +713,49 @@ func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind string) (
 		return "", "", fmt.Errorf("unknown object kind %q", c.Kind)
 	}
 
-	query := "SELECT " + function + "(" + args + ")::text"
+	if hash == "" {
+		query := "SELECT " + function + "(" + args + ")::text"
+		var checksum sql.NullString
+		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&checksum); err != nil {
+			return "", "", err
+		}
+		if !checksum.Valid {
+			return "", "checksum function returned NULL", nil
+		}
+		return checksum.String, "", nil
+	}
+
+	// v2 captures call the generic bytea API and convert the digest to a
+	// signed decimal bigint. Table logical fnv32 is unsigned because the
+	// legacy table wrapper returned the unsigned 32-bit value in a bigint.
+	unsigned := hash == baseline.HashFNV32 && c.Kind == baseline.ObjectTable && kind == baseline.KindLogical
+	args = "$1::oid::regclass"
+	switch c.Kind {
+	case baseline.ObjectTable:
+		if kind == baseline.KindPhysical {
+			function = "pg_table_physical_checksum"
+			args += ", false, $2"
+		} else {
+			function = "pg_table_logical_checksum"
+			args += ", $2"
+		}
+	case baseline.ObjectIndex:
+		if kind == baseline.KindPhysical {
+			function = "pg_index_physical_checksum"
+		} else {
+			function = "pg_index_logical_checksum"
+		}
+		args += ", $2"
+	default:
+		return "", "", fmt.Errorf("unknown object kind %q", c.Kind)
+	}
+	unsignedSQL := "false"
+	if unsigned {
+		unsignedSQL = "true"
+	}
+	query := "SELECT pg_checksum_bigint(" + function + "(" + args + "), " + unsignedSQL + ")::text"
 	var checksum sql.NullString
-	if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&checksum); err != nil {
+	if err := tx.QueryRowContext(ctx, query, c.OID, hash).Scan(&checksum); err != nil {
 		return "", "", err
 	}
 	if !checksum.Valid {

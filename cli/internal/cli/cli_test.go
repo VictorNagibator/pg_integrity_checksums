@@ -27,7 +27,7 @@ func runCLI(args ...string) (int, string, string) {
 
 func TestVersionAndUsage(t *testing.T) {
 	code, out, _ := runCLI("version")
-	if code != 0 || !strings.Contains(out, "pg_integrity_checksums 0.3.1-dev") {
+	if code != 0 || !strings.Contains(out, "pg_integrity_checksums "+Version) {
 		t.Fatalf("version: code=%d out=%q", code, out)
 	}
 	code, out, _ = runCLI("help")
@@ -146,5 +146,36 @@ func TestShowHelp(t *testing.T) {
 	code, _, errOut = runCLI("diff", "--help")
 	if code != 0 || !strings.Contains(errOut, "usage:") {
 		t.Fatalf("diff help: code=%d err=%q", code, errOut)
+	}
+}
+
+func TestParseHash(t *testing.T) {
+	if got, err := parseHash("fnv64"); err != nil || got != baseline.HashFNV64 {
+		t.Fatalf("parseHash: %q %v", got, err)
+	}
+	if _, err := parseHash("sha256"); err == nil {
+		t.Fatal("expected invalid hash error")
+	}
+}
+
+func TestDiffRejectsHashMismatch(t *testing.T) {
+	dir := t.TempDir()
+	oldPath := filepath.Join(dir, "old.json")
+	newPath := filepath.Join(dir, "new.json")
+	writeBaseline(t, oldPath, nil)
+	b := baseline.NewWithHash("test", baseline.KindLogical, baseline.HashFNV64, "2.2.0", 160009, "app", baseline.NewScope(), nil)
+	if err := baseline.Save(newPath, b, os.Stdout); err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := runCLI("diff", oldPath, newPath)
+	if code != 3 || !strings.Contains(errOut, "hashes differ") {
+		t.Fatalf("diff hash mismatch: code=%d err=%q", code, errOut)
+	}
+}
+
+func TestCaptureRejectsInvalidHashBeforeConnecting(t *testing.T) {
+	code, _, errOut := runCLI("capture", "--hash", "sha256")
+	if code != 2 || !strings.Contains(errOut, "invalid --hash") {
+		t.Fatalf("capture invalid hash: code=%d err=%q", code, errOut)
 	}
 }

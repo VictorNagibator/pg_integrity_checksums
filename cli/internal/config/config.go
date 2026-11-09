@@ -25,6 +25,7 @@ type File struct {
 type Profile struct {
 	DSN                  string   `yaml:"dsn"`
 	Kind                 string   `yaml:"kind"`
+	Hash                 string   `yaml:"hash"`
 	Baseline             string   `yaml:"baseline"`
 	Output               string   `yaml:"output"`
 	Schemas              []string `yaml:"schema"`
@@ -109,6 +110,9 @@ func validate(name string, p Profile) error {
 	}
 	if p.Workers != nil && *p.Workers < 0 {
 		return fmt.Errorf("profile %q: workers must be >= 0", name)
+	}
+	if p.Hash != "" && p.Hash != "fnv32" && p.Hash != "fnv64" {
+		return fmt.Errorf("profile %q: hash must be fnv32 or fnv64", name)
 	}
 	return nil
 }

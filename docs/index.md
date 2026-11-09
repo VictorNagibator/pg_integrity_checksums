@@ -33,6 +33,9 @@ CREATE EXTENSION pg_integrity_checksums;
 
 SELECT pg_table_logical_checksum('public.orders'::regclass);
 SELECT pg_index_logical_checksum('public.orders_pkey'::regclass);
+
+-- Generic 64-bit digest
+SELECT encode(pg_table_logical_checksum('public.orders'::regclass, 'fnv64'), 'hex');
 ```
 
 ### CLI
@@ -55,8 +58,8 @@ source builds.
 
 ## What it is not
 
-- FNV-1a 32-bit is fast, but it is **not cryptographic** and not a substitute
-  for a cryptographic hash.
+- FNV-1a 32-bit and 64-bit are fast, but neither is **cryptographic** and
+  neither is a substitute for a cryptographic hash.
 - Physical checksums are tied to one cluster and database.
 - Logical checksums describe data content, not the physical layout.
 - The extension does not replace backups, `pg_checksums` or `amcheck`.

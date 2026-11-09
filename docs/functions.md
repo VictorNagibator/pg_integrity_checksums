@@ -222,24 +222,72 @@ Wrapper for text data checksum.
 SELECT pg_text_checksum('sample text', 0);
 ```
 
+### Generic Hash Algorithm API
+
+The historical functions above keep their numeric FNV-1a 32-bit return type.
+The generic overloads take an extra `text` algorithm argument and return a
+raw `bytea` digest:
+
+```sql
+pg_data_checksum(bytea, bigint, text)
+pg_text_checksum(text, bigint, text)
+pg_cell_checksum(regclass, tid, integer, text)
+pg_tuple_physical_checksum(regclass, tid, boolean, text)
+pg_tuple_logical_checksum(regclass, tid, text)
+pg_table_physical_checksum(regclass, boolean, text)
+pg_table_logical_checksum(regclass, text)
+pg_index_physical_checksum(regclass, text)
+pg_index_logical_checksum(regclass, text)
+pg_database_physical_checksum(boolean, boolean, text)
+pg_database_logical_checksum(boolean, boolean, text)
+```
+
+Supported algorithms:
+
+* `fnv32` — 4-byte big-endian digest;
+* `fnv64` — 8-byte big-endian digest.
+
+Table and database physical checksums always return 8 bytes because relation
+identity is part of the value.  Convert a digest to a signed SQL `bigint`
+with:
+
+```sql
+pg_checksum_bigint(bytea) -> bigint
+pg_checksum_bigint(bytea, boolean) -> bigint
+```
+
+The second argument selects unsigned interpretation for 4-byte `fnv32`
+digests.  The one-argument form sign-extends 4-byte values, matching the
+legacy `integer` functions.  Use the unsigned form when comparing with legacy
+table logical checksums, which returned a positive 32-bit value in a `bigint`.
+
+```sql
+SELECT encode(pg_table_logical_checksum('orders'::regclass, 'fnv64'), 'hex');
+SELECT pg_checksum_bigint(pg_table_logical_checksum('orders'::regclass, 'fnv64'));
+```
+
+`pg_page_checksum` intentionally has no generic overload: page checksums are
+PostgreSQL's built-in 32-bit page checksum.
+
 ---
 
 ## Algorithm Details
 
-### FNV-1a 32-bit Hash Algorithm
+### FNV-1a 32-bit and 64-bit
 
-Logical, cell, tuple, table, index and utility checksums use the FNV-1a
-(Fowler-Noll-Vo) 32-bit hash.  PostgreSQL's `pg_page_checksum` is computed with
-PostgreSQL's own page-checksum routine, which is based on a modified FNV-1a
-variant; it is not the same function as the logical checksum.
+Legacy logical, cell, tuple, table, index and utility functions use the
+FNV-1a (Fowler-Noll-Vo) 32-bit hash.  Generic overloads add the 64-bit
+variant.  PostgreSQL's `pg_page_checksum` is computed with PostgreSQL's own
+page-checksum routine, which is based on a modified FNV-1a variant; it is not
+the same function as the logical checksum and is always 32-bit.
 
 **Algorithm:**
 
 ```text
-hash = FNV_BASIS_32;
+hash = basis
 for each byte in data:
     hash = hash ^ byte;
-    hash = hash * FNV_PRIME_32;
+    hash = hash * prime;
 ```
 
 **Constants:**
@@ -247,8 +295,14 @@ for each byte in data:
 ```
 FNV_BASIS_32 = 2166136261U
 FNV_PRIME_32 = 16777619U
-CHECKSUM_NULL = 0xFFFFFFFF (signed -1)
+FNV_BASIS_64 = 14695981039346656037
+FNV_PRIME_64 = 1099511628211
+CHECKSUM_NULL = 0xFFFFFFFF (signed -1, legacy 32-bit path)
 ```
+
+The 64-bit path uses `UINT64_MAX` as its NULL sentinel and a 64-bit final mix.
+All canonical value handling (types, arrays, ranges, numerics, endianness)
+is shared between the 32-bit and 64-bit paths.
 
 ### Order-Independent Aggregation
 
@@ -258,8 +312,8 @@ therefore independent of scan order and partition boundaries.
 Logical table, index and database aggregates use a **sum plus count** instead.
 Addition is still order-independent, but the count preserves duplicate rows,
 which a pure XOR would cancel.  Parallel workers combine their partial sums and
-counts before the final 32-bit mix, so serial and parallel results are
-identical.
+counts before the final mix, so serial and parallel results are identical for
+both 32-bit and 64-bit algorithms.
 
 ### Type-Specific Handling
 

@@ -13,7 +13,9 @@
  *
  * 2. CELL LEVEL (pg_cell_checksum):
  *    - Logical only (depends only on cell value and attribute number)
- *    - NULL values return CHECKSUM_NULL (0xFFFFFFFF)
+ *    - Legacy 32-bit calls encode NULL as CHECKSUM_NULL (0xFFFFFFFF);
+ *      generic cell calls return a bytea digest and use the 64-bit sentinel
+ *      for the fnv64 path
  *    - Handles all PostgreSQL data types
  *    - Same value in same column -> same checksum
  *
@@ -70,10 +72,18 @@
  *       - Stable across physical reorganization of entire database
  *
  * Algorithm Details:
- * - Uses FNV-1a 32-bit hash (same as PostgreSQL's built-in checksums)
- * - Hash formula: hash = (hash ^ byte) * FNV_PRIME_32
- * - Different seeds for different contexts ensure uniqueness
- * - Order-independent aggregation ensures stability across scans
+ * - Page checksums wrap PostgreSQL's built-in 32-bit page checksum.
+ * - Legacy logical/physical SQL functions use FNV-1a 32-bit, preserving the
+ *   original 2.x values.
+ * - Generic overloads accept "fnv32" or "fnv64" and return big-endian raw
+ *   digests: 4 bytes for fnv32 and 8 bytes for fnv64.  Table/database physical
+ *   checksums always return 8 bytes because relation identity is part of the
+ *   value.
+ * - FNV-1a formula: hash = (hash ^ byte) * prime, with the 32-bit or 64-bit
+ *   basis/prime selected by the algorithm.
+ * - Different seeds for different contexts ensure uniqueness.
+ * - Order-independent aggregation ensures stability across scans; logical
+ *   aggregation mixes 64-bit partial sums and counts for the fnv64 path.
  *
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  *
@@ -326,7 +336,7 @@ typedef struct ChecksumAccum
 } ChecksumAccum;
 
 /*
- * ChecksumAccum64 - order-independent aggregate of 64-bit hashes (database)
+ * ChecksumAccum64 - order-independent aggregate of 64-bit physical hashes
  */
 typedef struct ChecksumAccum64
 {
@@ -338,7 +348,8 @@ typedef struct ChecksumAccum64
  * ChecksumLogicalAccum - aggregate for canonical logical checksums
  *
  * Uses addition plus a count so duplicate rows/index entries are preserved.
- * The final value is still a 32-bit FNV-1a checksum.
+ * The legacy finalizer produces a 32-bit FNV-1a checksum; the 64-bit variant
+ * below uses the same commutative aggregation with a 64-bit finalizer.
  */
 typedef struct ChecksumLogicalAccum
 {
@@ -379,10 +390,9 @@ typedef struct IndexLogicalScanState
  * ChecksumWorkerResult - fixed-size result returned by each worker
  *
  * Each worker writes a single entry of this type into shared memory, so
- * no streaming or variable-sized shared memory is required. For 32-bit
- * scans partial holds the uint32 aggregate zero-extended to 64 bits.
- * had_error is set by database scans when one or more relations had to be
- * skipped.
+ * no streaming or variable-sized shared memory is required. 32-bit scans
+ * zero-extend their aggregate; 64-bit scans store it directly.  had_error is
+ * set by database scans when one or more relations had to be skipped.
  */
 typedef struct ChecksumWorkerResult
 {
@@ -1068,7 +1078,7 @@ logical_accum_finalize64(ChecksumLogicalAccum64 *acc)
 
     mixed = hash_mix64(acc->sum) ^ hash_mix64(acc->count);
 
-    if (mixed == 0 || mixed == UINT64_MAX)
+    if (mixed == 0 || mixed == CHECKSUM_NULL_64)
         mixed = hash_mix64(mixed ^ FNV_BASIS_64);
 
     return mixed;
@@ -1996,7 +2006,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
     }
     else
     {
-        if (h == 0 || h == UINT64_MAX)
+        if (h == 0 || h == CHECKSUM_NULL_64)
             h = hash_mix64(h ^ FNV_BASIS_64 ^ (uint64) attnum);
     }
 
@@ -2049,20 +2059,6 @@ pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
     return logical_hash_datum(value, isnull, typid, typmod, attnum, 0);
 }
 
-/*
- * pg_cell_checksum - SQL function for cell-level checksums
- *
- * Public SQL-callable function that computes checksum for a specific
- * cell of a specific tuple identified by its TID (tuple identifier).
- *
- * Parameters:
- *   relname: OID of the relation (table)
- *   tid: TID (block number and offset) identifying the tuple
- *   attnum: Attribute number (1-based) of the column to checksum
- *
- * Returns: 32-bit checksum, or NULL if the tuple doesn't exist or
- *          attnum is out of range
- */
 /*
  * pg_cell_checksum_common - shared implementation for cell checksums
  *
@@ -2173,6 +2169,12 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
     return true;
 }
 
+/*
+ * pg_cell_checksum - legacy SQL function for cell-level checksums
+ *
+ * Returns a 32-bit integer.  The generic pg_cell_checksum(..., text)
+ * overload returns a bytea digest.
+ */
 PG_FUNCTION_INFO_V1(pg_cell_checksum);
 
 Datum
@@ -2300,7 +2302,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     /* Create 64-bit location from block number and offset */
     location = ((uint64)blkno << 32) | (uint64)offnum;
     
-    /* Calculate 32-bit hash of the location */
+    /* Hash the location with the selected algorithm. */
     location_hash = (algo == 0) ?
         fnv1a_32_hash(&location, sizeof(location), FNV_BASIS_32) :
         fnv1a_64_hash(&location, sizeof(location), FNV_BASIS_64);
@@ -2353,8 +2355,8 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     }
     else
     {
-        if (checksum == UINT64_MAX)
-            checksum = (UINT64_MAX ^ location_hash) & ~UINT64CONST(1);
+        if (checksum == CHECKSUM_NULL_64)
+            checksum = (CHECKSUM_NULL_64 ^ location_hash) & ~UINT64CONST(1);
         if (checksum == 0)
             checksum = (location_hash ^ mvcc_info ^ FNV_BASIS_64) & ~UINT64CONST(1);
     }
@@ -2531,7 +2533,7 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, int algo)
         if (checksum == CHECKSUM_NULL || checksum == 0)
             checksum = hash_mix32((uint32) checksum ^ FNV_BASIS_32);
     }
-    else if (checksum == UINT64_MAX || checksum == 0)
+    else if (checksum == CHECKSUM_NULL_64 || checksum == 0)
         checksum = hash_mix64(checksum ^ FNV_BASIS_64);
 
     return checksum;

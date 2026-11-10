@@ -144,6 +144,19 @@ If the generic call reports that the function does not exist, the installed
 extension is older than 2.2 or the upgrade did not run.  See
 [Upgrading to 2.2](#upgrading-to-22).
 
+## Upgrading to 2.3
+
+2.3 adds `pg_page_checksum_status(regclass, integer)`, which verifies a page
+against the checksum stored in its header and reports `data_checksums = off`
+as `checksums_disabled`.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.3.0';
+```
+
+The 2.3 upgrade also refreshes the `pg_cell_checksum` and `pg_page_checksum`
+comments for installations coming from 2.2.0.
+
 ## Upgrading to 2.2
 
 2.2 adds generic algorithm overloads for FNV-1a 32-bit and 64-bit digests.

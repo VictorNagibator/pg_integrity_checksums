@@ -101,6 +101,7 @@
 #include "access/brin.h"
 #include "access/parallel.h"
 #include "access/xact.h"
+#include "access/xlog.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_index.h"
 #include "catalog/pg_namespace.h"
@@ -129,6 +130,7 @@
 #include "storage/bufpage.h"
 #include "storage/dsm.h"
 #include "storage/shm_toc.h"
+#include "storage/smgr.h"
 #if PG_VERSION_NUM >= 140000
 #include "utils/multirangetypes.h"
 #endif
@@ -1376,32 +1378,27 @@ scan_relation_raw_pages64(Relation rel, BlockNumber start, BlockNumber end,
  */
 
 /*
- * pg_page_checksum - SQL function for page-level checksums
+ * pg_page_checksum_read - shared page read and checksum calculation
  *
- * Calculates PostgreSQL's built-in 16-bit page checksum.  This is a
- * calculator, not a verifier: it does not compare the result with the stored
- * pd_checksum, and it returns 0 for new (uninitialized) pages.  Callers that
- * need corruption detection must compare against a known-good value and must
- * treat data_checksums = off as inconclusive.
+ * Returns the calculated 16-bit checksum and the checksum stored in the page
+ * header.  *is_new is true for an uninitialized page; in that case both
+ * checksum values are zero.  The stored value is captured before the page is
+ * copied, because pg_checksum_page() zeroes pd_checksum in its input.
  */
-PG_FUNCTION_INFO_V1(pg_page_checksum);
-
-Datum
-pg_page_checksum(PG_FUNCTION_ARGS)
+static void
+pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
+                      uint16 *calculated, uint16 *stored, bool *is_new)
 {
-    Oid         reloid;
-    int32       blkno;
     Relation    rel;
     Buffer      buffer;
     Page        page;
     BlockNumber nblocks;
     char       *pagecopy;
-    uint16      checksum;
 
-    reloid = PG_GETARG_OID(0);
-    blkno = PG_GETARG_INT32(1);
+    *calculated = 0;
+    *stored = 0;
+    *is_new = false;
 
-    /* Open relation with AccessShareLock to prevent concurrent modifications */
     rel = relation_open(reloid, AccessShareLock);
 
     pg_integrity_checksums_require_select(reloid);
@@ -1440,7 +1437,33 @@ pg_page_checksum(PG_FUNCTION_ARGS)
                         blkno, relname, nblocks - 1)));
     }
 
-    /* Read the page from the buffer manager */
+    pagecopy = (char *) palloc(BLCKSZ);
+
+    /*
+     * Verification must inspect the on-disk checksum, not a possibly dirty
+     * buffer whose pd_checksum has not been updated yet.  Temporary relations
+     * have no shared storage, so they keep the buffer path.
+     */
+    if (from_disk && !RelationUsesLocalBuffers(rel))
+    {
+        smgrread(RelationGetSmgr(rel), MAIN_FORKNUM, (BlockNumber) blkno,
+                 pagecopy);
+
+        if (PageIsNew((Page) pagecopy))
+        {
+            pfree(pagecopy);
+            relation_close(rel, AccessShareLock);
+            *is_new = true;
+            return;
+        }
+
+        *stored = ((PageHeader) pagecopy)->pd_checksum;
+        *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
+        pfree(pagecopy);
+        relation_close(rel, AccessShareLock);
+        return;
+    }
+
     buffer = ReadBuffer(rel, (BlockNumber) blkno);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
     page = BufferGetPage(buffer);
@@ -1448,9 +1471,13 @@ pg_page_checksum(PG_FUNCTION_ARGS)
     if (PageIsNew(page))
     {
         UnlockReleaseBuffer(buffer);
+        pfree(pagecopy);
         relation_close(rel, AccessShareLock);
-        PG_RETURN_INT32(0);
+        *is_new = true;
+        return;
     }
+
+    *stored = ((PageHeader) page)->pd_checksum;
 
     /*
      * pg_checksum_page() transiently zeroes pd_checksum.  It must not run on
@@ -1458,16 +1485,78 @@ pg_page_checksum(PG_FUNCTION_ARGS)
      * the zeroed field, and an error between the two stores would leave the
      * page with a bogus checksum.  Copy the page and compute on the copy.
      */
-    pagecopy = (char *) palloc(BLCKSZ);
     memcpy(pagecopy, page, BLCKSZ);
     UnlockReleaseBuffer(buffer);
 
-    checksum = pg_checksum_page(pagecopy, (BlockNumber) blkno);
+    *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
 
     pfree(pagecopy);
     relation_close(rel, AccessShareLock);
+}
 
-    PG_RETURN_INT32((int32) checksum);
+/*
+ * pg_page_checksum - calculate PostgreSQL's 16-bit page checksum
+ *
+ * This is a calculator, not a verifier.  See pg_page_checksum_status() for
+ * validation against the stored pd_checksum.
+ */
+PG_FUNCTION_INFO_V1(pg_page_checksum);
+
+Datum
+pg_page_checksum(PG_FUNCTION_ARGS)
+{
+    Oid         reloid;
+    int32       blkno;
+    uint16      calculated;
+    uint16      stored;
+    bool        is_new;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        PG_RETURN_NULL();
+
+    reloid = PG_GETARG_OID(0);
+    blkno = PG_GETARG_INT32(1);
+
+    pg_page_checksum_read(reloid, blkno, false, &calculated, &stored, &is_new);
+
+    PG_RETURN_INT32(is_new ? 0 : (int32) calculated);
+}
+
+/*
+ * pg_page_checksum_status - verify a page against its stored checksum
+ *
+ * Returns one of: ok, mismatch, new, checksums_disabled.
+ */
+PG_FUNCTION_INFO_V1(pg_page_checksum_status);
+
+Datum
+pg_page_checksum_status(PG_FUNCTION_ARGS)
+{
+    Oid         reloid;
+    int32       blkno;
+    uint16      calculated;
+    uint16      stored;
+    bool        is_new;
+    const char *status;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        PG_RETURN_NULL();
+
+    reloid = PG_GETARG_OID(0);
+    blkno = PG_GETARG_INT32(1);
+
+    pg_page_checksum_read(reloid, blkno, true, &calculated, &stored, &is_new);
+
+    if (!DataChecksumsEnabled())
+        status = "checksums_disabled";
+    else if (is_new)
+        status = "new";
+    else if (calculated == stored)
+        status = "ok";
+    else
+        status = "mismatch";
+
+    PG_RETURN_TEXT_P(cstring_to_text(status));
 }
 
 /*-------------------------------------------------------------------------

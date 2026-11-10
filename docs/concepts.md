@@ -18,9 +18,9 @@ The extension works at six levels:
 
 Page checksums are PostgreSQL’s built-in **16-bit** page checksum.  Page-level
 64-bit checksums do not exist in this extension; the other levels have both
-physical and logical forms.  `pg_page_checksum` calculates the checksum but
-does not compare it with the stored `pd_checksum`; page verification is a
-separate operation.
+physical and logical forms.  `pg_page_checksum` calculates the checksum but does not
+compare it with the stored `pd_checksum`; use `pg_page_checksum_status` for
+verification.
 
 ## Logical vs physical
 

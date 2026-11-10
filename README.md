@@ -31,6 +31,7 @@ wider checksum or a raw `bytea` value is required.  It is described in the
 [function reference](docs/functions.md).
 
 Page checksums remain PostgreSQL's built-in 16-bit page checksum.
+`pg_page_checksum_status(...)` verifies a page against its stored checksum.
 
 ## Quick start
 

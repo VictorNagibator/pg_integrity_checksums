@@ -491,13 +491,17 @@ jobs:
           set -e
           PREFIX="$(pwd)/pg-${{ matrix.pg_version }}"
           cd "postgres-REL_${{ matrix.pg_version }}_STABLE"
+          # GCC 16 defaults to C23, where bool is a keyword. Older
+          # PostgreSQL branches still contain "typedef unsigned char bool",
+          # so build every branch as C17 instead of the compiler default.
+          export CFLAGS="-std=gnu17"
           # GCC 14 turned several formerly warning-only diagnostics (implicit
           # function declarations, incompatible pointer types, ...) into errors
           # by default. PostgreSQL 12 and 13 predate that change, so keep them
           # as warnings for the legacy branches.
           case "${{ matrix.pg_version }}" in
             12|13)
-              export CFLAGS="-Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
+              CFLAGS="$CFLAGS -Wno-error=implicit-function-declaration -Wno-error=incompatible-pointer-types -Wno-error=int-conversion"
               ;;
           esac
           # PostgreSQL 19 checks libpq with libpq_check.pl, which runs native

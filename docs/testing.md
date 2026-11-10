@@ -73,6 +73,8 @@ Physical checksums are storage- and architecture-dependent by design.
     inputs, TOAST, partitioning, and serial/parallel 64-bit consistency
 22. CLI v2 baselines: `capture --hash fnv64`, verify/update inheritance and
     rejection of mixed-hash diffs
+23. Streaming standby: logical table, index and database checksums match the
+    primary after WAL replay
 
 ## Building a Release
 

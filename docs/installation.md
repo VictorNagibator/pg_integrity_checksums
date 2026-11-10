@@ -147,8 +147,8 @@ extension is older than 2.2 or the upgrade did not run.  See
 ## Upgrading to 2.2
 
 2.2 adds generic algorithm overloads for FNV-1a 32-bit and 64-bit digests.
-Existing SQL functions and their 32-bit values are unchanged; page checksums
-remain 32-bit.  Upgrade with:
+Existing SQL functions and their 32-bit values are unchanged; PostgreSQL page
+checksums remain 16-bit.  Upgrade with:
 
 ```sql
 ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.2.0';

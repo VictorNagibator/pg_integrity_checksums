@@ -46,9 +46,11 @@ AS 'MODULE_PATHNAME', 'pg_page_checksum'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_page_checksum(regclass, integer) IS 
-'Physical checksum of a database page. Uses PostgreSQL''s built-in page checksum algorithm.
- Returns 0 for new (uninitialized) pages. The block number is validated; an
- out-of-range block raises an error instead of extending the relation.';
+'Calculates PostgreSQL''s built-in 16-bit page checksum. This function does not
+ compare the result with the stored pd_checksum. It returns 0 for new
+ (uninitialized) pages, so a zero result is not proof of a valid page. The
+ block number is validated; an out-of-range block raises an error instead of
+ extending the relation.';
 
 /*-----------------------------------------------------------
  * CELL LEVEL FUNCTIONS (Logical only)
@@ -62,8 +64,9 @@ AS 'MODULE_PATHNAME', 'pg_cell_checksum'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_cell_checksum(regclass, tid, integer) IS 
-'Logical checksum of a cell value. Returns CHECKSUM_NULL (4294967295) for NULL values.
- Same value in same column always produces same checksum. Independent of physical storage.';
+'Logical checksum of a cell value. Returns -1 (0xFFFFFFFF, CHECKSUM_NULL)
+ for NULL values. Same value in same column always produces the same checksum.
+ Independent of physical storage.';
 
 /*-----------------------------------------------------------
  * TUPLE LEVEL FUNCTIONS (Physical and Logical)

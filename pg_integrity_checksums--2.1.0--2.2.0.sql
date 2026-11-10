@@ -105,3 +105,15 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_database_physical_checksum(boolean, boolean, text) IS
 'Generic physical database checksum. Requires superuser. Returns an 8-byte digest for fnv32 and fnv64.';
+
+COMMENT ON FUNCTION pg_cell_checksum(regclass, tid, integer) IS
+'Logical checksum of a cell value. Returns -1 (0xFFFFFFFF, CHECKSUM_NULL)
+ for NULL values. Same value in same column always produces the same checksum.
+ Independent of physical storage.';
+
+COMMENT ON FUNCTION pg_page_checksum(regclass, integer) IS
+'Calculates PostgreSQL''s built-in 16-bit page checksum. This function does not
+ compare the result with the stored pd_checksum. It returns 0 for new
+ (uninitialized) pages, so a zero result is not proof of a valid page. The
+ block number is validated; an out-of-range block raises an error instead of
+ extending the relation.';

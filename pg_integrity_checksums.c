@@ -72,7 +72,7 @@
  *       - Stable across physical reorganization of entire database
  *
  * Algorithm Details:
- * - Page checksums wrap PostgreSQL's built-in 32-bit page checksum.
+ * - Page checksums wrap PostgreSQL's built-in 16-bit page checksum.
  * - Default logical/physical SQL functions use FNV-1a 32-bit, preserving the
  *   original 2.x values.
  * - Generic overloads accept "fnv32" or "fnv64" and return big-endian raw
@@ -860,7 +860,7 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
  *
  * Returns: Combined 32-bit hash value
  */
-uint32
+static uint32
 combine_checksums(uint32 current, uint32 new_val)
 {
     uint32 hash = current;
@@ -1378,11 +1378,11 @@ scan_relation_raw_pages64(Relation rel, BlockNumber start, BlockNumber end,
 /*
  * pg_page_checksum - SQL function for page-level checksums
  *
- * Wraps PostgreSQL's built-in page checksum functionality. This provides
- * a SQL interface to compute physical page checksums for any page in a
- * relation. Useful for detecting low-level storage corruption.
- *
- * Returns 0 for new (uninitialized) pages.
+ * Calculates PostgreSQL's built-in 16-bit page checksum.  This is a
+ * calculator, not a verifier: it does not compare the result with the stored
+ * pd_checksum, and it returns 0 for new (uninitialized) pages.  Callers that
+ * need corruption detection must compare against a known-good value and must
+ * treat data_checksums = off as inconclusive.
  */
 PG_FUNCTION_INFO_V1(pg_page_checksum);
 

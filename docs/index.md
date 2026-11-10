@@ -22,7 +22,7 @@ corruption within one cluster.
 | Index | yes | yes | Missing index entries vs corrupt pages |
 | Database | yes | yes | Whole-database fingerprint |
 
-Page checksums are PostgreSQL’s built-in 32-bit page checksum.  The other
+Page checksums are PostgreSQL’s built-in 16-bit page checksum.  The other
 levels use FNV-1a 32-bit by default and optionally expose 64-bit digests
 through the generic API.
 

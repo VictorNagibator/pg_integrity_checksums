@@ -70,6 +70,7 @@
 
 /* Function declarations - Public SQL-callable functions */
 extern Datum pg_page_checksum(PG_FUNCTION_ARGS);
+extern Datum pg_page_checksum_status(PG_FUNCTION_ARGS);
 extern Datum pg_cell_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_tuple_physical_checksum(PG_FUNCTION_ARGS);
 extern Datum pg_tuple_logical_checksum(PG_FUNCTION_ARGS);

@@ -1,0 +1,19 @@
+-- Page checksum status: the verifier must either compare successfully or
+-- report that the cluster was initialized without data checksums.
+CREATE TABLE page_status_reg (id integer PRIMARY KEY, payload text);
+INSERT INTO page_status_reg VALUES (1, 'one'), (2, 'two');
+SELECT pg_page_checksum_status('page_status_reg'::regclass, 0)
+       IN ('ok', 'checksums_disabled') AS status_known;
+ status_known 
+--------------
+ t
+(1 row)
+
+SELECT pg_page_checksum('page_status_reg'::regclass, 0)
+       BETWEEN 0 AND 65535 AS page_checksum_16bit;
+ page_checksum_16bit 
+---------------------
+ t
+(1 row)
+
+DROP TABLE page_status_reg;

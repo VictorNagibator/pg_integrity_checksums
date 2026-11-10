@@ -7,7 +7,7 @@ New to the extension? Read [Getting started](getting-started.md) and
 
 | Level | Generic API (optional) | Default 32-bit API |
 |---|---|---|
-| Page | — | `pg_page_checksum(regclass, integer)` |
+| Page | — | `pg_page_checksum(regclass, integer)` / `pg_page_checksum_status(regclass, integer)` |
 | Cell | `pg_cell_checksum(regclass, tid, integer, text)` | `pg_cell_checksum(regclass, tid, integer)` |
 | Tuple physical | `pg_tuple_physical_checksum(regclass, tid, boolean, text)` | `pg_tuple_physical_checksum(regclass, tid, boolean)` |
 | Tuple logical | `pg_tuple_logical_checksum(regclass, tid, text)` | `pg_tuple_logical_checksum(regclass, tid)` |
@@ -48,9 +48,25 @@ the stored `pd_checksum`.  It returns `0` for a new/uninitialized page, so a
 zero result cannot be distinguished from a valid page whose calculated
 checksum is zero.  PostgreSQL must also have `data_checksums = on` for the
 stored checksum to be meaningful; otherwise `pd_checksum` is not maintained.
-A dedicated verification function is planned; until then, compare the result
-with the stored page checksum using `pageinspect` and treat `0`/disabled data
-checksums as inconclusive.
+Use `pg_page_checksum_status` for an actual comparison.
+
+**`pg_page_checksum_status(regclass, integer) -> text`**
+
+Compares the calculated 16-bit page checksum with the value stored in the page
+header and returns:
+
+| Result | Meaning |
+|---|---|
+| `ok` | Calculated and stored checksums match |
+| `mismatch` | The page checksum does not match |
+| `new` | The page is new/uninitialized |
+| `checksums_disabled` | PostgreSQL was initialized without data checksums |
+
+The status function reads relation storage directly, so it verifies the page
+currently on disk rather than a possibly dirty shared-buffer copy.  An invalid
+block or a relation without storage raises an error rather than returning a
+status.  Use `pg_page_checksum` when you explicitly want the calculated value
+from the buffer.
 
 ```sql
 -- Get checksum for page 5 of a table

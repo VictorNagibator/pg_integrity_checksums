@@ -1,5 +1,12 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.3.0   2026-11-10
+
+    - Add pg_page_checksum_status(regclass, integer) to verify a page against
+      its stored pd_checksum, including data_checksums-disabled reporting.
+    - Clarify that pg_page_checksum() calculates a 16-bit page checksum and
+      does not itself verify the stored value.
+
 2.2.0   2026-11-09
 
     - Add generic algorithm overloads for data, text, cell, tuple, table,

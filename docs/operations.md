@@ -220,9 +220,9 @@ FROM expected;
 
 `pg_page_checksum` only calculates PostgreSQL's 16-bit page checksum.  It does
 not compare the value with the stored `pd_checksum`, and `0` is ambiguous
-(new page or a genuine zero).  Use it as a calculator, not as a standalone
-corruption verdict; `data_checksums = on` is required for stored page
-checksums to be meaningful.
+(new page or a genuine zero).  Use `pg_page_checksum_status` when you want a
+verification result.  `data_checksums = on` is required for stored page
+checksums to be meaningful; without it the status is `checksums_disabled`.
 
 ### 5. Batch Change Auditing
 

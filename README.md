@@ -8,7 +8,6 @@
 [![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Docs](https://img.shields.io/badge/docs-online-blue)](https://victornagibator.github.io/pg_integrity_checksums/)
-[![XERJ Corpus Hub contributor](https://hub.xerj.org/contributors/VictorNagibator/badge.svg)](https://hub.xerj.org/contributors/VictorNagibator)
 
 ## Overview
 
@@ -31,7 +30,7 @@ A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
 wider checksum or a raw `bytea` value is required.  It is described in the
 [function reference](docs/functions.md).
 
-Page checksums remain PostgreSQL's built-in 32-bit page checksum.
+Page checksums remain PostgreSQL's built-in 16-bit page checksum.
 
 ## Quick start
 

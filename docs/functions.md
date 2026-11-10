@@ -31,18 +31,26 @@ above; only the return type and algorithm argument differ.
 
 The functions in this section return `integer` or `bigint` and use FNV-1a
 32-bit.  This is the simplest API and the default for most users.
-`pg_page_checksum` is the page API: PostgreSQL page checksums are always
-32-bit.
+`pg_page_checksum` is the page API: PostgreSQL page checksums are 16-bit.
 
 ### Page Level Functions (Physical Only)
 
 **`pg_page_checksum(regclass, integer) -> integer`**
 
-Computes PostgreSQL's built-in page checksum for physical page corruption detection.
-The block number is validated: an out-of-range block (including `-1`, which
-would otherwise be interpreted as `P_NEW`) raises an error instead of reading
-or extending the relation.  The page is copied before the checksum is
-computed, so the shared buffer is never modified.
+Calculates PostgreSQL's built-in **16-bit** page checksum.  The block number is
+validated: an out-of-range block (including `-1`, which would otherwise be
+interpreted as `P_NEW`) raises an error instead of reading or extending the
+relation.  The page is copied before the checksum is computed, so the shared
+buffer is never modified.
+
+This is a calculator, not a verifier: it does **not** compare the result with
+the stored `pd_checksum`.  It returns `0` for a new/uninitialized page, so a
+zero result cannot be distinguished from a valid page whose calculated
+checksum is zero.  PostgreSQL must also have `data_checksums = on` for the
+stored checksum to be meaningful; otherwise `pd_checksum` is not maintained.
+A dedicated verification function is planned; until then, compare the result
+with the stored page checksum using `pageinspect` and treat `0`/disabled data
+checksums as inconclusive.
 
 ```sql
 -- Get checksum for page 5 of a table
@@ -299,7 +307,7 @@ SELECT pg_checksum_bigint(pg_table_logical_checksum('orders'::regclass, 'fnv64')
 ```
 
 `pg_page_checksum` intentionally has no generic overload: page checksums are
-PostgreSQL's built-in 32-bit page checksum.
+PostgreSQL's built-in 16-bit page checksum.
 
 ---
 

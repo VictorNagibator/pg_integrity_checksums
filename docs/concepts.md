@@ -16,9 +16,11 @@ The extension works at six levels:
 | Index | yes | yes | Is the physical index intact, or does it contain the expected entries? |
 | Database | yes | yes | Did anything in the database change? |
 
-Page checksums are PostgreSQL’s built-in page checksum.  Page-level 64-bit
-checksums do not exist in this extension; the other levels have both physical
-and logical forms.
+Page checksums are PostgreSQL’s built-in **16-bit** page checksum.  Page-level
+64-bit checksums do not exist in this extension; the other levels have both
+physical and logical forms.  `pg_page_checksum` calculates the checksum but
+does not compare it with the stored `pd_checksum`; page verification is a
+separate operation.
 
 ## Logical vs physical
 
@@ -120,6 +122,18 @@ For 4-byte `fnv32` digests, the one-argument form sign-extends.  Use
 example, to compare with a table logical checksum from the default API).
 
 The detailed signatures are in the [function reference](functions.md).
+
+## Collision probability
+
+A 32-bit checksum has `2^32` possible outputs.  For an unrelated accidental
+change, the rough chance of an unnoticed collision is about `2^-32`, or
+`2.3e-10`.  For a 64-bit checksum it is about `2^-64`, or `5.4e-20`.
+
+The final table/database checksum is still only as wide as the selected
+output.  These numbers are approximate and assume a random change; FNV-1a is
+not cryptographic, and an adversary who can recompute the checksum can
+produce a collision.  The 32-bit default is adequate for ordinary change and
+corruption detection.
 
 ## How aggregation works
 

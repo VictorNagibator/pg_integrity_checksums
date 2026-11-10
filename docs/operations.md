@@ -36,9 +36,13 @@ These limitations are documented rather than silently ignored.
   table partitions are skipped by partitioned table checksums because they
   have no local storage in this database.
 * **Non-cryptographic hashes.** The default SQL API uses 32-bit FNV-1a;
-  generic overloads support 32-bit and 64-bit FNV-1a.  Page checksums remain
-  PostgreSQL's built-in 32-bit checksum.  None of these are cryptographic
-  hashes or provide tamper evidence.
+  generic overloads support 32-bit and 64-bit FNV-1a.  PostgreSQL page
+  checksums are 16-bit.  None of these are cryptographic hashes or provide
+  tamper evidence.
+* **Collision probability.** A random accidental change is missed with
+  probability about `2^-32` (`2.3e-10`) by a 32-bit checksum and `2^-64`
+  (`5.4e-20`) by a 64-bit checksum.  These are rough estimates, not a
+  cryptographic security claim.
 * **RLS and column privileges.** Relations protected by row-level security are
   rejected because a direct heap scan cannot apply policies.  Table-level
   `SELECT` is required; column-only privileges are not sufficient.
@@ -107,6 +111,25 @@ is always identical to the serial result for the same data state, regardless
 of the number of workers. The same consistent snapshot is propagated to all
 workers, so every tuple is checksummed as of the same point in time.
 
+### Snapshot consistency across calls
+
+One SQL statement sees one snapshot.  A single `pg_table_logical_checksum` or
+`pg_database_logical_checksum` call is therefore internally consistent, but two
+separate calls under the default `READ COMMITTED` isolation can see different
+points in time.  A table and its index, or several tables, should be checked
+inside one transaction when the comparison matters:
+
+```sql
+BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SELECT pg_table_logical_checksum('orders'::regclass);
+SELECT pg_table_logical_checksum('customers'::regclass);
+COMMIT;
+```
+
+The CLI already does this for capture and verify.  A long repeatable-read
+transaction keeps an `xmin` horizon and can delay `VACUUM`; keep checksum
+transactions as short as the workload allows and monitor long-running sessions.
+
 ---
 
 ## Practical Applications
@@ -174,77 +197,80 @@ WITH table_checksums AS (
 SELECT * FROM table_checksums ORDER BY relname;
 ```
 
-### 4. Corruption Detection and Repair
+### 4. Compare Against a Known-Good Value
+
+A checksum is useful only when compared with a value recorded at a known-good
+point.  The audit table from the first example provides that history:
 
 ```sql
--- Find potentially corrupted tuples
-SELECT ctid, * 
-FROM my_table
-WHERE pg_tuple_physical_checksum('my_table'::regclass, ctid, false) != 
-      expected_checksum;
-
--- Validate index integrity
-SELECT 
-    indexname,
-    pg_index_physical_checksum(indexname::regclass) as current,
-    expected_checksum,
-    CASE WHEN pg_index_physical_checksum(indexname::regclass) != expected_checksum 
-         THEN 'CORRUPT' 
-         ELSE 'OK' 
-    END as status
-FROM index_monitoring;
-```
-
-### 5. Change Detection for Auditing
-
-```sql
--- Trigger-based change detection
-CREATE FUNCTION audit_table_changes()
-RETURNS trigger AS $$
-DECLARE
-    current_logical bigint;
-    current_physical bigint;
-BEGIN
-    current_logical := pg_table_logical_checksum(TG_TABLE_NAME::regclass);
-    current_physical := pg_table_physical_checksum(TG_TABLE_NAME::regclass, false);
-    
-    -- Compare with last known good checksums
-    IF EXISTS (
-        SELECT 1 FROM checksum_baseline 
-        WHERE table_name = TG_TABLE_NAME 
-        AND (logical_cs != current_logical OR physical_cs != current_physical)
-    ) THEN
-        INSERT INTO unauthorized_changes 
-        VALUES (TG_TABLE_NAME, current_logical, current_physical, now());
-    END IF;
-    
-    RETURN NULL;
-END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
-
--- Statement-level trigger: the checksum is computed once per statement,
--- after the statement's changes are visible.  The baseline and audit tables
--- are application-owned and are not created by the extension.
-CREATE TRIGGER audit_changes
-AFTER INSERT OR UPDATE OR DELETE ON transactions
-FOR EACH STATEMENT
-EXECUTE FUNCTION audit_table_changes();
-```
-
-### 6. Point-in-Time Recovery Validation
-
-```sql
--- Verify restored database matches expected state
+WITH expected AS (
+    SELECT checksum_value
+    FROM checksum_audit_log
+    WHERE table_name = 'transactions'
+      AND checksum_type = 'logical'
+    ORDER BY audit_time DESC
+    LIMIT 1
+)
 SELECT
-    'Restored DB'::text AS source,
-    pg_database_logical_checksum(false, true)::text AS checksum
+    pg_table_logical_checksum('transactions'::regclass) AS current_value,
+    expected.checksum_value AS expected_value,
+    pg_table_logical_checksum('transactions'::regclass) = expected.checksum_value AS matches
+FROM expected;
+```
+
+`pg_page_checksum` only calculates PostgreSQL's 16-bit page checksum.  It does
+not compare the value with the stored `pd_checksum`, and `0` is ambiguous
+(new page or a genuine zero).  Use it as a calculator, not as a standalone
+corruption verdict; `data_checksums = on` is required for stored page
+checksums to be meaningful.
+
+### 5. Batch Change Auditing
+
+Record checksums after a batch, ETL run or maintenance window.  Do not compute a
+whole-table checksum in a per-row trigger: that makes every write O(table) and
+would flag every legitimate change as suspicious.
+
+```sql
+-- Record the state once, after the batch has finished.
+INSERT INTO checksum_audit_log (table_name, checksum_type, checksum_value)
+SELECT 'transactions', 'logical',
+       pg_table_logical_checksum('transactions'::regclass)
 UNION ALL
-SELECT
-    'Backup timestamp ' || backup_time,
-    expected_checksum::text
-FROM backup_catalog
-WHERE backup_time = '2024-01-15 03:00:00';
+SELECT 'transactions', 'physical',
+       pg_table_physical_checksum('transactions'::regclass, false);
 ```
+
+Compare later runs with the most recent known-good row, for example with the
+query in section 4.
+
+### 6. Restore Validation
+
+Record a checksum before the backup, then compare the restored table with that
+recorded value:
+
+```sql
+-- Before backup: record a known-good logical checksum.
+INSERT INTO checksum_audit_log (table_name, checksum_type, checksum_value)
+VALUES ('transactions', 'logical',
+        pg_table_logical_checksum('transactions'::regclass));
+
+-- After restore: compare with the latest recorded value.
+WITH expected AS (
+    SELECT checksum_value
+    FROM checksum_audit_log
+    WHERE table_name = 'transactions'
+      AND checksum_type = 'logical'
+    ORDER BY audit_time DESC
+    LIMIT 1
+)
+SELECT
+    pg_table_logical_checksum('transactions'::regclass) = expected.checksum_value AS restored_ok
+FROM expected;
+```
+
+A database-level checksum is also available when the recorded value was
+produced by `pg_database_logical_checksum`; do not compare a table checksum
+with a database checksum.
 
 ---
 

@@ -415,6 +415,10 @@ Different tables are never read from separate snapshots or separate
 connections.  Parallelism is provided by the extension's
 `pg_integrity_checksums.workers` GUC inside that transaction.
 
+A long repeatable-read transaction holds an `xmin` horizon and can delay
+`VACUUM`.  Keep capture/verify windows bounded and monitor long-running
+sessions on busy databases.
+
 ### Object scope
 
 By default the CLI discovers:

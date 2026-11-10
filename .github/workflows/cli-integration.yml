@@ -37,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
     env:
       PG: ${{ matrix.pg }}
     steps:

@@ -54,7 +54,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm]
         arch: [x86_64, arm64]
-        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
         exclude:
           - os: ubuntu-latest
             arch: arm64
@@ -163,7 +163,7 @@ jobs:
       fail-fast: false
       matrix:
         arch: [x86_64, aarch64]
-        pg: [12, 13, 14, 15, 16, 17, 18, 19]
+        pg: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
 
     steps:
       - name: Checkout repository
@@ -280,7 +280,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17, 18, 19]
+        pg_version: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
 
     steps:
       - name: Checkout repository
@@ -395,7 +395,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg_version: [12, 13, 14, 15, 16, 17, 18, 19]
+        pg_version: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
 
     defaults:
       run:

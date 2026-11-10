@@ -13,9 +13,11 @@ make installcheck
 make installcheck enable_tap_tests=yes PROVE=prove
 ```
 
-CI runs both suites on every supported major version (PostgreSQL 12 through 19)
-on Linux x86_64 and ARM64, macOS ARM64, Windows x64, and FreeBSD amd64 and
-ARM64.  [CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/codeql.yml) analyzes the C and Go sources, the
+On merges to `main` and on releases, CI runs both suites on every supported
+major version (PostgreSQL 12 through 19) on Linux x86_64 and ARM64, macOS
+ARM64, Windows x64, and FreeBSD amd64 and ARM64.  Pull requests use a reduced
+PostgreSQL 12/16/19 matrix on the same platforms; the full matrix runs after
+merge.  [CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/codeql.yml) analyzes the C and Go sources, the
 [Quality workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
 builds for PostgreSQL 12–19, and the
 [Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml) builds PG 12–18 images and

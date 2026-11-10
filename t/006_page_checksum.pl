@@ -37,8 +37,10 @@ cmp_ok($value, '<=', 65535, 'page checksum is 16-bit');
 $node_on->stop;
 
 my $node_off = PostgreSQL::Test::Cluster->new('page_checksum_off');
+my $pg_config_version = qx{pg_config --version};
+my ($pg_major) = $pg_config_version =~ /(\d+)/;
 my @off_extra = ();
-push @off_extra, '--no-data-checksums' if $node_off->pg_version->major >= 18;
+push @off_extra, '--no-data-checksums' if defined($pg_major) && $pg_major >= 18;
 $node_off->init(extra => \@off_extra);
 $node_off->start;
 $node_off->safe_psql('postgres', 'CREATE EXTENSION pg_integrity_checksums;');

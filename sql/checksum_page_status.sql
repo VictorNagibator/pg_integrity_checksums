@@ -2,6 +2,7 @@
 -- report that the cluster was initialized without data checksums.
 CREATE TABLE page_status_reg (id integer PRIMARY KEY, payload text);
 INSERT INTO page_status_reg VALUES (1, 'one'), (2, 'two');
+CHECKPOINT;
 
 SELECT pg_page_checksum_status('page_status_reg'::regclass, 0)
        IN ('ok', 'checksums_disabled') AS status_known;

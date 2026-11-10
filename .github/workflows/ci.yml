@@ -70,18 +70,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex curl ca-certificates libipc-run-perl
 
+      - name: Resolve pinned PostgreSQL source
+        id: pgref
+        run: |
+          echo "ref=$(bash .github/scripts/pg-source-ref.sh "$PG")" >> "$GITHUB_OUTPUT"
+
       - name: Restore PostgreSQL build cache
         id: pg-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pg${{ matrix.pg }}
-          key: pg-linux-${{ matrix.pg }}-${{ matrix.arch }}-v1
+          key: pg-linux-${{ matrix.pg }}-${{ matrix.arch }}-${{ steps.pgref.outputs.ref }}-v1
 
-      - name: Fetch PostgreSQL source
+      - name: Fetch pinned PostgreSQL source
         run: |
+          PG_REF="${{ steps.pgref.outputs.ref }}"
           curl -L -o pg.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf pg.tar.gz
+          mv "postgres-${PG_REF}" "postgres-REL_${PG}_STABLE"
           echo "TAP_PERL_DIR=$PWD/postgres-REL_${PG}_STABLE/src/test/perl" >> "$GITHUB_ENV"
 
       - name: Build PostgreSQL ${{ matrix.pg }} if not cached
@@ -165,8 +172,10 @@ jobs:
       - name: Resolve PostgreSQL source checksum
         id: pg-src
         run: |
+          PG_REF="$(bash .github/scripts/pg-source-ref.sh "$PG")"
+          echo "ref=$PG_REF" >> "$GITHUB_OUTPUT"
           curl -L -o pg-src-cache.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           echo "sha=$(sha256sum pg-src-cache.tar.gz | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
       - name: Restore FreeBSD PostgreSQL build
@@ -194,7 +203,7 @@ jobs:
             PREFIX="/usr/local/pg$PG"
             rm -rf "$PG_SRC"
             tar -xzf "$GITHUB_WORKSPACE/pg-src-cache.tar.gz" -C /tmp
-            mv "/tmp/postgres-REL_$PG"_STABLE "$PG_SRC"
+            mv "/tmp/postgres-${{ steps.pg-src.outputs.ref }}" "$PG_SRC"
 
             CACHE_FILE="$GITHUB_WORKSPACE/pg-cache/pg$PG.tar.gz"
             if [ -f "$CACHE_FILE" ]; then
@@ -295,15 +304,22 @@ jobs:
           brew install postgresql@${{ matrix.pg_version }}
           echo "PG_CONFIG=$(brew --prefix postgresql@${{ matrix.pg_version }})/bin/pg_config" >> "$GITHUB_ENV"
 
+      - name: Resolve pinned PostgreSQL source
+        id: pgref
+        run: |
+          echo "ref=$(bash .github/scripts/pg-source-ref.sh "${{ matrix.pg_version }}")" >> "$GITHUB_OUTPUT"
+
       - name: Install TAP prerequisites and fetch PostgreSQL ${{ matrix.pg_version }} sources
         run: |
+          PG_REF="${{ steps.pgref.outputs.ref }}"
           curl -L -o "$RUNNER_TEMP/ipc-run.tar.gz" \
             "https://cpan.metacpan.org/authors/id/T/TO/TODDR/IPC-Run-20231003.0.tar.gz"
           tar -xzf "$RUNNER_TEMP/ipc-run.tar.gz" -C "$RUNNER_TEMP"
           echo "PERL5LIB=$RUNNER_TEMP/IPC-Run-20231003.0/lib" >> "$GITHUB_ENV"
           curl -L -o "$RUNNER_TEMP/pg-src.tar.gz" \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg_version }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf "$RUNNER_TEMP/pg-src.tar.gz" -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/postgres-${PG_REF}" "$RUNNER_TEMP/postgres-REL_${{ matrix.pg_version }}_STABLE"
           echo "PG_SRC=$RUNNER_TEMP/postgres-REL_${{ matrix.pg_version }}_STABLE" >> "$GITHUB_ENV"
           echo "TAP_PERL_DIR=$RUNNER_TEMP/postgres-REL_${{ matrix.pg_version }}_STABLE/src/test/perl" >> "$GITHUB_ENV"
 
@@ -420,11 +436,18 @@ jobs:
           make
           make install
 
-      - name: Fetch PostgreSQL ${{ matrix.pg_version }} sources and Perl test modules
+      - name: Resolve pinned PostgreSQL source
+        id: pgref
         run: |
+          echo "ref=$(bash .github/scripts/pg-source-ref.sh "${{ matrix.pg_version }}")" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch pinned PostgreSQL ${{ matrix.pg_version }} sources and Perl test modules
+        run: |
+          PG_REF="${{ steps.pgref.outputs.ref }}"
           curl -L -o pg-src.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg_version }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf pg-src.tar.gz
+          mv "postgres-${PG_REF}" "postgres-REL_${{ matrix.pg_version }}_STABLE"
           TAP_PERL_DIR="$(pwd)/postgres-REL_${{ matrix.pg_version }}_STABLE/src/test/perl"
           echo "TAP_PERL_DIR=$TAP_PERL_DIR" >> "$GITHUB_ENV"
           echo "PROVE_BIN=/usr/bin/perl.exe /usr/bin/core_perl/prove" >> "$GITHUB_ENV"
@@ -458,7 +481,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pg-${{ matrix.pg_version }}
-          key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-v2
+          key: ${{ runner.os }}-pg-${{ matrix.pg_version }}-${{ steps.pgref.outputs.ref }}-v2
           restore-keys: |
             ${{ runner.os }}-pg-${{ matrix.pg_version }}-
 

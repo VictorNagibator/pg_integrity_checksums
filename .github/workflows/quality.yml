@@ -63,9 +63,11 @@ jobs:
 
       - name: Build PostgreSQL ${{ matrix.pg }} for coverage
         run: |
+          PG_REF="$(bash .github/scripts/pg-source-ref.sh "${{ matrix.pg }}")"
           curl -L -o pg.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf pg.tar.gz
+          mv "postgres-${PG_REF}" "postgres-REL_${{ matrix.pg }}_STABLE"
           cd postgres-REL_${{ matrix.pg }}_STABLE
           ./configure \
             --prefix="$PWD/../pgcov" \
@@ -152,9 +154,11 @@ jobs:
 
       - name: Build PostgreSQL ${{ matrix.pg }} with ASAN and UBSAN
         run: |
+          PG_REF="$(bash .github/scripts/pg-source-ref.sh "${{ matrix.pg }}")"
           curl -L -o pg.tar.gz \
-            "https://github.com/postgres/postgres/archive/refs/heads/REL_${{ matrix.pg }}_STABLE.tar.gz"
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf pg.tar.gz
+          mv "postgres-${PG_REF}" "postgres-REL_${{ matrix.pg }}_STABLE"
           cd postgres-REL_${{ matrix.pg }}_STABLE
           # ASAN's fake stack makes the stack-depth check ineffective on
           # PostgreSQL 12-17.  This is a sanitizer harness workaround, not a

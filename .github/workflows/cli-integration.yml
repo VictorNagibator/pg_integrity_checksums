@@ -53,17 +53,25 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y build-essential bison flex curl ca-certificates
 
+      - name: Resolve pinned PostgreSQL source
+        id: pgref
+        run: |
+          echo "ref=$(bash .github/scripts/pg-source-ref.sh "$PG")" >> "$GITHUB_OUTPUT"
+
       - name: Restore PostgreSQL build cache
         id: pg-cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: pg${{ matrix.pg }}
-          key: cli-pg-${{ matrix.pg }}-v1
+          key: cli-pg-${{ matrix.pg }}-${{ steps.pgref.outputs.ref }}-v1
 
-      - name: Fetch PostgreSQL source
+      - name: Fetch pinned PostgreSQL source
         run: |
-          curl -L -o pg.tar.gz "https://github.com/postgres/postgres/archive/refs/heads/REL_${PG}_STABLE.tar.gz"
+          PG_REF="${{ steps.pgref.outputs.ref }}"
+          curl -L -o pg.tar.gz \
+            "https://github.com/postgres/postgres/archive/${PG_REF}.tar.gz"
           tar -xzf pg.tar.gz
+          mv "postgres-${PG_REF}" "postgres-REL_${PG}_STABLE"
 
       - name: Build PostgreSQL ${{ matrix.pg }} if not cached
         if: steps.pg-cache.outputs.cache-hit != 'true'

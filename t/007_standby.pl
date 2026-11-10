@@ -9,6 +9,11 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use PostgreSQL::Test::Cluster;
 
+# The TAP backup helper invokes pg_basebackup through the Windows shell; the
+# current CI image does not provide a usable streaming backup path there.
+plan skip_all => 'streaming standby TAP is not supported on Windows'
+  if $^O eq 'MSWin32';
+
 my $primary = PostgreSQL::Test::Cluster->new('standby_primary');
 $primary->init(allows_streaming => 1);
 $primary->start;

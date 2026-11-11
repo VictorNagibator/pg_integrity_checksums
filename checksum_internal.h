@@ -40,6 +40,51 @@ typedef struct ChecksumLogicalAccum64
     uint64      count;
 } ChecksumLogicalAccum64;
 
+/*
+ * ChecksumTaskType - identifies which checksum a parallel scan computes
+ */
+typedef enum ChecksumTaskType
+{
+    CHECKSUM_TASK_TABLE_PHYSICAL = 1,
+    CHECKSUM_TASK_TABLE_LOGICAL,
+    CHECKSUM_TASK_INDEX_PHYSICAL,
+    CHECKSUM_TASK_INDEX_LOGICAL,
+    CHECKSUM_TASK_DATABASE_PHYSICAL,
+    CHECKSUM_TASK_DATABASE_LOGICAL
+} ChecksumTaskType;
+
+
+/*
+ * ChecksumRelationItem - a single relation processed during a database scan
+ */
+typedef struct ChecksumRelationItem
+{
+    Oid         reloid;
+    char        relkind;
+} ChecksumRelationItem;
+
+
+/* Parallel execution and shared scan configuration. */
+extern int pg_integrity_checksums_worker_count(void);
+extern Snapshot pg_integrity_checksums_get_snapshot(void);
+extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type,
+                                                        Oid reloid,
+                                                        bool include_header,
+                                                        uint32 nblocks,
+                                                        int workers, int algo,
+                                                        ChecksumAccum *acc,
+                                                        ChecksumLogicalAccum *logical_acc,
+                                                        ChecksumAccum64 *acc64,
+                                                        ChecksumLogicalAccum64 *logical_acc64);
+extern void pg_integrity_checksums_parallel_scan_database(bool physical,
+                                                           ChecksumRelationItem *items,
+                                                           uint32 nitems,
+                                                           int workers, int algo,
+                                                           ChecksumAccum64 *acc,
+                                                           ChecksumLogicalAccum *logical_acc,
+                                                           ChecksumLogicalAccum64 *logical_acc64,
+                                                           bool *had_error);
+
 /* FNV-1a helpers. */
 extern uint32 fnv1a_32_buf(const unsigned char *bytes, size_t len, uint32 hash);
 extern uint32 fnv1a_32_hash(const void *data, size_t len, uint32 seed);
@@ -69,6 +114,23 @@ extern void logical_accum_add(ChecksumLogicalAccum *acc, uint32 h);
 extern uint32 logical_accum_finalize(ChecksumLogicalAccum *acc);
 extern void logical_accum_add64(ChecksumLogicalAccum64 *acc, uint64 h);
 extern uint64 logical_accum_finalize64(ChecksumLogicalAccum64 *acc);
+
+/* Table checksum implementations shared with the database scan. */
+extern uint64 pg_table_physical_checksum_calc(Oid reloid,
+                                              bool include_header,
+                                              bool check_privileges);
+extern uint64 pg_table_physical_checksum_calc64(Oid reloid,
+                                                bool include_header,
+                                                bool check_privileges);
+extern int64 pg_table_logical_checksum_calc(Oid reloid,
+                                            bool check_privileges,
+                                            bool *is_null);
+extern uint64 pg_table_logical_checksum_calc64(Oid reloid,
+                                               bool check_privileges,
+                                               bool *is_null);
+
+/* Partition helpers shared by table and index checksums. */
+extern List *pg_integrity_checksums_leaf_indexes(Oid indexoid);
 
 /* Relation, page and tuple validation. */
 extern void pg_integrity_checksums_require_select(Oid reloid);

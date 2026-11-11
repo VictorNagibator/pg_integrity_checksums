@@ -140,14 +140,21 @@ The implementation is split into a small set of translation units:
 
 | File | Responsibility |
 |---|---|
-| `pg_integrity_checksums.c` | SQL entry points, physical and logical scans, parallelism, database enumeration |
+| `pg_integrity_checksums.c` | module entry point, GUCs and shared worker/snapshot helpers |
 | `checksum_hash.c` | FNV-1a, hash combination, order-independent aggregation |
 | `checksum_types.c` | canonical encoding for scalar, array, composite, range and multirange values |
-| `checksum_internal.h` | internal interfaces and aggregation state shared by the modules |
+| `checksum_validation.c` | relation, page, line-pointer and tuple validation |
+| `checksum_page.c` | page checksum verification and canonical cell checksums |
+| `checksum_tuple.c` | physical and logical tuple checksums |
+| `checksum_scan.c` | serial block-range scans |
+| `checksum_table.c` | table checksums and partition helpers |
+| `checksum_index.c` | physical/logical index checksums and index scans |
+| `checksum_parallel.c` | dynamic shared-memory parallel execution |
+| `checksum_database.c` | database enumeration and database SQL entry points |
+| `checksum_utility.c` | generic data/text checksum helpers |
+| `checksum_internal.h` | internal interfaces and state shared by the modules |
 
-The split is a maintainability refactor, not a behavioral change.  The
-remaining scan and database code is still organized in sections and can be
-extracted in follow-up changes.
+The split is a maintainability refactor, not a behavioral change.
 
 ## Related documentation
 

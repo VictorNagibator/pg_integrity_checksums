@@ -90,70 +90,13 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
-#include <math.h>
 #include "fmgr.h"
-#include "funcapi.h"
-#include "access/heapam.h"
-#include "access/htup_details.h"
-#include "access/tableam.h"
-#include "access/genam.h"
-#include "access/nbtree.h"
-#include "access/brin.h"
-#include "access/parallel.h"
 #include "access/xact.h"
-#include "access/xlog.h"
-#include "catalog/pg_type.h"
-#include "catalog/pg_index.h"
-#include "catalog/pg_namespace.h"
-#include "catalog/namespace.h"
-#include "catalog/pg_class.h" 
-#include "catalog/pg_inherits.h"
-#include "catalog/pg_am.h"          /* *_AM_OID (all supported versions) */
-#include "catalog/index.h"          /* IndexGetRelation, BuildIndexInfo, FormIndexDatum */
-#include "executor/executor.h"
-#include "executor/tuptable.h"
-#include "nodes/execnodes.h"
-#include "nodes/nodeFuncs.h"
-
-/*
- * The OID of the pg_index_indrelid_index index is exposed differently
- * depending on the release: PostgreSQL 13 and older declare it in
- * catalog/indexing.h, while PostgreSQL 14 and newer generate it into
- * catalog/pg_index_d.h.
- */
-#if PG_VERSION_NUM >= 140000
-#include "catalog/pg_index_d.h"     /* IndexIndrelidIndexId */
-#else
-#include "catalog/indexing.h"       /* IndexIndrelidIndexId */
-#endif
-#include "storage/bufmgr.h"
-#include "storage/bufpage.h"
-#include "storage/dsm.h"
-#include "storage/shm_toc.h"
-#include "storage/smgr.h"
-#if PG_VERSION_NUM >= 140000
-#include "utils/multirangetypes.h"
-#endif
-#include "utils/acl.h"
-#include "utils/builtins.h"
-#include "utils/errcodes.h"
-#include "utils/array.h"
-#include "utils/arrayaccess.h"
-#include "utils/fmgroids.h"
-#include "utils/inval.h"
-#include "utils/lsyscache.h"
-#include "utils/numeric.h"
-#include "utils/rangetypes.h"
-#include "utils/rel.h"
-#include "utils/typcache.h"
-#include "utils/resowner.h"
-#include "utils/rls.h"
-#include "utils/syscache.h"
-#include "utils/snapmgr.h"
+#include "miscadmin.h"
 #include "utils/guc.h"
-#include "port/atomics.h"
-#include "miscadmin.h"              
-#include "storage/checksum.h" 
+#include "utils/inval.h"
+#include "utils/snapmgr.h"
+#include "utils/syscache.h"
 
 #include "pg_integrity_checksums.h"
 #include "checksum_internal.h"
@@ -271,76 +214,6 @@ pg_integrity_checksums_get_snapshot(void)
 }
 
 /*-------------------------------------------------------------------------
- * Internal type definitions
- *-------------------------------------------------------------------------
- */
-
-/*-------------------------------------------------------------------------
  * Order-independent aggregation state
  *-------------------------------------------------------------------------
  */
-
-/*-------------------------------------------------------------------------
- * UTILITY FUNCTIONS
- *-------------------------------------------------------------------------
- */
-
-/*
- * pg_data_checksum - Generic data checksum utility function
- *
- * Computes a checksum for arbitrary binary data. Useful for application
- * developers who want to checksum their own data using the same algorithm.
- *
- * Parameters:
- *   data: Binary data to checksum (bytea)
- *   seed: Initial hash value (can be used for different contexts)
- */
-PG_FUNCTION_INFO_V1(pg_data_checksum);
-
-Datum
-pg_data_checksum(PG_FUNCTION_ARGS)
-{
-    bytea *data;
-    uint32 seed;
-    uint32 checksum;
-    
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-    
-    data = PG_GETARG_BYTEA_PP(0);
-    seed = PG_GETARG_INT32(1);
-    
-    checksum = pg_checksum_data_custom(VARDATA_ANY(data), 
-                                       VARSIZE_ANY_EXHDR(data), 
-                                       seed);
-    
-    PG_RETURN_INT32((int32)checksum);
-}
-
-/*
- * pg_text_checksum - Text data checksum utility function
- *
- * Convenience wrapper for checksumming text data. Useful for string
- * comparison and text content verification.
- */
-PG_FUNCTION_INFO_V1(pg_text_checksum);
-
-Datum
-pg_text_checksum(PG_FUNCTION_ARGS)
-{
-    text *input_text;
-    uint32 seed;
-    uint32 checksum;
-    
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-    
-    input_text = PG_GETARG_TEXT_PP(0);
-    seed = PG_GETARG_INT32(1);
-    
-    checksum = pg_checksum_data_custom(VARDATA_ANY(input_text), 
-                                       VARSIZE_ANY_EXHDR(input_text), 
-                                       seed);
-    
-    PG_RETURN_INT32((int32)checksum);
-}

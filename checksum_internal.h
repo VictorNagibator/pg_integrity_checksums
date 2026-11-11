@@ -10,6 +10,7 @@
 
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
+#include "access/xact.h"
 #include "catalog/index.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"

@@ -136,11 +136,18 @@ for a new page.  `pg_page_checksum_status` performs the comparison and reports
 
 ## Source layout
 
-The current implementation is a single translation unit,
-`pg_integrity_checksums.c`.  It is organized into sections for hashing,
-canonical logical encoding, physical/tuple/index/table/database checksums and
-parallel execution.  Splitting those sections into separate C modules is a
-maintainability refactor, not a behavioral change.
+The implementation is split into a small set of translation units:
+
+| File | Responsibility |
+|---|---|
+| `pg_integrity_checksums.c` | SQL entry points, physical and logical scans, parallelism, database enumeration |
+| `checksum_hash.c` | FNV-1a, hash combination, order-independent aggregation |
+| `checksum_types.c` | canonical encoding for scalar, array, composite, range and multirange values |
+| `checksum_internal.h` | internal interfaces and aggregation state shared by the modules |
+
+The split is a maintainability refactor, not a behavioral change.  The
+remaining scan and database code is still organized in sections and can be
+extracted in follow-up changes.
 
 ## Related documentation
 

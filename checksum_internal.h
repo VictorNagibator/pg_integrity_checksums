@@ -65,4 +65,14 @@ extern uint32 logical_accum_finalize(ChecksumLogicalAccum *acc);
 extern void logical_accum_add64(ChecksumLogicalAccum64 *acc, uint64 h);
 extern uint64 logical_accum_finalize64(ChecksumLogicalAccum64 *acc);
 
+/* Canonical logical encoding. */
+extern uint64 combine_logical(uint64 current, uint64 new_val, int algo);
+extern void logical_type_cache_invalidate(Datum arg, int cacheid,
+                                          uint32 hashvalue);
+extern uint32 pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
+                                         int32 typmod, int attnum);
+extern uint64 pg_cell_checksum_canonical_algo(Datum value, bool isnull,
+                                              Oid typid, int32 typmod,
+                                              int attnum, int algo);
+
 #endif /* PG_INTEGRITY_CHECKSUMS_INTERNAL_H */

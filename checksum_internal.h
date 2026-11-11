@@ -11,6 +11,9 @@
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
 
+/* Extension entry point (declared to keep -Wmissing-prototypes quiet). */
+extern void _PG_init(void);
+
 typedef struct ChecksumAccum
 {
     uint32      partial;

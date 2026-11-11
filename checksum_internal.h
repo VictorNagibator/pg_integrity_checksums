@@ -68,6 +68,26 @@ extern uint32 logical_accum_finalize(ChecksumLogicalAccum *acc);
 extern void logical_accum_add64(ChecksumLogicalAccum64 *acc, uint64 h);
 extern uint64 logical_accum_finalize64(ChecksumLogicalAccum64 *acc);
 
+/* Relation, page and tuple validation. */
+extern void pg_integrity_checksums_require_select(Oid reloid);
+extern void pg_integrity_checksums_check_relation_kind(Relation rel,
+                                                       bool allow_toast,
+                                                       bool allow_partitioned);
+extern bool pg_integrity_checksums_relation_has_storage(Relation rel);
+extern bool pg_integrity_checksums_page_header_sane(Page page);
+extern void pg_integrity_checksums_check_page(Relation rel, BlockNumber blkno,
+                                               Page page);
+extern bool pg_integrity_checksums_item_is_sane(Page page, ItemId lp);
+extern void pg_integrity_checksums_check_heap_tuple(Relation rel,
+                                                    BlockNumber blkno,
+                                                    OffsetNumber offnum,
+                                                    HeapTupleHeader tuple,
+                                                    Size len);
+extern void scan_relation_raw_pages(Relation rel, BlockNumber start,
+                                     BlockNumber end, ChecksumAccum *acc);
+extern void scan_relation_raw_pages64(Relation rel, BlockNumber start,
+                                       BlockNumber end, ChecksumAccum64 *acc);
+
 /* Canonical logical encoding. */
 extern uint64 combine_logical(uint64 current, uint64 new_val, int algo);
 extern void logical_type_cache_invalidate(Datum arg, int cacheid,

@@ -88,6 +88,15 @@ extern void scan_relation_raw_pages(Relation rel, BlockNumber start,
 extern void scan_relation_raw_pages64(Relation rel, BlockNumber start,
                                        BlockNumber end, ChecksumAccum64 *acc);
 
+/* Tuple checksum cores, shared with the block scan and database modules. */
+extern uint64 pg_tuple_physical_checksum_internal(Relation rel, Page page,
+                                                  OffsetNumber offnum,
+                                                  BlockNumber blkno,
+                                                  bool include_header,
+                                                  bool validate, int algo);
+extern uint64 pg_tuple_logical_checksum_internal(Relation rel,
+                                                 HeapTuple tuple, int algo);
+
 /* Canonical logical encoding. */
 extern uint64 combine_logical(uint64 current, uint64 new_val, int algo);
 extern void logical_type_cache_invalidate(Datum arg, int cacheid,

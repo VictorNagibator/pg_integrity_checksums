@@ -7,7 +7,7 @@
 
 EXTENSION = pg_integrity_checksums
 MODULE_big = pg_integrity_checksums
-OBJS = pg_integrity_checksums.o checksum_hash.o checksum_types.o checksum_validation.o checksum_page.o
+OBJS = pg_integrity_checksums.o checksum_hash.o checksum_types.o checksum_validation.o checksum_page.o checksum_tuple.o
 
 # The control file is the single source of truth for the extension version;
 # the distribution archive name derives from it.

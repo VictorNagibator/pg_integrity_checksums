@@ -10,16 +10,17 @@
 
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
+
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"
 #include "nodes/execnodes.h"
-#include "storage/bufmgr.h"
-#include "utils/rel.h"
 #include "port/atomics.h"
+#include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/shm_toc.h"
+#include "utils/rel.h"
 #include "utils/snapmgr.h"
 
 /*
@@ -35,24 +36,40 @@
 /* Extension entry point (declared to keep -Wmissing-prototypes quiet). */
 extern void _PG_init(void);
 
+/* GUC: fail instead of skipping an unsupported relation. */
+extern bool pg_integrity_checksums_strict;
+
+/*
+ * ChecksumAccum - order-independent aggregate of 32-bit physical hashes
+ *
+ * Each hash is mixed and XORed; the count distinguishes an empty scan from
+ * a non-empty one.
+ */
 typedef struct ChecksumAccum
 {
     uint32      partial;
     uint64      count;
 } ChecksumAccum;
 
+/* 64-bit variant of ChecksumAccum. */
 typedef struct ChecksumAccum64
 {
     uint64      partial;
     uint64      count;
 } ChecksumAccum64;
 
+/*
+ * ChecksumLogicalAccum - sum-and-count aggregate for logical checksums
+ *
+ * Addition preserves duplicate rows while remaining order-independent.
+ */
 typedef struct ChecksumLogicalAccum
 {
     uint64      sum;
     uint64      count;
 } ChecksumLogicalAccum;
 
+/* 64-bit variant of ChecksumLogicalAccum. */
 typedef struct ChecksumLogicalAccum64
 {
     uint64      sum;
@@ -72,7 +89,6 @@ typedef enum ChecksumTaskType
     CHECKSUM_TASK_DATABASE_LOGICAL
 } ChecksumTaskType;
 
-
 /*
  * ChecksumRelationItem - a single relation processed during a database scan
  */
@@ -81,7 +97,6 @@ typedef struct ChecksumRelationItem
     Oid         reloid;
     char        relkind;
 } ChecksumRelationItem;
-
 
 /*
  * IndexLogicalScanState - executor state shared by a block range scan
@@ -104,7 +119,6 @@ typedef struct IndexLogicalScanState
     int32      *inputtypmod;
     int         nattrs;
 } IndexLogicalScanState;
-
 
 /*
  * ChecksumWorkerResult - fixed-size result returned by each worker
@@ -142,32 +156,17 @@ typedef struct ChecksumParallelState
 } ChecksumParallelState;
 
 /* Keys for the shm_toc used by the parallel scan. */
-#define KEY_STATE       0
-#define KEY_SNAPSHOT    1
-#define KEY_RESULTS     2
-#define KEY_ITEMS       3
-
-/*-------------------------------------------------------------------------
- * Helper function declarations
- *-------------------------------------------------------------------------
- */
-
-/* Privilege, relkind and storage validation helpers */
-
-/* Table checksum implementations (shared by the SQL wrappers and partitions) */
-
-
-
-/* Parallel worker entry point (must be a globally visible symbol). */
-PGDLLEXPORT void pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
-
-
+#define CHECKSUM_KEY_STATE       0
+#define CHECKSUM_KEY_SNAPSHOT    1
+#define CHECKSUM_KEY_RESULTS     2
+#define CHECKSUM_KEY_ITEMS       3
 
 /* Number of blocks claimed per atomic fetch during a parallel scan. */
 #define PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK 64
 
 /* Parallel worker entry point (must be a globally visible symbol). */
-PGDLLEXPORT void pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
+PGDLLEXPORT void
+pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 
 /* Parallel execution and shared scan configuration. */
 extern int pg_integrity_checksums_worker_count(void);
@@ -242,8 +241,6 @@ extern void pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
                                            BlockNumber start, BlockNumber end,
                                            ChecksumLogicalAccum64 *acc);
 extern void pg_index_logical_scan_end(IndexLogicalScanState *scanstate);
-
-extern bool pg_integrity_checksums_strict;
 
 /* Database relation-range aggregation shared with the parallel scan. */
 extern void compute_database_items(ChecksumRelationItem *items, uint32 start,

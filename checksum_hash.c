@@ -32,7 +32,7 @@ fnv1a_32_buf(const unsigned char *bytes, size_t len, uint32 hash)
         hash ^= bytes[i];
         hash *= FNV_PRIME_32;
     }
-    
+
     return hash;
 }
 
@@ -282,7 +282,7 @@ uint32
 combine_checksums(uint32 current, uint32 new_val)
 {
     uint32 hash = current;
-    
+
     /* Combine using FNV-1a with 4-byte chunks */
     hash ^= (new_val >> 24) & 0xFF;
     hash *= FNV_PRIME_32;
@@ -292,7 +292,7 @@ combine_checksums(uint32 current, uint32 new_val)
     hash *= FNV_PRIME_32;
     hash ^= new_val & 0xFF;
     hash *= FNV_PRIME_32;
-    
+
     return hash;
 }
 
@@ -309,20 +309,20 @@ combine_checksums_64(uint64 current, uint64 new_val)
     uint64 prime = UINT64CONST(1099511628211);
     uint8 bytes[8];
     int i;
-    
+
     /* Convert new_val to bytes in little-endian order */
     for (i = 0; i < 8; i++)
     {
         bytes[i] = (new_val >> (i * 8)) & 0xFF;
     }
-    
+
     /* Process each byte with FNV-1a */
     for (i = 0; i < 8; i++)
     {
         hash ^= bytes[i];
         hash *= prime;
     }
-    
+
     return hash;
 }
 

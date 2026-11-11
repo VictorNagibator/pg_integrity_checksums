@@ -25,10 +25,9 @@
  * PARALLEL SCAN IMPLEMENTATION
  *-------------------------------------------------------------------------
  *
- * The serial and parallel code paths share the block-range (or item-range)
- * scan functions below. In the serial case the whole range is processed by
- * a single backend; in the parallel case the range is split dynamically
- * among the leader and its workers using an atomic counter. Because the
+ * The serial block-range helpers live in checksum_scan.c.  This module
+ * splits a scan into block or relation ranges and gives each range to the
+ * leader or a worker through an atomic work counter.  Because the
  * aggregation is order- and partition-independent, both paths produce
  * identical results.
  */
@@ -71,11 +70,11 @@ pg_integrity_checksums_consume(ChecksumParallelState *state, uint32 chunk,
  * shared atomic counter until none remain, writing a fixed-size result back
  * to shared memory before exiting.
  */
-void
+PGDLLEXPORT void
 pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 {
-    ChecksumParallelState *state = shm_toc_lookup(toc, KEY_STATE, false);
-    ChecksumWorkerResult *results = shm_toc_lookup(toc, KEY_RESULTS, false);
+    ChecksumParallelState *state = shm_toc_lookup(toc, CHECKSUM_KEY_STATE, false);
+    ChecksumWorkerResult *results = shm_toc_lookup(toc, CHECKSUM_KEY_RESULTS, false);
     int         worker_number = ParallelWorkerNumber;
     ChecksumWorkerResult *myresult = &results[worker_number];
     Snapshot    snapshot = NULL;
@@ -90,7 +89,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 
     if (state->snapshot_size > 0)
     {
-        char       *snap = shm_toc_lookup(toc, KEY_SNAPSHOT, false);
+        char       *snap = shm_toc_lookup(toc, CHECKSUM_KEY_SNAPSHOT, false);
 
         snapshot = RestoreSnapshot(snap);
     }
@@ -107,8 +106,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 {
                     ChecksumAccum64 acc64 = {0, 0};
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
+                    while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                         scan_table_blocks_physical64(rel, start, end,
                                                      state->include_header,
                                                      snapshot, &acc64, bstrategy);
@@ -119,8 +119,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     break;
                 }
 
-                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                            &start, &end))
+                while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                     scan_table_blocks_physical(rel, start, end,
                                                state->include_header, snapshot,
                                                &acc, bstrategy);
@@ -141,8 +142,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 {
                     ChecksumLogicalAccum64 acc64 = {0, 0};
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
+                    while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                         scan_table_blocks_logical64(rel, start, end, snapshot,
                                                     &acc64, bstrategy);
                     relation_close(rel, AccessShareLock);
@@ -152,8 +154,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     break;
                 }
 
-                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                            &start, &end))
+                while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                     scan_table_blocks_logical(rel, start, end, snapshot, &acc,
                                               bstrategy);
 
@@ -174,8 +177,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 {
                     ChecksumAccum64 acc64 = {0, 0};
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
+                    while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                         scan_index_blocks_physical64(idxRel, start, end, is_brin,
                                                      &acc64, bstrategy);
                     index_close(idxRel, AccessShareLock);
@@ -185,8 +189,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     break;
                 }
 
-                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                            &start, &end))
+                while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                     scan_index_blocks_physical(idxRel, start, end, is_brin, &acc,
                                                bstrategy);
 
@@ -211,8 +216,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                 {
                     ChecksumLogicalAccum64 acc64 = {0, 0};
 
-                    while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                &start, &end))
+                    while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                         pg_index_logical_scan_blocks64(&scanstate, start, end,
                                                        &acc64);
                     pg_index_logical_scan_end(&scanstate);
@@ -221,8 +227,9 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     break;
                 }
 
-                while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                            &start, &end))
+                while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                     pg_index_logical_scan_blocks(&scanstate, start, end, &acc);
 
                 pg_index_logical_scan_end(&scanstate);
@@ -233,7 +240,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
         case CHECKSUM_TASK_DATABASE_PHYSICAL:
         case CHECKSUM_TASK_DATABASE_LOGICAL:
             {
-                ChecksumRelationItem *items = shm_toc_lookup(toc, KEY_ITEMS, false);
+                ChecksumRelationItem *items = shm_toc_lookup(toc, CHECKSUM_KEY_ITEMS, false);
                 bool        physical = (state->task_type == CHECKSUM_TASK_DATABASE_PHYSICAL);
                 ChecksumAccum64 acc64 = {0, 0};
                 ChecksumLogicalAccum lacc = {0, 0};
@@ -368,7 +375,7 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
         InitializeParallelDSM(pcxt);
 
         state = shm_toc_allocate(pcxt->toc, sizeof(ChecksumParallelState));
-        shm_toc_insert(pcxt->toc, KEY_STATE, state);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_STATE, state);
         state->task_type = task_type;
         state->reloid = reloid;
         state->include_header = include_header;
@@ -378,7 +385,7 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
         pg_atomic_init_u32(&state->next_item, 0);
 
         results = shm_toc_allocate(pcxt->toc, sizeof(ChecksumWorkerResult) * workers);
-        shm_toc_insert(pcxt->toc, KEY_RESULTS, results);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_RESULTS, results);
         memset(results, 0, sizeof(ChecksumWorkerResult) * workers);
 
         if (snapshot_size > 0)
@@ -386,7 +393,7 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
             char       *snap = shm_toc_allocate(pcxt->toc, snapshot_size);
 
             SerializeSnapshot(snapshot, snap);
-            shm_toc_insert(pcxt->toc, KEY_SNAPSHOT, snap);
+            shm_toc_insert(pcxt->toc, CHECKSUM_KEY_SNAPSHOT, snap);
         }
 
         LaunchParallelWorkers(pcxt);
@@ -404,16 +411,18 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
 
                     if (algo == 1)
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_table_blocks_physical64(rel, start, end,
                                                          include_header, snapshot,
                                                          acc64, bstrategy);
                     }
                     else
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_table_blocks_physical(rel, start, end, include_header,
                                                        snapshot, acc, bstrategy);
                     }
@@ -429,15 +438,17 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
 
                     if (algo == 1)
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_table_blocks_logical64(rel, start, end, snapshot,
                                                         logical_acc64, bstrategy);
                     }
                     else
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_table_blocks_logical(rel, start, end, snapshot,
                                                       logical_acc, bstrategy);
                     }
@@ -454,16 +465,18 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
 
                     if (algo == 1)
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_index_blocks_physical64(idxRel, start, end,
                                                          is_brin, acc64,
                                                          bstrategy);
                     }
                     else
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             scan_index_blocks_physical(idxRel, start, end, is_brin,
                                                        acc, bstrategy);
                     }
@@ -483,15 +496,17 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
 
                     if (algo == 1)
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             pg_index_logical_scan_blocks64(&scanstate, start, end,
                                                            logical_acc64);
                     }
                     else
                     {
-                        while (pg_integrity_checksums_consume(state, PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                    &start, &end))
+                        while (pg_integrity_checksums_consume(state,
+                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                      &start, &end))
                             pg_index_logical_scan_blocks(&scanstate, start, end,
                                                          logical_acc);
                     }
@@ -604,7 +619,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
         InitializeParallelDSM(pcxt);
 
         state = shm_toc_allocate(pcxt->toc, sizeof(ChecksumParallelState));
-        shm_toc_insert(pcxt->toc, KEY_STATE, state);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_STATE, state);
         state->task_type = physical ? CHECKSUM_TASK_DATABASE_PHYSICAL
                                     : CHECKSUM_TASK_DATABASE_LOGICAL;
         state->reloid = InvalidOid;
@@ -615,14 +630,14 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
         pg_atomic_init_u32(&state->next_item, 0);
 
         results = shm_toc_allocate(pcxt->toc, sizeof(ChecksumWorkerResult) * workers);
-        shm_toc_insert(pcxt->toc, KEY_RESULTS, results);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_RESULTS, results);
         memset(results, 0, sizeof(ChecksumWorkerResult) * workers);
 
         {
             char       *snap = shm_toc_allocate(pcxt->toc, snapshot_size);
 
             SerializeSnapshot(snapshot, snap);
-            shm_toc_insert(pcxt->toc, KEY_SNAPSHOT, snap);
+            shm_toc_insert(pcxt->toc, CHECKSUM_KEY_SNAPSHOT, snap);
         }
 
         {
@@ -630,7 +645,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                                                             sizeof(ChecksumRelationItem) * nitems);
 
             memcpy(ditems, items, sizeof(ChecksumRelationItem) * nitems);
-            shm_toc_insert(pcxt->toc, KEY_ITEMS, ditems);
+            shm_toc_insert(pcxt->toc, CHECKSUM_KEY_ITEMS, ditems);
         }
 
         LaunchParallelWorkers(pcxt);

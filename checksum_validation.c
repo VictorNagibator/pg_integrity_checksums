@@ -23,7 +23,7 @@
 #include "checksum_internal.h"
 
 /*-------------------------------------------------------------------------
- * Privilege, relkind and storage validation helpers
+ * Relation, page and tuple validation helpers
  *-------------------------------------------------------------------------
  */
 

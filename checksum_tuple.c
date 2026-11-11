@@ -107,12 +107,12 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
 
     /* Create 64-bit location from block number and offset */
     location = ((uint64)blkno << 32) | (uint64)offnum;
-    
+
     /* Hash the location with the selected algorithm. */
     location_hash = (algo == 0) ?
         fnv1a_32_hash(&location, sizeof(location), FNV_BASIS_32) :
         fnv1a_64_hash(&location, sizeof(location), FNV_BASIS_64);
-    
+
     /*
      * Include relation identity and storage identity.  relfilenode changes
      * when VACUUM FULL, CLUSTER or ALTER TABLE SET TABLESPACE rewrite the
@@ -141,17 +141,17 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
         checksum = pg_checksum_data_custom(data, len, (uint32) location_hash);
     else
         checksum = fnv1a_64_hash(data, len, location_hash);
-    
+
     /* Incorporate MVCC information and other physical metadata */
-    mvcc_info = (HeapTupleHeaderGetRawXmin(tuple) ^ 
+    mvcc_info = (HeapTupleHeaderGetRawXmin(tuple) ^
                 HeapTupleHeaderGetRawXmax(tuple) ^
                 HeapTupleHeaderGetRawCommandId(tuple));
     checksum ^= mvcc_info;
-    
+
     /* Include ItemId information */
     itemid_info = (ItemIdGetFlags(lp) << 24) | ItemIdGetLength(lp);
     checksum = combine_physical(checksum, itemid_info, algo);
-    
+
     if (algo == 0)
     {
         if (checksum == CHECKSUM_NULL)
@@ -166,7 +166,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
         if (checksum == 0)
             checksum = (location_hash ^ mvcc_info ^ FNV_BASIS_64) & ~UINT64CONST(1);
     }
-    
+
     return checksum;
 }
 

@@ -19,6 +19,11 @@
 
 #include "checksum_internal.h"
 
+/*-------------------------------------------------------------------------
+ * Database enumeration and aggregation
+ *-------------------------------------------------------------------------
+ */
+
 /*
  * compute_database_item - compute the checksum of one relation
  *
@@ -427,7 +432,7 @@ pg_database_physical_checksum(PG_FUNCTION_ARGS)
     bool        include_system = false;
     bool        include_toast = false;
     uint64      db_checksum;
-    
+
     /* Parse optional parameters */
     if (PG_NARGS() >= 1)
         include_system = PG_GETARG_BOOL(0);

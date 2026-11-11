@@ -10,8 +10,8 @@
  *
  * The default SQL functions use FNV-1a 32-bit hashes, matching the original
  * 2.x baselines.  Generic algorithm overloads expose FNV-1a 32-bit and
- * 64-bit digests.  Page-level checksums remain PostgreSQL's built-in 32-bit
- * page checksum (16-bit) and are not affected by the generic hash API.
+ * 64-bit digests.  Page-level checksums remain PostgreSQL's built-in 16-bit
+ * page checksum and are not affected by the generic hash API.
  *
  * CHECKSUM TYPES:
  * 1. Physical Checksums: Depend on physical storage layout

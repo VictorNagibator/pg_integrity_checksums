@@ -18,13 +18,18 @@
 
 #include "checksum_internal.h"
 
-uint64 pg_table_physical_checksum_calc(Oid reloid, bool include_header,
+/* Table implementations shared with the database scan. */
+extern uint64 pg_table_physical_checksum_calc(Oid reloid,
+                                              bool include_header,
                                               bool check_privileges);
-uint64 pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
+extern uint64 pg_table_physical_checksum_calc64(Oid reloid,
+                                                bool include_header,
                                                 bool check_privileges);
-int64 pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
+extern int64 pg_table_logical_checksum_calc(Oid reloid,
+                                            bool check_privileges,
                                             bool *is_null);
-uint64 pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
+extern uint64 pg_table_logical_checksum_calc64(Oid reloid,
+                                               bool check_privileges,
                                                bool *is_null);
 static void pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
                                             ChecksumLogicalAccum *acc,
@@ -321,7 +326,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
  * pg_table_physical_checksum_calc64 - serial 64-bit physical table checksum
  */
 uint64
-pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
+extern pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
                                   bool check_privileges)
 {
     Relation    rel;
@@ -484,7 +489,7 @@ pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
  * Sets *is_null when the checksum is undefined (a TOAST relation).
  */
 int64
-pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
+extern pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
                                bool *is_null)
 {
     ChecksumLogicalAccum acc = {0, 0};
@@ -669,7 +674,7 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
  * pg_table_logical_checksum_calc64 - 64-bit logical table checksum
  */
 uint64
-pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
+extern pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
                                  bool *is_null)
 {
     ChecksumLogicalAccum64 acc = {0, 0};

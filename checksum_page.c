@@ -207,6 +207,11 @@ pg_page_checksum_status(PG_FUNCTION_ARGS)
     PG_RETURN_TEXT_P(cstring_to_text(status));
 }
 
+/*-------------------------------------------------------------------------
+ * CELL LEVEL FUNCTIONS (Logical only)
+ *-------------------------------------------------------------------------
+ */
+
 /*
  * pg_cell_checksum_common - shared implementation for cell checksums
  *

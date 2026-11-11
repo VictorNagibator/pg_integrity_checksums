@@ -11,9 +11,9 @@
 
 ## Overview
 
-pg_integrity_checksums provides page, cell, tuple, table, index and database
-checksums.  Page checksums are physical; cell checksums are logical; the other
-levels support both physical and logical modes.
+pg_integrity_checksums provides cell, tuple, table, index and database
+checksums.  Cell checksums are logical; tuple, table, index and database
+checksums support both physical and logical modes.
 
 Logical checksums are canonical across endianness, VACUUM/REINDEX/physical
 movement and database OIDs.  Physical checksums are for on-disk corruption in
@@ -29,9 +29,6 @@ SELECT pg_table_physical_checksum('public.orders'::regclass, false);
 A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
 wider checksum or a raw `bytea` value is required.  It is described in the
 [function reference](docs/functions.md).
-
-Page checksums remain PostgreSQL's built-in 16-bit page checksum.
-`pg_page_checksum_status(...)` verifies a page against its stored checksum.
 
 ## Quick start
 

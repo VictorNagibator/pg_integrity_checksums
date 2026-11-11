@@ -28,6 +28,11 @@
 
 #include "checksum_internal.h"
 
+/*-------------------------------------------------------------------------
+ * Type metadata cache
+ *-------------------------------------------------------------------------
+ */
+
 /*
  * Cached type metadata for canonical logical encoding.  Type names and I/O
  * function OIDs are stable until a syscache invalidation, which clears the
@@ -54,12 +59,6 @@ typedef struct LogicalTypeInfo
 static HTAB *logical_type_cache = NULL;
 
 static LogicalTypeInfo *logical_type_info(Oid typid);
-
-/*-------------------------------------------------------------------------
- * Helper functions for column checksum computation
- *-------------------------------------------------------------------------
- */
-
 
 /*
  * Canonical logical value encoding

@@ -16,6 +16,11 @@
 
 #include "checksum_internal.h"
 
+/*-------------------------------------------------------------------------
+ * Serial block-range scans
+ *-------------------------------------------------------------------------
+ */
+
 /*
  * scan_table_blocks_physical - physical checksum over a range of heap blocks
  *

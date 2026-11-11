@@ -7,7 +7,21 @@
 
 EXTENSION = pg_integrity_checksums
 MODULE_big = pg_integrity_checksums
-OBJS = pg_integrity_checksums.o checksum_hash.o checksum_types.o checksum_validation.o checksum_page.o checksum_tuple.o checksum_scan.o checksum_table.o checksum_index.o checksum_database.o checksum_parallel.o checksum_utility.o
+
+# Every translation unit in the split implementation.
+OBJS = \
+	pg_integrity_checksums.o \
+	checksum_hash.o \
+	checksum_types.o \
+	checksum_validation.o \
+	checksum_page.o \
+	checksum_tuple.o \
+	checksum_scan.o \
+	checksum_table.o \
+	checksum_index.o \
+	checksum_database.o \
+	checksum_parallel.o \
+	checksum_utility.o
 
 # The control file is the single source of truth for the extension version;
 # the distribution archive name derives from it.
@@ -16,7 +30,27 @@ EXTVERSION = $(shell sed -n "s/^default_version[[:space:]]*=[[:space:]]*'\([^']*
 # Every versioned install script and every upgrade script between them.
 DATA = $(wildcard $(EXTENSION)--*.sql)
 
-REGRESS = checksum_basic checksum_database checksum_index checksum_table checksum_stability checksum_parallel checksum_partition checksum_safety checksum_logical checksum_types checksum_crossversion checksum_catalog checksum_ddl checksum_access checksum_toast checksum_errors checksum_fnv64 checksum_fnv64_extra checksum_page_status
+REGRESS = \
+	checksum_basic \
+	checksum_database \
+	checksum_index \
+	checksum_table \
+	checksum_stability \
+	checksum_parallel \
+	checksum_partition \
+	checksum_safety \
+	checksum_logical \
+	checksum_types \
+	checksum_crossversion \
+	checksum_catalog \
+	checksum_ddl \
+	checksum_access \
+	checksum_toast \
+	checksum_errors \
+	checksum_fnv64 \
+	checksum_fnv64_extra \
+	checksum_page_status
+
 REGRESS_OPTS = \
     --inputdir=./ \
     --load-extension=pg_integrity_checksums

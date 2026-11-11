@@ -35,17 +35,17 @@ pg_data_checksum(PG_FUNCTION_ARGS)
     bytea *data;
     uint32 seed;
     uint32 checksum;
-    
+
     if (PG_ARGISNULL(0))
         PG_RETURN_NULL();
-    
+
     data = PG_GETARG_BYTEA_PP(0);
     seed = PG_GETARG_INT32(1);
-    
-    checksum = pg_checksum_data_custom(VARDATA_ANY(data), 
-                                       VARSIZE_ANY_EXHDR(data), 
+
+    checksum = pg_checksum_data_custom(VARDATA_ANY(data),
+                                       VARSIZE_ANY_EXHDR(data),
                                        seed);
-    
+
     PG_RETURN_INT32((int32)checksum);
 }
 
@@ -63,16 +63,16 @@ pg_text_checksum(PG_FUNCTION_ARGS)
     text *input_text;
     uint32 seed;
     uint32 checksum;
-    
+
     if (PG_ARGISNULL(0))
         PG_RETURN_NULL();
-    
+
     input_text = PG_GETARG_TEXT_PP(0);
     seed = PG_GETARG_INT32(1);
-    
-    checksum = pg_checksum_data_custom(VARDATA_ANY(input_text), 
-                                       VARSIZE_ANY_EXHDR(input_text), 
+
+    checksum = pg_checksum_data_custom(VARDATA_ANY(input_text),
+                                       VARSIZE_ANY_EXHDR(input_text),
                                        seed);
-    
+
     PG_RETURN_INT32((int32)checksum);
 }

@@ -10,6 +10,8 @@
 
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
+#include "storage/bufmgr.h"
+#include "utils/snapmgr.h"
 
 /* Extension entry point (declared to keep -Wmissing-prototypes quiet). */
 extern void _PG_init(void);
@@ -96,6 +98,33 @@ extern uint64 pg_tuple_physical_checksum_internal(Relation rel, Page page,
                                                   bool validate, int algo);
 extern uint64 pg_tuple_logical_checksum_internal(Relation rel,
                                                  HeapTuple tuple, int algo);
+
+/* Serial block-range scans. */
+extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
+                                       BlockNumber end, bool include_header,
+                                       Snapshot snapshot, ChecksumAccum *acc,
+                                       BufferAccessStrategy bstrategy);
+extern void scan_table_blocks_physical64(Relation rel, BlockNumber start,
+                                         BlockNumber end, bool include_header,
+                                         Snapshot snapshot,
+                                         ChecksumAccum64 *acc,
+                                         BufferAccessStrategy bstrategy);
+extern void scan_table_blocks_logical(Relation rel, BlockNumber start,
+                                      BlockNumber end, Snapshot snapshot,
+                                      ChecksumLogicalAccum *acc,
+                                      BufferAccessStrategy bstrategy);
+extern void scan_table_blocks_logical64(Relation rel, BlockNumber start,
+                                        BlockNumber end, Snapshot snapshot,
+                                        ChecksumLogicalAccum64 *acc,
+                                        BufferAccessStrategy bstrategy);
+extern void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
+                                       BlockNumber end, bool is_brin,
+                                       ChecksumAccum *acc,
+                                       BufferAccessStrategy bstrategy);
+extern void scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
+                                         BlockNumber end, bool is_brin,
+                                         ChecksumAccum64 *acc,
+                                         BufferAccessStrategy bstrategy);
 
 /* Canonical logical encoding. */
 extern uint64 combine_logical(uint64 current, uint64 new_val, int algo);

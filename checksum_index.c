@@ -949,3 +949,39 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
     return index_checksum;
 }
 
+
+/*
+ * pg_index_physical_checksum_algo - generic physical index checksum
+ */
+PG_FUNCTION_INFO_V1(pg_index_physical_checksum_algo);
+
+Datum
+pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
+{
+    Oid         indexoid;
+    int         algorithm;
+    bool        is_null = false;
+    uint64      result;
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
+        PG_RETURN_NULL();
+
+    indexoid = PG_GETARG_OID(0);
+    algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
+
+    if (algorithm == 0)
+    {
+        uint32      legacy = pg_index_physical_checksum_calc(indexoid, true,
+                                                             &is_null);
+
+        if (is_null)
+            PG_RETURN_NULL();
+        PG_RETURN_BYTEA_P(checksum_bytea(legacy, 4));
+    }
+
+    result = pg_index_physical_checksum_calc64(indexoid, true, &is_null);
+    if (is_null)
+        PG_RETURN_NULL();
+
+    PG_RETURN_BYTEA_P(checksum_bytea(result, 8));
+}

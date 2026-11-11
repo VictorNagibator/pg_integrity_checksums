@@ -176,6 +176,16 @@ extern void pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
                                            ChecksumLogicalAccum64 *acc);
 extern void pg_index_logical_scan_end(IndexLogicalScanState *scanstate);
 
+extern bool pg_integrity_checksums_strict;
+
+/* Database relation-range aggregation shared with the parallel scan. */
+extern void compute_database_items(ChecksumRelationItem *items, uint32 start,
+                                   uint32 end, bool physical, int algo,
+                                   ChecksumAccum64 *acc,
+                                   ChecksumLogicalAccum *logical_acc,
+                                   ChecksumLogicalAccum64 *logical_acc64,
+                                   bool *had_error);
+
 /* Table checksum implementations shared with the database scan. */
 extern uint64 pg_table_physical_checksum_calc(Oid reloid,
                                               bool include_header,

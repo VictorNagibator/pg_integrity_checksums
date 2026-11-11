@@ -16,6 +16,9 @@
 #include "nodes/execnodes.h"
 #include "storage/bufmgr.h"
 #include "utils/rel.h"
+#include "port/atomics.h"
+#include "storage/dsm.h"
+#include "storage/shm_toc.h"
 #include "utils/snapmgr.h"
 
 /*
@@ -101,6 +104,69 @@ typedef struct IndexLogicalScanState
     int         nattrs;
 } IndexLogicalScanState;
 
+
+/*
+ * ChecksumWorkerResult - fixed-size result returned by each worker
+ *
+ * Each worker writes a single entry of this type into shared memory, so
+ * no streaming or variable-sized shared memory is required. 32-bit scans
+ * zero-extend their aggregate; 64-bit scans store it directly.  had_error is
+ * set by database scans when one or more relations had to be skipped.
+ */
+typedef struct ChecksumWorkerResult
+{
+    uint64      partial;
+    uint64      count;
+    bool        had_error;
+} ChecksumWorkerResult;
+
+/*
+ * ChecksumParallelState - shared state for a parallel checksum scan
+ *
+ * This structure lives in dynamic shared memory and is used both by the
+ * leader and by the parallel workers. nitems holds the number of items
+ * (blocks for table/index scans, relations for database scans) and
+ * next_item is the atomic counter used to claim work in a dynamic,
+ * self-balancing fashion.
+ */
+typedef struct ChecksumParallelState
+{
+    ChecksumTaskType task_type;
+    Oid         reloid;
+    bool        include_header;
+    int         algo;
+    uint32      nitems;
+    uint32      snapshot_size;
+    pg_atomic_uint32 next_item;
+} ChecksumParallelState;
+
+/* Keys for the shm_toc used by the parallel scan. */
+#define KEY_STATE       0
+#define KEY_SNAPSHOT    1
+#define KEY_RESULTS     2
+#define KEY_ITEMS       3
+
+/*-------------------------------------------------------------------------
+ * Helper function declarations
+ *-------------------------------------------------------------------------
+ */
+
+/* Privilege, relkind and storage validation helpers */
+
+/* Table checksum implementations (shared by the SQL wrappers and partitions) */
+
+
+
+/* Parallel worker entry point (must be a globally visible symbol). */
+PGDLLEXPORT void pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
+
+
+
+/* Number of blocks claimed per atomic fetch during a parallel scan. */
+#define PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK 64
+
+/* Parallel worker entry point (must be a globally visible symbol). */
+PGDLLEXPORT void pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 
 /* Parallel execution and shared scan configuration. */
 extern int pg_integrity_checksums_worker_count(void);

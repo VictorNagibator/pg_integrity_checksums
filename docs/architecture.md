@@ -136,11 +136,25 @@ for a new page.  `pg_page_checksum_status` performs the comparison and reports
 
 ## Source layout
 
-The current implementation is a single translation unit,
-`pg_integrity_checksums.c`.  It is organized into sections for hashing,
-canonical logical encoding, physical/tuple/index/table/database checksums and
-parallel execution.  Splitting those sections into separate C modules is a
-maintainability refactor, not a behavioral change.
+The implementation is split into a small set of translation units:
+
+| File | Responsibility |
+|---|---|
+| `pg_integrity_checksums.c` | module entry point, GUCs and shared worker/snapshot helpers |
+| `checksum_hash.c` | FNV-1a, hash combination, order-independent aggregation |
+| `checksum_types.c` | canonical encoding for scalar, array, composite, range and multirange values |
+| `checksum_validation.c` | relation, page, line-pointer and tuple validation |
+| `checksum_page.c` | page checksum verification and canonical cell checksums |
+| `checksum_tuple.c` | physical and logical tuple checksums |
+| `checksum_scan.c` | serial block-range scans |
+| `checksum_table.c` | table checksums and partition helpers |
+| `checksum_index.c` | physical/logical index checksums and index scans |
+| `checksum_parallel.c` | dynamic shared-memory parallel execution |
+| `checksum_database.c` | database enumeration and database SQL entry points |
+| `checksum_utility.c` | generic data/text checksum helpers |
+| `checksum_internal.h` | internal interfaces and state shared by the modules |
+
+The split is a maintainability refactor, not a behavioral change.
 
 ## Related documentation
 

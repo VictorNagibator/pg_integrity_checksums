@@ -10,8 +10,23 @@
 
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
+#include "catalog/index.h"
+#include "executor/executor.h"
+#include "executor/tuptable.h"
+#include "nodes/execnodes.h"
 #include "storage/bufmgr.h"
+#include "utils/rel.h"
 #include "utils/snapmgr.h"
+
+/*
+ * lnext() gained the list argument in PostgreSQL 13.  Keep the extension
+ * buildable on PostgreSQL 12.
+ */
+#if PG_VERSION_NUM < 130000
+#define lnext_compat(list, cell) lnext(cell)
+#else
+#define lnext_compat(list, cell) lnext(list, cell)
+#endif
 
 /* Extension entry point (declared to keep -Wmissing-prototypes quiet). */
 extern void _PG_init(void);
@@ -64,6 +79,29 @@ typedef struct ChecksumRelationItem
 } ChecksumRelationItem;
 
 
+/*
+ * IndexLogicalScanState - executor state shared by a block range scan
+ */
+typedef struct IndexLogicalScanState
+{
+    Relation    idxRel;
+    Relation    heapRel;
+    IndexInfo  *indexInfo;
+    EState     *estate;
+    ExprContext *econtext;
+    ExprState  *predicate;
+    TupleTableSlot *slot;
+    MemoryContext context;
+    Snapshot    snapshot;
+    BufferAccessStrategy bstrategy;
+    Datum      *values;
+    bool       *nulls;
+    Oid        *inputtypid;
+    int32      *inputtypmod;
+    int         nattrs;
+} IndexLogicalScanState;
+
+
 /* Parallel execution and shared scan configuration. */
 extern int pg_integrity_checksums_worker_count(void);
 extern Snapshot pg_integrity_checksums_get_snapshot(void);
@@ -114,6 +152,29 @@ extern void logical_accum_add(ChecksumLogicalAccum *acc, uint32 h);
 extern uint32 logical_accum_finalize(ChecksumLogicalAccum *acc);
 extern void logical_accum_add64(ChecksumLogicalAccum64 *acc, uint64 h);
 extern uint64 logical_accum_finalize64(ChecksumLogicalAccum64 *acc);
+
+/* Index checksum implementations shared with the parallel scan. */
+extern uint32 pg_index_physical_checksum_calc(Oid indexoid,
+                                              bool check_privileges,
+                                              bool *is_null);
+extern uint64 pg_index_physical_checksum_calc64(Oid indexoid,
+                                                bool check_privileges,
+                                                bool *is_null);
+extern uint32 pg_index_logical_checksum_calc(Oid indexoid,
+                                             bool check_privileges,
+                                             bool *is_null);
+extern uint64 pg_index_logical_checksum_calc64(Oid indexoid,
+                                               bool check_privileges,
+                                               bool *is_null);
+extern bool pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
+                                       IndexLogicalScanState *scanstate);
+extern void pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
+                                         BlockNumber start, BlockNumber end,
+                                         ChecksumLogicalAccum *acc);
+extern void pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
+                                           BlockNumber start, BlockNumber end,
+                                           ChecksumLogicalAccum64 *acc);
+extern void pg_index_logical_scan_end(IndexLogicalScanState *scanstate);
 
 /* Table checksum implementations shared with the database scan. */
 extern uint64 pg_table_physical_checksum_calc(Oid reloid,

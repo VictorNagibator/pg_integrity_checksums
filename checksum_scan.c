@@ -30,15 +30,6 @@
  */
 
 /*
- * TupleVisitor - called for every tuple that is visible to the snapshot
- *
- * The page is share-locked for the duration of the call.
- */
-typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
-                              OffsetNumber offnum, HeapTuple tuple,
-                              void *arg);
-
-/*
  * scan_visible_tuples - visit the visible tuples of a range of heap blocks
  *
  * Iterates the raw pages of the relation, applying the same visibility
@@ -46,7 +37,7 @@ typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
  * to what the serial path would have seen.  Corrupt page headers, line
  * pointers and tuple headers raise an error instead of being followed.
  */
-static void
+void
 scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
                     Snapshot snapshot, BufferAccessStrategy bstrategy,
                     TupleVisitor visitor, void *arg)

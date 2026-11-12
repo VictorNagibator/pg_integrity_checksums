@@ -589,18 +589,6 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
 }
 
 /*
- * logical_hash_datum - legacy 32-bit canonical hash wrapper
- */
-static uint32
-logical_hash_datum(Datum value, bool isnull, Oid typid,
-                   int32 typmod, int attnum, int depth)
-{
-    return (uint32) logical_hash_datum_algo(value, isnull, typid, typmod,
-                                            attnum, depth,
-                                            CHECKSUM_ALGO_FNV32);
-}
-
-/*
  * pg_cell_checksum_canonical_algo - canonical logical cell checksum
  *
  * algo == CHECKSUM_ALGO_FNV32 selects the historical 32-bit FNV path; algo == CHECKSUM_ALGO_FNV64 selects
@@ -612,14 +600,4 @@ pg_cell_checksum_canonical_algo(Datum value, bool isnull, Oid typid,
 {
     return logical_hash_datum_algo(value, isnull, typid, typmod, attnum, 0,
                                    algo);
-}
-
-/*
- * pg_cell_checksum_canonical - legacy 32-bit logical cell checksum
- */
-uint32
-pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
-                           int32 typmod, int attnum)
-{
-    return logical_hash_datum(value, isnull, typid, typmod, attnum, 0);
 }

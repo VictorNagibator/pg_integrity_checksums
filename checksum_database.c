@@ -12,10 +12,12 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_class.h"
+#include "catalog/pg_index.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 #include "checksum_internal.h"
 
@@ -101,6 +103,34 @@ compute_database_item(Oid relid, char relkind, bool physical, ChecksumAlgo algo,
 }
 
 /*
+ * skipped_relation_reason - why a relation has no usable checksum
+ *
+ * Only called for relations that compute_database_item() reported as skipped,
+ * which is either an invalid index or a relation kind without a checksum for
+ * the requested mode.
+ */
+static const char *
+skipped_relation_reason(Oid relid)
+{
+    if (get_rel_relkind(relid) == RELKIND_INDEX)
+    {
+        HeapTuple   tuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(relid));
+
+        if (HeapTupleIsValid(tuple))
+        {
+            bool        valid = ((Form_pg_index) GETSTRUCT(tuple))->indisvalid;
+
+            ReleaseSysCache(tuple);
+
+            if (!valid)
+                return "The index is invalid and has no content to checksum";
+        }
+    }
+
+    return "The relation kind or access method has no checksum in this mode";
+}
+
+/*
  * pg_integrity_checksums_report_skipped_relation - strict-mode error for skipped relation
  */
 static void
@@ -117,7 +147,7 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
             (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
              errmsg("relation \"%s\" cannot be checksummed",
                     relname ? relname : "?"),
-             errdetail("The relation has no usable checksum (invalid index, unsupported relation kind, or a scan error)."),
+             errdetail("%s.", skipped_relation_reason(relid)),
              errhint("Set pg_integrity_checksums.strict = false to skip relations without a usable checksum.")));
 }
 
@@ -126,17 +156,14 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
  *
  * The accumulator is chosen by which pointer is set: logical_acc64 for
  * 64-bit logical scans, logical_acc for 32-bit logical scans, otherwise the
- * physical accumulator (which also mixes in the relation OID).  A skipped
- * relation is only an error in strict mode.
+ * physical accumulator (which also mixes in the relation OID).
  */
 static void
-add_relation_result(Oid relid, uint64 rel_checksum, bool skip,
-                    ChecksumAccum64 *acc, ChecksumLogicalAccum *logical_acc,
+add_relation_result(Oid relid, uint64 rel_checksum, ChecksumAccum64 *acc,
+                    ChecksumLogicalAccum *logical_acc,
                     ChecksumLogicalAccum64 *logical_acc64)
 {
-    if (skip)
-        pg_integrity_checksums_report_skipped_relation(relid);
-    else if (logical_acc64 != NULL)
+    if (logical_acc64 != NULL)
         logical_accum_add64(logical_acc64, rel_checksum);
     else if (logical_acc != NULL)
         logical_accum_add(logical_acc, (uint32) rel_checksum);
@@ -178,8 +205,11 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
         {
             compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                                   &skip);
-            add_relation_result(relid, rel_checksum, skip, acc, logical_acc,
-                                logical_acc64);
+            if (skip)
+                pg_integrity_checksums_report_skipped_relation(relid);
+            else
+                add_relation_result(relid, rel_checksum, acc, logical_acc,
+                                    logical_acc64);
             continue;
         }
 #endif
@@ -203,8 +233,9 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                                   &skip);
 
-            add_relation_result(relid, rel_checksum, skip, acc, logical_acc,
-                                logical_acc64);
+            if (!skip)
+                add_relation_result(relid, rel_checksum, acc, logical_acc,
+                                    logical_acc64);
 
             /* Commit the inner transaction, return to outer xact context */
             ReleaseCurrentSubTransaction();
@@ -246,7 +277,23 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
                 *had_error = true;
 
             if (pg_integrity_checksums_strict || sqlerrcode == ERRCODE_QUERY_CANCELED)
+            {
+                /*
+                 * Name the relation: many errors (a missing file, a corrupt
+                 * page) do not say which relation the scan was working on.
+                 */
+                if (sqlerrcode != ERRCODE_QUERY_CANCELED)
+                {
+                    char       *relname = get_rel_name(relid);
+
+                    edata->context = psprintf("while computing the database checksum of relation \"%s\" (OID %u)%s%s",
+                                              relname ? relname : "?", relid,
+                                              edata->context ? "\n" : "",
+                                              edata->context ? edata->context : "");
+                }
+
                 ReThrowError(edata);
+            }
 
             /*
              * Parallel workers log to the server log; the leader emits a
@@ -265,6 +312,14 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             FreeErrorData(edata);
         }
         PG_END_TRY();
+
+        /*
+         * A relation without a usable checksum is an error in strict mode.
+         * Raise it here, after the subtransaction has been released, so it is
+         * an ordinary error and not one caught by the handler above.
+         */
+        if (skip)
+            pg_integrity_checksums_report_skipped_relation(relid);
     }
 }
 

@@ -72,13 +72,6 @@ static LogicalTypeInfo *logical_type_info(Oid typid);
 static uint64 logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                                       int32 typmod, int attnum, int depth,
                                       ChecksumAlgo algo);
-static uint64
-logical_hash_bytes(uint64 h, const void *data, size_t len, ChecksumAlgo algo)
-{
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return fnv1a_32_hash(data, len, (uint32) h);
-    return fnv1a_64_hash(data, len, h);
-}
 
 /*
  * logical_hash_uint32_le - hash a 32-bit integer in a canonical byte order
@@ -99,7 +92,7 @@ logical_hash_uint32_le(uint64 h, uint32 value, ChecksumAlgo algo)
     bytes[2] = (unsigned char) ((value >> 16) & 0xFF);
     bytes[3] = (unsigned char) ((value >> 24) & 0xFF);
 
-    return logical_hash_bytes(h, bytes, sizeof(bytes), algo);
+    return hash_bytes_algo(h, bytes, sizeof(bytes), algo);
 }
 
 void
@@ -236,7 +229,7 @@ logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
 #endif
             elem_hash = logical_hash_datum_algo(elem, isnull, elemtype, -1,
                                                 i + 1, depth + 1, algo);
-            h = combine_logical(h, elem_hash, algo);
+            h = combine_hash(h, elem_hash, algo);
         }
     }
 
@@ -309,7 +302,7 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, Checksum
         field_hash = logical_hash_datum_algo(values[i], nulls[i],
                                              att->atttypid, att->atttypmod,
                                              i + 1, depth + 1, algo);
-        h = combine_logical(h, field_hash, algo);
+        h = combine_hash(h, field_hash, algo);
     }
 
     if (!local_arrays)
@@ -337,12 +330,12 @@ logical_hash_range(Datum value, Oid typid, int depth, ChecksumAlgo algo)
 
     range_deserialize(typcache, range, &lower, &upper, &empty);
 
-    h = logical_hash_bytes(h, &empty, sizeof(empty), algo);
+    h = hash_bytes_algo(h, &empty, sizeof(empty), algo);
 
     if (!empty)
     {
-        h = logical_hash_bytes(h, &lower.infinite, sizeof(lower.infinite), algo);
-        h = logical_hash_bytes(h, &lower.inclusive, sizeof(lower.inclusive), algo);
+        h = hash_bytes_algo(h, &lower.infinite, sizeof(lower.infinite), algo);
+        h = hash_bytes_algo(h, &lower.inclusive, sizeof(lower.inclusive), algo);
         if (!lower.infinite)
         {
             uint64      lower_hash;
@@ -350,11 +343,11 @@ logical_hash_range(Datum value, Oid typid, int depth, ChecksumAlgo algo)
             lower_hash = logical_hash_datum_algo(lower.val, false,
                                                  typcache->rngelemtype->type_id,
                                                  -1, 1, depth + 1, algo);
-            h = combine_logical(h, lower_hash, algo);
+            h = combine_hash(h, lower_hash, algo);
         }
 
-        h = logical_hash_bytes(h, &upper.infinite, sizeof(upper.infinite), algo);
-        h = logical_hash_bytes(h, &upper.inclusive, sizeof(upper.inclusive), algo);
+        h = hash_bytes_algo(h, &upper.infinite, sizeof(upper.infinite), algo);
+        h = hash_bytes_algo(h, &upper.inclusive, sizeof(upper.inclusive), algo);
         if (!upper.infinite)
         {
             uint64      upper_hash;
@@ -362,7 +355,7 @@ logical_hash_range(Datum value, Oid typid, int depth, ChecksumAlgo algo)
             upper_hash = logical_hash_datum_algo(upper.val, false,
                                                  typcache->rngelemtype->type_id,
                                                  -1, 2, depth + 1, algo);
-            h = combine_logical(h, upper_hash, algo);
+            h = combine_hash(h, upper_hash, algo);
         }
     }
 
@@ -394,24 +387,24 @@ logical_hash_multirange(Datum value, Oid typid, int depth, ChecksumAlgo algo)
 
         multirange_get_bounds(typcache->rngtype, mr, i, &lower, &upper);
 
-        h = logical_hash_bytes(h, &lower.infinite, sizeof(lower.infinite), algo);
-        h = logical_hash_bytes(h, &lower.inclusive, sizeof(lower.inclusive), algo);
+        h = hash_bytes_algo(h, &lower.infinite, sizeof(lower.infinite), algo);
+        h = hash_bytes_algo(h, &lower.inclusive, sizeof(lower.inclusive), algo);
         if (!lower.infinite)
         {
             lower_hash = logical_hash_datum_algo(lower.val, false,
                                                  typcache->rngtype->rngelemtype->type_id,
                                                  -1, 1, depth + 1, algo);
-            h = combine_logical(h, lower_hash, algo);
+            h = combine_hash(h, lower_hash, algo);
         }
 
-        h = logical_hash_bytes(h, &upper.infinite, sizeof(upper.infinite), algo);
-        h = logical_hash_bytes(h, &upper.inclusive, sizeof(upper.inclusive), algo);
+        h = hash_bytes_algo(h, &upper.infinite, sizeof(upper.infinite), algo);
+        h = hash_bytes_algo(h, &upper.inclusive, sizeof(upper.inclusive), algo);
         if (!upper.infinite)
         {
             upper_hash = logical_hash_datum_algo(upper.val, false,
                                                  typcache->rngtype->rngelemtype->type_id,
                                                  -1, 2, depth + 1, algo);
-            h = combine_logical(h, upper_hash, algo);
+            h = combine_hash(h, upper_hash, algo);
         }
     }
 
@@ -447,7 +440,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         h = type_info->tag_prefix;
     else
         h = type_info->tag_prefix64;
-    h = combine_logical(h, (uint64) attnum, algo);
+    h = combine_hash(h, (uint64) attnum, algo);
 
     typid = type_info->base_typid;
     if (type_info->is_domain)
@@ -469,13 +462,13 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
 #endif
         )
     {
-        h = combine_logical(h, logical_hash_array(value, depth, algo), algo);
+        h = combine_hash(h, logical_hash_array(value, depth, algo), algo);
         specialized = true;
     }
 
     if (typtype == TYPTYPE_COMPOSITE || typid == RECORDOID)
     {
-        h = combine_logical(h,
+        h = combine_hash(h,
                             logical_hash_composite(value, typid, typmod,
                                                    depth, algo), algo);
         specialized = true;
@@ -483,14 +476,14 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
 
     if (typtype == TYPTYPE_RANGE)
     {
-        h = combine_logical(h, logical_hash_range(value, typid, depth, algo), algo);
+        h = combine_hash(h, logical_hash_range(value, typid, depth, algo), algo);
         specialized = true;
     }
 
 #if PG_VERSION_NUM >= 140000
     if (typtype == TYPTYPE_MULTIRANGE)
     {
-        h = combine_logical(h,
+        h = combine_hash(h,
                             logical_hash_multirange(value, typid, depth, algo),
                             algo);
         specialized = true;
@@ -502,7 +495,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         Numeric     num = DatumGetNumeric(value);
         char       *str = numeric_normalize(num);
 
-        h = logical_hash_bytes(h, str, strlen(str), algo);
+        h = hash_bytes_algo(h, str, strlen(str), algo);
         pfree(str);
 
         if ((Pointer) num != DatumGetPointer(value))
@@ -513,12 +506,12 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         float4      f = DatumGetFloat4(value);
 
         if (isnan(f))
-            h = logical_hash_bytes(h, "NaN", 3, algo);
+            h = hash_bytes_algo(h, "NaN", 3, algo);
         else if (f == 0)
         {
             uint32      zero = 0;
 
-            h = logical_hash_bytes(h, &zero, sizeof(zero), algo);
+            h = hash_bytes_algo(h, &zero, sizeof(zero), algo);
         }
         else
         {
@@ -526,7 +519,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                 logical_type_info(typid) : type_info;
             bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
 
-            h = logical_hash_bytes(h, VARDATA(bytes),
+            h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
             pfree(bytes);
         }
@@ -536,12 +529,12 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         float8      f = DatumGetFloat8(value);
 
         if (isnan(f))
-            h = logical_hash_bytes(h, "NaN", 3, algo);
+            h = hash_bytes_algo(h, "NaN", 3, algo);
         else if (f == 0)
         {
             uint64      zero = 0;
 
-            h = logical_hash_bytes(h, &zero, sizeof(zero), algo);
+            h = hash_bytes_algo(h, &zero, sizeof(zero), algo);
         }
         else
         {
@@ -549,7 +542,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                 logical_type_info(typid) : type_info;
             bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
 
-            h = logical_hash_bytes(h, VARDATA(bytes),
+            h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
             pfree(bytes);
         }
@@ -563,7 +556,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         {
             bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
 
-            h = logical_hash_bytes(h, VARDATA(bytes),
+            h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
             pfree(bytes);
         }
@@ -571,7 +564,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         {
             char       *str = OidOutputFunctionCall(base_info->outfunc, value);
 
-            h = logical_hash_bytes(h, str, strlen(str), algo);
+            h = hash_bytes_algo(h, str, strlen(str), algo);
             pfree(str);
         }
         else
@@ -596,29 +589,6 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
 }
 
 /*
- * combine_logical - combine two canonical logical hashes
- */
-uint64
-combine_logical(uint64 current, uint64 new_val, ChecksumAlgo algo)
-{
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return combine_checksums((uint32) current, (uint32) new_val);
-    return combine_checksums_64(current, new_val);
-}
-
-/*
- * logical_hash_datum - legacy 32-bit canonical hash wrapper
- */
-static uint32
-logical_hash_datum(Datum value, bool isnull, Oid typid,
-                   int32 typmod, int attnum, int depth)
-{
-    return (uint32) logical_hash_datum_algo(value, isnull, typid, typmod,
-                                            attnum, depth,
-                                            CHECKSUM_ALGO_FNV32);
-}
-
-/*
  * pg_cell_checksum_canonical_algo - canonical logical cell checksum
  *
  * algo == CHECKSUM_ALGO_FNV32 selects the historical 32-bit FNV path; algo == CHECKSUM_ALGO_FNV64 selects
@@ -630,14 +600,4 @@ pg_cell_checksum_canonical_algo(Datum value, bool isnull, Oid typid,
 {
     return logical_hash_datum_algo(value, isnull, typid, typmod, attnum, 0,
                                    algo);
-}
-
-/*
- * pg_cell_checksum_canonical - legacy 32-bit logical cell checksum
- */
-uint32
-pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
-                           int32 typmod, int attnum)
-{
-    return logical_hash_datum(value, isnull, typid, typmod, attnum, 0);
 }

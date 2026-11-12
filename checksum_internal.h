@@ -208,6 +208,9 @@ extern uint32 pg_checksum_data_custom(const char *data, uint32 len,
                                        uint32 init_value);
 extern uint64 fnv1a_64_buf(const unsigned char *bytes, size_t len, uint64 hash);
 extern uint64 fnv1a_64_hash(const void *data, size_t len, uint64 seed);
+extern uint64 hash_bytes_algo(uint64 seed, const void *data, size_t len,
+                              ChecksumAlgo algo);
+extern uint64 combine_hash(uint64 current, uint64 new_val, ChecksumAlgo algo);
 
 /* SQL argument validation/encoding shared by the hash entry points. */
 extern ChecksumAlgo checksum_algorithm(text *value);
@@ -308,7 +311,20 @@ extern uint64 pg_tuple_physical_checksum_internal(Relation rel, Page page,
 extern uint64 pg_tuple_logical_checksum_internal(Relation rel,
                                                  HeapTuple tuple, ChecksumAlgo algo);
 
+/*
+ * TupleVisitor - called for every heap tuple that is visible to a snapshot
+ *
+ * The page is share-locked for the duration of the call.
+ */
+typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
+                              OffsetNumber offnum, HeapTuple tuple,
+                              void *arg);
+
 /* Serial block-range scans. */
+extern void scan_visible_tuples(Relation rel, BlockNumber start,
+                                BlockNumber end, Snapshot snapshot,
+                                BufferAccessStrategy bstrategy,
+                                TupleVisitor visitor, void *arg);
 extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
                                        BlockNumber end, bool include_header,
                                        Snapshot snapshot, ChecksumAccum *acc,
@@ -336,11 +352,8 @@ extern void scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
                                          BufferAccessStrategy bstrategy);
 
 /* Canonical logical encoding. */
-extern uint64 combine_logical(uint64 current, uint64 new_val, ChecksumAlgo algo);
 extern void logical_type_cache_invalidate(Datum arg, int cacheid,
                                           uint32 hashvalue);
-extern uint32 pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
-                                         int32 typmod, int attnum);
 extern uint64 pg_cell_checksum_canonical_algo(Datum value, bool isnull,
                                               Oid typid, int32 typmod,
                                               int attnum, ChecksumAlgo algo);

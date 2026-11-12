@@ -122,6 +122,30 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
 }
 
 /*
+ * add_relation_result - fold one relation's checksum into the aggregate
+ *
+ * The accumulator is chosen by which pointer is set: logical_acc64 for
+ * 64-bit logical scans, logical_acc for 32-bit logical scans, otherwise the
+ * physical accumulator (which also mixes in the relation OID).  A skipped
+ * relation is only an error in strict mode.
+ */
+static void
+add_relation_result(Oid relid, uint64 rel_checksum, bool skip,
+                    ChecksumAccum64 *acc, ChecksumLogicalAccum *logical_acc,
+                    ChecksumLogicalAccum64 *logical_acc64)
+{
+    if (skip)
+        pg_integrity_checksums_report_skipped_relation(relid);
+    else if (logical_acc64 != NULL)
+        logical_accum_add64(logical_acc64, rel_checksum);
+    else if (logical_acc != NULL)
+        logical_accum_add(logical_acc, (uint32) rel_checksum);
+    else
+        checksum_accum64_add(acc, combine_checksums_64(rel_checksum,
+                                                       (uint64) relid));
+}
+
+/*
  * compute_database_items - database checksum over a range of relations
  */
 void
@@ -154,16 +178,8 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
         {
             compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                                   &skip);
-            if (skip)
-                pg_integrity_checksums_report_skipped_relation(relid);
-            else if (logical_acc64 != NULL)
-                logical_accum_add64(logical_acc64, rel_checksum);
-            else if (logical_acc != NULL)
-                logical_accum_add(logical_acc, (uint32) rel_checksum);
-            else
-                checksum_accum64_add(acc,
-                                     combine_checksums_64(rel_checksum,
-                                                          (uint64) relid));
+            add_relation_result(relid, rel_checksum, skip, acc, logical_acc,
+                                logical_acc64);
             continue;
         }
 #endif
@@ -187,16 +203,8 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                                   &skip);
 
-            if (skip)
-                pg_integrity_checksums_report_skipped_relation(relid);
-            else if (logical_acc64 != NULL)
-                logical_accum_add64(logical_acc64, rel_checksum);
-            else if (logical_acc != NULL)
-                logical_accum_add(logical_acc, (uint32) rel_checksum);
-            else
-                checksum_accum64_add(acc,
-                                     combine_checksums_64(rel_checksum,
-                                                          (uint64) relid));
+            add_relation_result(relid, rel_checksum, skip, acc, logical_acc,
+                                logical_acc64);
 
             /* Commit the inner transaction, return to outer xact context */
             ReleaseCurrentSubTransaction();

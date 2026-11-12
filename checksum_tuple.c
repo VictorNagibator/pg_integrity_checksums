@@ -17,8 +17,6 @@
 
 #include "checksum_internal.h"
 
-static uint64 combine_physical(uint64 current, uint64 new_val, ChecksumAlgo algo);
-
 /*-------------------------------------------------------------------------
  * TUPLE LEVEL FUNCTIONS (Physical and Logical)
  *-------------------------------------------------------------------------
@@ -120,11 +118,11 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
      * still has a different physical checksum.  The relation OID keeps
      * checksums from different relations distinct.
      */
-    location_hash = combine_physical(location_hash,
+    location_hash = combine_hash(location_hash,
                                      (uint64) RelationGetRelid(rel), algo);
-    location_hash = combine_physical(location_hash,
+    location_hash = combine_hash(location_hash,
                                      (uint64) rel->rd_rel->relfilenode, algo);
-    location_hash = combine_physical(location_hash,
+    location_hash = combine_hash(location_hash,
                                      (uint64) rel->rd_rel->reltablespace, algo);
 
     /*
@@ -134,7 +132,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
      * on who happened to read the page first.
      */
     page_info = PageGetPageSize(page) | (PageGetPageLayoutVersion(page) << 16);
-    location_hash = combine_physical(location_hash, page_info, algo);
+    location_hash = combine_hash(location_hash, page_info, algo);
 
     /* Calculate checksum using location_hash as the initial value */
     if (algo == CHECKSUM_ALGO_FNV32)
@@ -150,7 +148,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
 
     /* Include ItemId information */
     itemid_info = (ItemIdGetFlags(lp) << 24) | ItemIdGetLength(lp);
-    checksum = combine_physical(checksum, itemid_info, algo);
+    checksum = combine_hash(checksum, itemid_info, algo);
 
     if (algo == CHECKSUM_ALGO_FNV32)
     {
@@ -168,17 +166,6 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     }
 
     return checksum;
-}
-
-/*
- * combine_physical - combine physical metadata with the selected algorithm
- */
-static uint64
-combine_physical(uint64 current, uint64 new_val, ChecksumAlgo algo)
-{
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return combine_checksums((uint32) current, (uint32) new_val);
-    return combine_checksums_64(current, new_val);
 }
 
 /*
@@ -313,7 +300,7 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo a
                                                    attr->atttypmod,
                                                    i, algo);
 
-        checksum = combine_logical(checksum, col_hash, algo);
+        checksum = combine_hash(checksum, col_hash, algo);
     }
 
     if (algo == CHECKSUM_ALGO_FNV32)

@@ -101,6 +101,36 @@ fnv1a_64_hash(const void *data, size_t len, uint64 seed)
 }
 
 /*
+ * hash_bytes_algo - FNV-1a over a byte range with the selected algorithm
+ *
+ * "seed" is the running hash (or 0 to start from the offset basis, as in
+ * fnv1a_32_hash() / fnv1a_64_hash()).  For fnv32 the result is zero-extended.
+ */
+uint64
+hash_bytes_algo(uint64 seed, const void *data, size_t len, ChecksumAlgo algo)
+{
+    if (algo == CHECKSUM_ALGO_FNV32)
+        return fnv1a_32_hash(data, len, (uint32) seed);
+
+    return fnv1a_64_hash(data, len, seed);
+}
+
+/*
+ * combine_hash - order-dependent combination with the selected algorithm
+ *
+ * Dispatches to combine_checksums() or combine_checksums_64().  For fnv32
+ * both operands are truncated to 32 bits.
+ */
+uint64
+combine_hash(uint64 current, uint64 new_val, ChecksumAlgo algo)
+{
+    if (algo == CHECKSUM_ALGO_FNV32)
+        return combine_checksums((uint32) current, (uint32) new_val);
+
+    return combine_checksums_64(current, new_val);
+}
+
+/*
  * checksum_algorithm - parse the SQL algorithm name
  *
  * The generic SQL functions accept the algorithm as text so future built-in

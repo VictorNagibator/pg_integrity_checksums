@@ -414,6 +414,67 @@ pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
 }
 
 /*
+ * IndexLogicalVisitorState - accumulator state for a logical index scan
+ *
+ * Only the accumulator that matches "algo" is used.
+ */
+typedef struct IndexLogicalVisitorState
+{
+    IndexLogicalScanState *scanstate;
+    ChecksumAlgo algo;
+    ChecksumLogicalAccum *acc32;
+    ChecksumLogicalAccum64 *acc64;
+} IndexLogicalVisitorState;
+
+/*
+ * index_logical_tuple_visitor - hash the index entry of one visible heap tuple
+ *
+ * Evaluates the index expressions and predicate on the heap tuple and hashes
+ * the resulting index columns, so that the checksum covers the index
+ * definition's view of the data rather than its physical layout.
+ */
+static void
+index_logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
+                            OffsetNumber offnum, HeapTuple tuple, void *arg)
+{
+    IndexLogicalVisitorState *state = (IndexLogicalVisitorState *) arg;
+    IndexLogicalScanState *scanstate = state->scanstate;
+    uint64      row_hash;
+    int         i;
+
+    ResetExprContext(scanstate->econtext);
+    ExecStoreHeapTuple(tuple, scanstate->slot, false);
+    scanstate->econtext->ecxt_scantuple = scanstate->slot;
+
+    if (scanstate->predicate != NULL &&
+        !ExecQual(scanstate->predicate, scanstate->econtext))
+        return;
+
+    FormIndexDatum(scanstate->indexInfo, scanstate->slot, scanstate->estate,
+                   scanstate->values, scanstate->nulls);
+
+    row_hash = (state->algo == CHECKSUM_ALGO_FNV32) ? FNV_BASIS_32
+        : FNV_BASIS_64;
+
+    for (i = 0; i < scanstate->nattrs; i++)
+    {
+        uint64      col_hash;
+
+        col_hash = pg_cell_checksum_canonical_algo(scanstate->values[i],
+                                                   scanstate->nulls[i],
+                                                   scanstate->inputtypid[i],
+                                                   scanstate->inputtypmod[i],
+                                                   i + 1, state->algo);
+        row_hash = combine_hash(row_hash, col_hash, state->algo);
+    }
+
+    if (state->algo == CHECKSUM_ALGO_FNV32)
+        logical_accum_add(state->acc32, (uint32) row_hash);
+    else
+        logical_accum_add64(state->acc64, row_hash);
+}
+
+/*
  * pg_index_logical_scan_blocks - hash index definitions over a heap block range
  */
 void
@@ -421,206 +482,28 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
                              BlockNumber start, BlockNumber end,
                              ChecksumLogicalAccum *acc)
 {
-    BlockNumber blkno;
+    IndexLogicalVisitorState state = {scanstate, CHECKSUM_ALGO_FNV32, acc,
+                                      NULL};
 
-    for (blkno = start; blkno < end; blkno++)
-    {
-        Buffer      buffer;
-        Page        page;
-        OffsetNumber maxoff;
-        OffsetNumber offnum;
-
-        buffer = ReadBufferExtended(scanstate->heapRel, MAIN_FORKNUM, blkno,
-                                    RBM_NORMAL, scanstate->bstrategy);
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        page = BufferGetPage(buffer);
-
-        if (PageIsNew(page))
-        {
-            UnlockReleaseBuffer(buffer);
-            if ((blkno & 63) == 0)
-                CHECK_FOR_INTERRUPTS();
-            continue;
-        }
-
-        pg_integrity_checksums_check_page(scanstate->heapRel, blkno, page);
-
-        maxoff = PageGetMaxOffsetNumber(page);
-        for (offnum = FirstOffsetNumber; offnum <= maxoff;
-             offnum = OffsetNumberNext(offnum))
-        {
-            ItemId      lp = PageGetItemId(page, offnum);
-            HeapTupleHeader htup;
-            HeapTupleData tuple;
-            Size        tuple_len;
-
-            if (!ItemIdIsNormal(lp))
-                continue;
-
-            if (!pg_integrity_checksums_item_is_sane(page, lp))
-                ereport(ERROR,
-                        (errcode(ERRCODE_DATA_CORRUPTED),
-                         errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
-                                RelationGetRelationName(scanstate->heapRel),
-                                blkno, offnum)));
-
-            htup = (HeapTupleHeader) PageGetItem(page, lp);
-            tuple_len = ItemIdGetLength(lp);
-
-            pg_integrity_checksums_check_heap_tuple(scanstate->heapRel, blkno, offnum,
-                                          htup, tuple_len);
-
-            tuple.t_len = tuple_len;
-            tuple.t_data = htup;
-            tuple.t_tableOid = RelationGetRelid(scanstate->heapRel);
-            ItemPointerSet(&tuple.t_self, blkno, offnum);
-
-            if (!HeapTupleSatisfiesVisibility(&tuple, scanstate->snapshot,
-                                              buffer))
-                continue;
-
-            ResetExprContext(scanstate->econtext);
-            ExecStoreHeapTuple(&tuple, scanstate->slot, false);
-            scanstate->econtext->ecxt_scantuple = scanstate->slot;
-
-            if (scanstate->predicate != NULL &&
-                !ExecQual(scanstate->predicate, scanstate->econtext))
-                continue;
-
-            FormIndexDatum(scanstate->indexInfo, scanstate->slot,
-                           scanstate->estate, scanstate->values,
-                           scanstate->nulls);
-
-            {
-                uint32      row_hash = FNV_BASIS_32;
-                int         i;
-
-                for (i = 0; i < scanstate->nattrs; i++)
-                {
-                    uint32      col_hash;
-
-                    col_hash = pg_cell_checksum_canonical(scanstate->values[i],
-                                                          scanstate->nulls[i],
-                                                          scanstate->inputtypid[i],
-                                                          scanstate->inputtypmod[i],
-                                                          i + 1);
-                    row_hash = combine_checksums(row_hash, col_hash);
-                }
-
-                logical_accum_add(acc, row_hash);
-            }
-        }
-
-        UnlockReleaseBuffer(buffer);
-
-        if ((blkno & 63) == 0)
-            CHECK_FOR_INTERRUPTS();
-    }
-
+    scan_visible_tuples(scanstate->heapRel, start, end, scanstate->snapshot,
+                        scanstate->bstrategy, index_logical_tuple_visitor,
+                        &state);
 }
 
+/*
+ * pg_index_logical_scan_blocks64 - 64-bit variant of the above
+ */
 void
 pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
-                             BlockNumber start, BlockNumber end,
-                             ChecksumLogicalAccum64 *acc)
+                               BlockNumber start, BlockNumber end,
+                               ChecksumLogicalAccum64 *acc)
 {
-    BlockNumber blkno;
+    IndexLogicalVisitorState state = {scanstate, CHECKSUM_ALGO_FNV64, NULL,
+                                      acc};
 
-    for (blkno = start; blkno < end; blkno++)
-    {
-        Buffer      buffer;
-        Page        page;
-        OffsetNumber maxoff;
-        OffsetNumber offnum;
-
-        buffer = ReadBufferExtended(scanstate->heapRel, MAIN_FORKNUM, blkno,
-                                    RBM_NORMAL, scanstate->bstrategy);
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        page = BufferGetPage(buffer);
-
-        if (PageIsNew(page))
-        {
-            UnlockReleaseBuffer(buffer);
-            if ((blkno & 63) == 0)
-                CHECK_FOR_INTERRUPTS();
-            continue;
-        }
-
-        pg_integrity_checksums_check_page(scanstate->heapRel, blkno, page);
-
-        maxoff = PageGetMaxOffsetNumber(page);
-        for (offnum = FirstOffsetNumber; offnum <= maxoff;
-             offnum = OffsetNumberNext(offnum))
-        {
-            ItemId      lp = PageGetItemId(page, offnum);
-            HeapTupleHeader htup;
-            HeapTupleData tuple;
-            Size        tuple_len;
-
-            if (!ItemIdIsNormal(lp))
-                continue;
-
-            if (!pg_integrity_checksums_item_is_sane(page, lp))
-                ereport(ERROR,
-                        (errcode(ERRCODE_DATA_CORRUPTED),
-                         errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
-                                RelationGetRelationName(scanstate->heapRel),
-                                blkno, offnum)));
-
-            htup = (HeapTupleHeader) PageGetItem(page, lp);
-            tuple_len = ItemIdGetLength(lp);
-
-            pg_integrity_checksums_check_heap_tuple(scanstate->heapRel, blkno, offnum,
-                                          htup, tuple_len);
-
-            tuple.t_len = tuple_len;
-            tuple.t_data = htup;
-            tuple.t_tableOid = RelationGetRelid(scanstate->heapRel);
-            ItemPointerSet(&tuple.t_self, blkno, offnum);
-
-            if (!HeapTupleSatisfiesVisibility(&tuple, scanstate->snapshot,
-                                              buffer))
-                continue;
-
-            ResetExprContext(scanstate->econtext);
-            ExecStoreHeapTuple(&tuple, scanstate->slot, false);
-            scanstate->econtext->ecxt_scantuple = scanstate->slot;
-
-            if (scanstate->predicate != NULL &&
-                !ExecQual(scanstate->predicate, scanstate->econtext))
-                continue;
-
-            FormIndexDatum(scanstate->indexInfo, scanstate->slot,
-                           scanstate->estate, scanstate->values,
-                           scanstate->nulls);
-
-            {
-                uint64      row_hash = FNV_BASIS_64;
-                int         i;
-
-                for (i = 0; i < scanstate->nattrs; i++)
-                {
-                    uint64      col_hash;
-
-                    col_hash = pg_cell_checksum_canonical_algo(scanstate->values[i],
-                                                          scanstate->nulls[i],
-                                                          scanstate->inputtypid[i],
-                                                          scanstate->inputtypmod[i],
-                                                          i + 1, 1);
-                    row_hash = combine_logical(row_hash, col_hash,
-                                               CHECKSUM_ALGO_FNV64);
-                }
-
-                logical_accum_add64(acc, row_hash);
-            }
-        }
-
-        UnlockReleaseBuffer(buffer);
-
-        if ((blkno & 63) == 0)
-            CHECK_FOR_INTERRUPTS();
-    }
-
+    scan_visible_tuples(scanstate->heapRel, start, end, scanstate->snapshot,
+                        scanstate->bstrategy, index_logical_tuple_visitor,
+                        &state);
 }
 
 /*

@@ -1,5 +1,34 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.4.0   2026-11-12
+
+    - Fix: logical checksums no longer depend on dropped columns.  Table
+      columns, composite fields and pg_cell_checksum() now hash the position
+      among the live columns instead of the physical attribute number, so a
+      table with dropped columns has the same logical checksum as an
+      identical table without them (for example after pg_dump/restore).
+      Tables without dropped columns are unchanged.
+    - Fix: logical checksums no longer depend on the session's search_path.
+      User-defined types are identified by their unqualified name instead of
+      format_type_be(), which qualified the name when the schema was not on
+      the search_path.  Types in pg_catalog and types visible in the default
+      search_path are unchanged.
+    - Fix: physical tuple checksums that include the tuple header
+      (include_header = true) ignore the xmin/xmax hint bits, which readers
+      set lazily; the value used to change after the first read of a tuple.
+      Checksums without the header are unchanged.
+    - Revoke EXECUTE from PUBLIC on the generic database-level overloads
+      (pg_database_*_checksum(boolean, boolean, text)); they already required
+      a superuser.
+    - Add 2.3.0 -> 2.4.0 upgrade script and a regression test for the
+      portability fixes.
+
+    Baselines are affected only if they were taken (1) on tables with dropped
+    columns or composite types with dropped attributes, (2) on user-defined
+    types from a session whose search_path did not include the type's schema,
+    or (3) with include_header = true.  See "Upgrading to 2.4" in
+    docs/installation.md.
+
 2.3.0   2026-11-10
 
     - Add pg_page_checksum_status(regclass, integer) to verify a page against

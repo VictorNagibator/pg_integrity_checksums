@@ -144,6 +144,41 @@ If the generic call reports that the function does not exist, the installed
 extension is older than 2.2 or the upgrade did not run.  See
 [Upgrading to 2.2](#upgrading-to-22).
 
+## Upgrading to 2.4
+
+2.4 fixes three cases where a logical or physical checksum depended on
+something other than the stored data.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.4.0';
+```
+
+Checksum values change, and old baselines no longer match, only in these
+cases:
+
+- **Dropped columns.**  Tables with dropped columns, and composite types with
+  dropped attributes, used to hash the physical attribute number.  They now
+  hash the position among the live columns, so the checksum equals that of an
+  identical table without the dropped columns (for example after a
+  dump/restore).  Tables without dropped columns are unchanged.
+- **search_path.**  A user-defined type used to be named with its schema when
+  the schema was not on the session's `search_path`.  It is now always
+  identified by its unqualified name.  Baselines taken from a session with the
+  default `search_path` (types in `public`) are unchanged; baselines taken with
+  another `search_path` must be recreated.
+- **`include_header = true`.**  Physical tuple and table checksums that include
+  the tuple header now ignore the xmin/xmax hint bits, which are set lazily
+  by whichever session reads a tuple first.  Checksums with
+  `include_header = false` (the default) are unchanged.
+
+To check whether an existing baseline is affected, recompute it after the
+upgrade and compare.  If it differs, recreate it from the current data; the
+earlier value reflected the old, less stable computation.
+
+The 2.4 upgrade also revokes `EXECUTE` from `PUBLIC` on the generic
+`pg_database_*_checksum(boolean, boolean, text)` functions.  They already
+required a superuser.
+
 ## Upgrading to 2.3
 
 2.3 adds `pg_page_checksum_status(regclass, integer)`, which verifies a page

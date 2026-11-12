@@ -9,6 +9,7 @@
 #include <math.h>
 #include "fmgr.h"
 #include "access/htup_details.h"
+#include "catalog/pg_namespace.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "utils/array.h"
@@ -110,6 +111,53 @@ logical_type_cache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
 }
 
 /*
+ * logical_type_tag - the name that identifies a type in the hash
+ *
+ * The tag must not depend on the session.  format_type_be() qualifies a name
+ * with its schema exactly when the type is not visible in search_path, so two
+ * sessions could hash the same enum or composite value differently.  Types in
+ * pg_catalog keep the format_type_be() spelling ("integer", "timestamp with
+ * time zone", ...); pg_catalog is always searched first, so that name is
+ * stable.  Every other type is identified by its unqualified, quoted name,
+ * which is also what format_type_be() returns for a visible type; arrays use
+ * the tag of their element type plus "[]".
+ *
+ * The result is palloc'd.
+ */
+static char *
+logical_type_tag(Oid typid)
+{
+    Oid         elemtype = get_element_type(typid);
+    HeapTuple   type_tuple;
+    Form_pg_type type_form;
+    char       *tag;
+
+    if (OidIsValid(elemtype))
+    {
+        char       *elem_tag = logical_type_tag(elemtype);
+
+        tag = psprintf("%s[]", elem_tag);
+        pfree(elem_tag);
+        return tag;
+    }
+
+    type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+    if (!HeapTupleIsValid(type_tuple))
+        elog(ERROR, "cache lookup failed for type %u", typid);
+
+    type_form = (Form_pg_type) GETSTRUCT(type_tuple);
+
+    if (type_form->typnamespace == PG_CATALOG_NAMESPACE)
+        tag = format_type_be(typid);
+    else
+        tag = pstrdup(quote_identifier(NameStr(type_form->typname)));
+
+    ReleaseSysCache(type_tuple);
+
+    return tag;
+}
+
+/*
  * logical_type_info - look up (and cache) the metadata of a type
  *
  * The result is returned by value on purpose.  A syscache invalidation can
@@ -147,7 +195,7 @@ logical_type_info(Oid typid)
         elog(ERROR, "cache lookup failed for type %u", typid);
 
     type_form = (Form_pg_type) GETSTRUCT(type_tuple);
-    tag = format_type_be(typid);
+    tag = logical_type_tag(typid);
 
     info.typid = typid;
     info.tag_prefix = combine_checksums(FNV_BASIS_32,
@@ -281,6 +329,7 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, Checksum
     bool        local_arrays;
     uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
     int         non_dropped = 0;
+    int         ordinal = 0;
     int         i;
 
     if (typid == RECORDOID)
@@ -326,9 +375,12 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, Checksum
         if (att->attisdropped)
             continue;
 
+        /* Position among the live fields, as for table columns. */
+        ordinal++;
+
         field_hash = logical_hash_datum_algo(values[i], nulls[i],
                                              att->atttypid, att->atttypmod,
-                                             i + 1, depth + 1, algo);
+                                             ordinal, depth + 1, algo);
         h = combine_hash(h, field_hash, algo);
     }
 

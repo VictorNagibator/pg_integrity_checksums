@@ -58,7 +58,7 @@ typedef struct LogicalTypeInfo
 
 static HTAB *logical_type_cache = NULL;
 
-static LogicalTypeInfo *logical_type_info(Oid typid);
+static LogicalTypeInfo logical_type_info(Oid typid);
 
 /*
  * Canonical logical value encoding
@@ -109,12 +109,85 @@ logical_type_cache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
     }
 }
 
-static LogicalTypeInfo *
+/*
+ * logical_type_info - look up (and cache) the metadata of a type
+ *
+ * The result is returned by value on purpose.  A syscache invalidation can
+ * arrive at almost any catalog access, including while a caller is still
+ * hashing a value (send functions, nested types), and the invalidation
+ * callback destroys the whole cache.  A pointer into the cache could dangle
+ * by then; a copy cannot.
+ *
+ * For the same reason the entry is built in a local variable and only
+ * inserted once all catalog lookups are done: the catalog work may itself
+ * trigger an invalidation, and an error part-way must not leave a
+ * half-initialized entry behind.
+ */
+static LogicalTypeInfo
 logical_type_info(Oid typid)
 {
-    LogicalTypeInfo *info;
-    bool        found;
+    LogicalTypeInfo info;
+    LogicalTypeInfo *cached;
+    HeapTuple   type_tuple;
+    Form_pg_type type_form;
+    char       *tag;
 
+    if (logical_type_cache != NULL)
+    {
+        cached = (LogicalTypeInfo *) hash_search(logical_type_cache, &typid,
+                                                 HASH_FIND, NULL);
+        if (cached != NULL)
+            return *cached;
+    }
+
+    memset(&info, 0, sizeof(info));
+
+    type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+    if (!HeapTupleIsValid(type_tuple))
+        elog(ERROR, "cache lookup failed for type %u", typid);
+
+    type_form = (Form_pg_type) GETSTRUCT(type_tuple);
+    tag = format_type_be(typid);
+
+    info.typid = typid;
+    info.tag_prefix = combine_checksums(FNV_BASIS_32,
+                                        fnv1a_32_hash(tag, strlen(tag),
+                                                      FNV_BASIS_32));
+    info.tag_prefix64 = combine_checksums_64(FNV_BASIS_64,
+                                             fnv1a_64_hash(tag, strlen(tag),
+                                                           FNV_BASIS_64));
+    info.sendfunc = type_form->typsend;
+    info.outfunc = type_form->typoutput;
+    info.has_send = OidIsValid(type_form->typsend);
+    info.typlen = type_form->typlen;
+    info.typbyval = type_form->typbyval;
+    info.typalign = type_form->typalign;
+    info.is_domain = (type_form->typtype == TYPTYPE_DOMAIN);
+
+    if (info.is_domain)
+    {
+        int32       domain_typmod = -1;
+
+        info.base_typid = getBaseTypeAndTypmod(typid, &domain_typmod);
+        info.base_typmod = domain_typmod;
+    }
+    else
+    {
+        info.base_typid = typid;
+        info.base_typmod = -1;
+    }
+
+    info.base_typtype = get_typtype(info.base_typid);
+    info.elemtype = get_element_type(info.base_typid);
+
+    pfree(tag);
+    ReleaseSysCache(type_tuple);
+
+    /*
+     * The lookups above may have processed invalidation messages and thereby
+     * destroyed the cache, so create it on demand here, right before the
+     * insertion.
+     */
     if (logical_type_cache == NULL)
     {
         HASHCTL     ctl;
@@ -128,55 +201,9 @@ logical_type_info(Oid typid)
                                          HASH_ELEM | HASH_BLOBS);
     }
 
-    info = (LogicalTypeInfo *) hash_search(logical_type_cache, &typid,
-                                           HASH_ENTER, &found);
-    if (!found)
-    {
-        HeapTuple   type_tuple;
-        Form_pg_type type_form;
-        char       *tag;
-
-        type_tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
-        if (!HeapTupleIsValid(type_tuple))
-            elog(ERROR, "cache lookup failed for type %u", typid);
-
-        type_form = (Form_pg_type) GETSTRUCT(type_tuple);
-        tag = format_type_be(typid);
-
-        info->typid = typid;
-        info->tag_prefix = combine_checksums(FNV_BASIS_32,
-                                             fnv1a_32_hash(tag, strlen(tag),
-                                                           FNV_BASIS_32));
-        info->tag_prefix64 = combine_checksums_64(FNV_BASIS_64,
-                                                  fnv1a_64_hash(tag, strlen(tag),
-                                                                FNV_BASIS_64));
-        info->sendfunc = type_form->typsend;
-        info->outfunc = type_form->typoutput;
-        info->has_send = OidIsValid(type_form->typsend);
-        info->typlen = type_form->typlen;
-        info->typbyval = type_form->typbyval;
-        info->typalign = type_form->typalign;
-        info->is_domain = (type_form->typtype == TYPTYPE_DOMAIN);
-
-        if (info->is_domain)
-        {
-            int32       domain_typmod = -1;
-
-            info->base_typid = getBaseTypeAndTypmod(typid, &domain_typmod);
-            info->base_typmod = domain_typmod;
-        }
-        else
-        {
-            info->base_typid = typid;
-            info->base_typmod = -1;
-        }
-
-        info->base_typtype = get_typtype(info->base_typid);
-        info->elemtype = get_element_type(info->base_typid);
-
-        pfree(tag);
-        ReleaseSysCache(type_tuple);
-    }
+    cached = (LogicalTypeInfo *) hash_search(logical_type_cache, &typid,
+                                             HASH_ENTER, NULL);
+    *cached = info;
 
     return info;
 }
@@ -186,7 +213,7 @@ logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
 {
     AnyArrayType *arr = (AnyArrayType *) DatumGetArrayTypeP(value);
     Oid         elemtype = AARR_ELEMTYPE(arr);
-    LogicalTypeInfo *elem_info = logical_type_info(elemtype);
+    LogicalTypeInfo elem_info = logical_type_info(elemtype);
     array_iter  iter;
     int         nelems;
     int         ndim = AARR_NDIM(arr);
@@ -209,8 +236,8 @@ logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
     if (nelems > 0)
     {
 #if PG_VERSION_NUM >= 190000
-        array_iter_setup(&iter, arr, elem_info->typlen,
-                         elem_info->typbyval, elem_info->typalign);
+        array_iter_setup(&iter, arr, elem_info.typlen,
+                         elem_info.typbyval, elem_info.typalign);
 #else
         array_iter_setup(&iter, arr);
 #endif
@@ -224,8 +251,8 @@ logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
 #if PG_VERSION_NUM >= 190000
             elem = array_iter_next(&iter, &isnull, i);
 #else
-            elem = array_iter_next(&iter, &isnull, i, elem_info->typlen,
-                                   elem_info->typbyval, elem_info->typalign);
+            elem = array_iter_next(&iter, &isnull, i, elem_info.typlen,
+                                   elem_info.typbyval, elem_info.typalign);
 #endif
             elem_hash = logical_hash_datum_algo(elem, isnull, elemtype, -1,
                                                 i + 1, depth + 1, algo);
@@ -419,7 +446,7 @@ static uint64
 logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                         int32 typmod, int attnum, int depth, ChecksumAlgo algo)
 {
-    LogicalTypeInfo *type_info;
+    LogicalTypeInfo type_info;
     char        typtype;
     Oid         elemtype;
     bool        specialized = false;
@@ -437,16 +464,16 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
 
     type_info = logical_type_info(typid);
     if (algo == CHECKSUM_ALGO_FNV32)
-        h = type_info->tag_prefix;
+        h = type_info.tag_prefix;
     else
-        h = type_info->tag_prefix64;
+        h = type_info.tag_prefix64;
     h = combine_hash(h, (uint64) attnum, algo);
 
-    typid = type_info->base_typid;
-    if (type_info->is_domain)
-        typmod = type_info->base_typmod;
-    typtype = type_info->base_typtype;
-    elemtype = type_info->elemtype;
+    typid = type_info.base_typid;
+    if (type_info.is_domain)
+        typmod = type_info.base_typmod;
+    typtype = type_info.base_typtype;
+    elemtype = type_info.elemtype;
 
     /*
      * Real array types have a concrete element type.  Polymorphic anyarray
@@ -515,9 +542,9 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         }
         else
         {
-            LogicalTypeInfo *base_info = type_info->is_domain ?
+            LogicalTypeInfo base_info = type_info.is_domain ?
                 logical_type_info(typid) : type_info;
-            bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
+            bytea      *bytes = OidSendFunctionCall(base_info.sendfunc, value);
 
             h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
@@ -538,9 +565,9 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         }
         else
         {
-            LogicalTypeInfo *base_info = type_info->is_domain ?
+            LogicalTypeInfo base_info = type_info.is_domain ?
                 logical_type_info(typid) : type_info;
-            bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
+            bytea      *bytes = OidSendFunctionCall(base_info.sendfunc, value);
 
             h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
@@ -549,20 +576,20 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
     }
     else if (!specialized)
     {
-        LogicalTypeInfo *base_info = type_info->is_domain ?
+        LogicalTypeInfo base_info = type_info.is_domain ?
             logical_type_info(typid) : type_info;
 
-        if (base_info->has_send)
+        if (base_info.has_send)
         {
-            bytea      *bytes = OidSendFunctionCall(base_info->sendfunc, value);
+            bytea      *bytes = OidSendFunctionCall(base_info.sendfunc, value);
 
             h = hash_bytes_algo(h, VARDATA(bytes),
                                    VARSIZE(bytes) - VARHDRSZ, algo);
             pfree(bytes);
         }
-        else if (OidIsValid(base_info->outfunc))
+        else if (OidIsValid(base_info.outfunc))
         {
-            char       *str = OidOutputFunctionCall(base_info->outfunc, value);
+            char       *str = OidOutputFunctionCall(base_info.outfunc, value);
 
             h = hash_bytes_algo(h, str, strlen(str), algo);
             pfree(str);

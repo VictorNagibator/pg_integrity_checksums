@@ -228,11 +228,15 @@ store only the toast pointer in the main tuple.
 relations from the current database.  Cluster-wide shared catalogs (e.g.,
 `pg_authid`, `pg_database`) are excluded even when `include_system` is true.
 
-**Skipped relations:** if a relation cannot be processed (dropped
-concurrently, corrupt, unsupported, ...), the scan rolls back an internal
-subtransaction, emits a warning and continues.  A summary warning is emitted
-at the end.  Cancellation and `statement_timeout` are propagated, so a
-canceled scan never returns a partial result as if it were complete.
+**Skipped relations:** by default (`pg_integrity_checksums.strict = on`, the
+default since 2.5) a relation that cannot be processed (dropped concurrently,
+corrupt, an invalid index, unsupported, ...) makes the whole call fail with
+`relation "..." cannot be checksummed`, so a partial result is never returned
+as if it were complete.  With `strict = off` the scan rolls back an internal
+subtransaction for that relation, emits a warning, excludes the relation and
+continues; a summary warning is emitted at the end.  Cancellation and
+`statement_timeout` are always propagated.  See
+[Strict mode](operations.md#strict-mode).
 
 **PostgreSQL 12-16 and parallel database scans:** those releases prohibit
 internal subtransactions while in parallel mode.  A parallel database scan

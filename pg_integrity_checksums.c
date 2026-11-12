@@ -44,11 +44,13 @@ static int pg_integrity_checksums_workers = 0;
 /*
  * pg_integrity_checksums_strict - GUC controlling database-scan skip behavior
  *
- * When true, a relation that cannot be checksummed (invalid index,
- * unsupported relation kind, or a scan error) aborts the database checksum
- * instead of being skipped with a warning or silently omitted.
+ * When true (the default), a relation that cannot be checksummed (invalid
+ * index, unsupported relation kind, or a scan error) aborts the database
+ * checksum.  When false, such a relation is skipped with a warning and the
+ * result silently excludes it, so a corrupt table no longer shows up as a
+ * changed checksum; that is only appropriate for ad-hoc use.
  */
-bool pg_integrity_checksums_strict = false;
+bool pg_integrity_checksums_strict = true;
 
 /* Upper bound for the GUC; mirrors the sanity limit of parallel workers. */
 #define PG_INTEGRITY_CHECKSUMS_MAX_WORKERS 1024
@@ -73,11 +75,13 @@ _PG_init(void)
 
     DefineCustomBoolVariable("pg_integrity_checksums.strict",
                              "Fail instead of skipping relations.",
-                             "When enabled, database checksum functions abort "
-                             "if a relation cannot be checksummed (invalid "
-                             "index, unsupported relation kind, or error).",
+                             "When enabled (the default), database checksum "
+                             "functions abort if a relation cannot be "
+                             "checksummed (invalid index, unsupported "
+                             "relation kind, or error).  When disabled, such "
+                             "relations are skipped with a warning.",
                              &pg_integrity_checksums_strict,
-                             false,
+                             true,
                              PGC_USERSET, 0,
                              NULL, NULL, NULL);
 

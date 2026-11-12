@@ -85,24 +85,39 @@ RESET pg_integrity_checksums.workers;
 
 ### Strict mode
 
-Database checksum functions normally skip a relation that cannot be
-checksummed (for example an invalid index, a foreign partition, or a relation
-that fails during the scan).  Tables without a primary key are supported, and
-logical index checksums work for every access method.  Physical index
-checksums cover B-tree, Hash, GiST, GIN, SP-GiST and BRIN; other physical
-index AMs are skipped.  Set `pg_integrity_checksums.strict = on` to turn an
-actual skip into an error instead:
+Database checksum functions are **strict by default**.  If a relation cannot
+be checksummed (for example an invalid index, a relation that fails during the
+scan, or a corrupt page), the whole call fails:
 
 ```sql
-SET pg_integrity_checksums.strict = on;
 SELECT pg_database_logical_checksum(false, true);
 -- ERROR: relation "..." cannot be checksummed
--- DETAIL: The relation has no usable checksum.
+-- DETAIL: The relation has no usable checksum (invalid index, unsupported
+--         relation kind, or a scan error).
+-- HINT: Set pg_integrity_checksums.strict = false to skip relations without
+--       a usable checksum.
 ```
 
-The default is `off`.  In strict mode a skipped relation aborts the whole
-database checksum, which is useful for monitoring where a partial result
-would be worse than no result.
+This is deliberate: a partial result is worse than no result for monitoring,
+because a skipped corrupt table would otherwise look like "nothing changed".
+Tables without a primary key are supported, and logical index checksums work
+for every access method.  Physical index checksums cover B-tree, Hash, GiST,
+GIN, SP-GiST and BRIN; other physical index AMs are skipped.
+
+For ad-hoc use you can allow skipping, per session or persistently:
+
+```sql
+SET pg_integrity_checksums.strict = off;
+SELECT pg_database_logical_checksum(false, true);
+-- WARNING: skipping relation 16438 while computing database checksum
+-- WARNING: database checksum skipped one or more relations
+
+ALTER DATABASE appdb SET pg_integrity_checksums.strict = off;  -- persistent
+```
+
+With strict mode off, a skipped relation is excluded from the result and only
+reported as a warning (and, in parallel workers, in the server log), so do not
+use the value for integrity monitoring.  Before 2.5.0 the default was `off`.
 
 ### Correctness
 

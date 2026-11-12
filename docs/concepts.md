@@ -45,6 +45,13 @@ and OID changes.  That makes it suitable for:
 A primary key is **not required**.  Duplicate rows are preserved by a sum plus
 count aggregate, so two identical rows contribute twice.
 
+Since 2.4 the value also does not depend on dropped columns (columns are
+identified by their position among the live columns) or on the session's
+`search_path` (user-defined types are identified by their unqualified name).
+Two caveats remain: renaming a type or a column-bearing relation changes the
+checksum, because type names are part of the hash, and values of types that
+store OIDs (`oid`, `regclass`, ...) are hashed as stored.
+
 ### Physical checksums
 
 A physical checksum is a fingerprint of one cluster’s storage.  It includes

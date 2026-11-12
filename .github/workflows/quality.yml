@@ -6,6 +6,8 @@ on:
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
+      - "checksum_*.c"
+      - "checksum_*.h"
       - "Makefile"
       - "*.control"
       - "pg_integrity_checksums--*.sql"
@@ -22,6 +24,8 @@ on:
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
+      - "checksum_*.c"
+      - "checksum_*.h"
       - "Makefile"
       - "*.control"
       - "pg_integrity_checksums--*.sql"

@@ -607,7 +607,7 @@ pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
                                                           scanstate->inputtypid[i],
                                                           scanstate->inputtypmod[i],
                                                           i + 1, 1);
-                    row_hash = combine_logical(row_hash, col_hash,
+                    row_hash = combine_hash(row_hash, col_hash,
                                                CHECKSUM_ALGO_FNV64);
                 }
 

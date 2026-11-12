@@ -244,14 +244,16 @@ pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
 }
 
 /*
- * scan_relation_raw_pages - checksum a relation as a sequence of raw pages
+ * scan_relation_raw_pages_common - checksum a relation as a sequence of raw pages
  *
  * Used for TOAST relations, whose tuples are not HeapTupleHeader structures
- * and therefore cannot go through the regular heap tuple path.
+ * and therefore cannot go through the regular heap tuple path.  Only the
+ * accumulator that matches "algo" is used.
  */
-void
-scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
-                        ChecksumAccum *acc)
+static void
+scan_relation_raw_pages_common(Relation rel, BlockNumber start,
+                               BlockNumber end, ChecksumAlgo algo,
+                               ChecksumAccum *acc32, ChecksumAccum64 *acc64)
 {
     BlockNumber blkno;
     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
@@ -259,17 +261,19 @@ scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
     for (blkno = start; blkno < end; blkno++)
     {
         Buffer      buffer;
-        Page        page;
-        uint32      page_hash;
+        uint64      page_hash;
 
         buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
                                     bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        page = BufferGetPage(buffer);
 
-        page_hash = fnv1a_32_hash((const unsigned char *) page, BLCKSZ, 0);
-        page_hash = combine_checksums(page_hash, blkno);
-        checksum_accum_add(acc, page_hash);
+        page_hash = hash_bytes_algo(0, BufferGetPage(buffer), BLCKSZ, algo);
+        page_hash = combine_hash(page_hash, blkno, algo);
+
+        if (algo == CHECKSUM_ALGO_FNV32)
+            checksum_accum_add(acc32, (uint32) page_hash);
+        else
+            checksum_accum64_add(acc64, page_hash);
 
         UnlockReleaseBuffer(buffer);
 
@@ -280,33 +284,24 @@ scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
     FreeAccessStrategy(bstrategy);
 }
 
+/*
+ * scan_relation_raw_pages - 32-bit raw-page checksum of a block range
+ */
+void
+scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
+                        ChecksumAccum *acc)
+{
+    scan_relation_raw_pages_common(rel, start, end, CHECKSUM_ALGO_FNV32, acc,
+                                   NULL);
+}
+
+/*
+ * scan_relation_raw_pages64 - 64-bit raw-page checksum of a block range
+ */
 void
 scan_relation_raw_pages64(Relation rel, BlockNumber start, BlockNumber end,
-                        ChecksumAccum64 *acc)
+                          ChecksumAccum64 *acc)
 {
-    BlockNumber blkno;
-    BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
-
-    for (blkno = start; blkno < end; blkno++)
-    {
-        Buffer      buffer;
-        Page        page;
-        uint64      page_hash;
-
-        buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-                                    bstrategy);
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        page = BufferGetPage(buffer);
-
-        page_hash = fnv1a_64_hash((const unsigned char *) page, BLCKSZ, 0);
-        page_hash = combine_checksums_64(page_hash, blkno);
-        checksum_accum64_add(acc, page_hash);
-
-        UnlockReleaseBuffer(buffer);
-
-        if ((blkno & 63) == 0)
-            CHECK_FOR_INTERRUPTS();
-    }
-
-    FreeAccessStrategy(bstrategy);
+    scan_relation_raw_pages_common(rel, start, end, CHECKSUM_ALGO_FNV64, NULL,
+                                   acc);
 }

@@ -1,5 +1,21 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+2.5.0   2026-11-12
+
+    - Behavior change: pg_integrity_checksums.strict now defaults to on.  A
+      database checksum (pg_database_physical_checksum and
+      pg_database_logical_checksum, with or without an algorithm argument)
+      fails when a relation cannot be checksummed, for example an invalid
+      index, an unsupported relation kind or a scan error.  Previously such
+      a relation was skipped with a WARNING, so a corrupt table did not show
+      up as a changed result.
+    - To keep the old behavior set pg_integrity_checksums.strict = off, per
+      session, per role or database (ALTER ROLE/DATABASE ... SET) or in
+      postgresql.conf.
+    - No checksum values change.
+    - Add 2.4.0 -> 2.5.0 upgrade script (no SQL object changes) and regression
+      tests for the default.
+
 2.4.0   2026-11-12
 
     - Fix: logical checksums no longer depend on dropped columns.  Table

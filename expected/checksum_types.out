@@ -266,3 +266,31 @@ DROP TABLE test_types_range_a, test_types_range_b, test_types_range_empty;
 DROP TABLE test_types_json_a, test_types_json_b;
 DROP TABLE test_types_ts_a, test_types_ts_b;
 DROP TABLE test_types_bit, test_types_varbit;
+-- The per-session type metadata cache must follow catalog changes: the type
+-- name is part of the hash, so renaming a type has to change the checksum
+-- and renaming it back has to restore it, within a single session.
+CREATE TYPE test_types_cache_mood AS ENUM ('sad', 'ok');
+CREATE TABLE test_types_cache_t (m test_types_cache_mood);
+INSERT INTO test_types_cache_t VALUES ('ok'), ('sad');
+CREATE TEMP TABLE test_types_cache_sums (label text, sum bigint);
+INSERT INTO test_types_cache_sums
+    SELECT 'before', pg_table_logical_checksum('test_types_cache_t');
+ALTER TYPE test_types_cache_mood RENAME TO test_types_cache_mood2;
+INSERT INTO test_types_cache_sums
+    SELECT 'renamed', pg_table_logical_checksum('test_types_cache_t');
+ALTER TYPE test_types_cache_mood2 RENAME TO test_types_cache_mood;
+INSERT INTO test_types_cache_sums
+    SELECT 'restored', pg_table_logical_checksum('test_types_cache_t');
+SELECT (SELECT sum FROM test_types_cache_sums WHERE label = 'before') <>
+       (SELECT sum FROM test_types_cache_sums WHERE label = 'renamed')
+       AS rename_changes_checksum,
+       (SELECT sum FROM test_types_cache_sums WHERE label = 'before') =
+       (SELECT sum FROM test_types_cache_sums WHERE label = 'restored')
+       AS rename_back_restores_checksum;
+ rename_changes_checksum | rename_back_restores_checksum 
+-------------------------+-------------------------------
+ t                       | t
+(1 row)
+
+DROP TABLE test_types_cache_t;
+DROP TYPE test_types_cache_mood;

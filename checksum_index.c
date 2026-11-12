@@ -269,7 +269,7 @@ Datum
 pg_index_logical_checksum_algo(PG_FUNCTION_ARGS)
 {
     Oid         indexoid;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
 
@@ -279,7 +279,7 @@ pg_index_logical_checksum_algo(PG_FUNCTION_ARGS)
     indexoid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
     {
         uint32      legacy = pg_index_logical_checksum_calc(indexoid, true,
                                                             &is_null);
@@ -607,7 +607,8 @@ pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
                                                           scanstate->inputtypid[i],
                                                           scanstate->inputtypmod[i],
                                                           i + 1, 1);
-                    row_hash = combine_logical(row_hash, col_hash, 1);
+                    row_hash = combine_logical(row_hash, col_hash,
+                                               CHECKSUM_ALGO_FNV64);
                 }
 
                 logical_accum_add64(acc, row_hash);
@@ -822,7 +823,7 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
         pg_index_logical_scan_end(&scanstate);
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
                                                     indexoid, false, nblocks,
-                                                    workers, 1, NULL, NULL,
+                                                    workers, CHECKSUM_ALGO_FNV64, NULL, NULL,
                                                     NULL, acc);
     }
 }
@@ -926,7 +927,7 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
     else
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
                                                     indexoid, false, nblocks,
-                                                    workers, 1, NULL, NULL,
+                                                    workers, CHECKSUM_ALGO_FNV64, NULL, NULL,
                                                     &acc, NULL);
 
     index_checksum = checksum_accum64_finalize(&acc);
@@ -959,7 +960,7 @@ Datum
 pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
 {
     Oid         indexoid;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
 
@@ -969,7 +970,7 @@ pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
     indexoid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
     {
         uint32      legacy = pg_index_physical_checksum_calc(indexoid, true,
                                                              &is_null);

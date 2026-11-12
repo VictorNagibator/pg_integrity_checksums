@@ -71,13 +71,11 @@ static LogicalTypeInfo *logical_type_info(Oid typid);
 
 static uint64 logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                                       int32 typmod, int attnum, int depth,
-                                      int algo);
-uint64 combine_logical(uint64 current, uint64 new_val, int algo);
-
+                                      ChecksumAlgo algo);
 static uint64
-logical_hash_bytes(uint64 h, const void *data, size_t len, int algo)
+logical_hash_bytes(uint64 h, const void *data, size_t len, ChecksumAlgo algo)
 {
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
         return fnv1a_32_hash(data, len, (uint32) h);
     return fnv1a_64_hash(data, len, h);
 }
@@ -92,7 +90,7 @@ logical_hash_bytes(uint64 h, const void *data, size_t len, int algo)
  * same little-endian bytes on big-endian systems.
  */
 static uint64
-logical_hash_uint32_le(uint64 h, uint32 value, int algo)
+logical_hash_uint32_le(uint64 h, uint32 value, ChecksumAlgo algo)
 {
     unsigned char bytes[4];
 
@@ -191,7 +189,7 @@ logical_type_info(Oid typid)
 }
 
 static uint64
-logical_hash_array(Datum value, int depth, int algo)
+logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
 {
     AnyArrayType *arr = (AnyArrayType *) DatumGetArrayTypeP(value);
     Oid         elemtype = AARR_ELEMTYPE(arr);
@@ -200,7 +198,7 @@ logical_hash_array(Datum value, int depth, int algo)
     int         nelems;
     int         ndim = AARR_NDIM(arr);
     int         i;
-    uint64      h = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
 
     /* Hash the shape first: an empty array differs from an empty string. */
     h = logical_hash_uint32_le(h, (uint32) ndim, algo);
@@ -249,7 +247,7 @@ logical_hash_array(Datum value, int depth, int algo)
 }
 
 static uint64
-logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, int algo)
+logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, ChecksumAlgo algo)
 {
     HeapTupleHeader rec = DatumGetHeapTupleHeader(value);
     Oid         tupType = typid;
@@ -261,7 +259,7 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, int algo
     Datum      *values;
     bool       *nulls;
     bool        local_arrays;
-    uint64      h = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
     int         non_dropped = 0;
     int         i;
 
@@ -328,14 +326,14 @@ logical_hash_composite(Datum value, Oid typid, int32 typmod, int depth, int algo
 }
 
 static uint64
-logical_hash_range(Datum value, Oid typid, int depth, int algo)
+logical_hash_range(Datum value, Oid typid, int depth, ChecksumAlgo algo)
 {
     RangeType  *range = DatumGetRangeTypeP(value);
     TypeCacheEntry *typcache = lookup_type_cache(typid, TYPECACHE_RANGE_INFO);
     RangeBound  lower;
     RangeBound  upper;
     bool        empty;
-    uint64      h = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
 
     range_deserialize(typcache, range, &lower, &upper, &empty);
 
@@ -376,13 +374,13 @@ logical_hash_range(Datum value, Oid typid, int depth, int algo)
 
 #if PG_VERSION_NUM >= 140000
 static uint64
-logical_hash_multirange(Datum value, Oid typid, int depth, int algo)
+logical_hash_multirange(Datum value, Oid typid, int depth, ChecksumAlgo algo)
 {
     MultirangeType *mr = DatumGetMultirangeTypeP(value);
     TypeCacheEntry *typcache = lookup_type_cache(typid,
                                                  TYPECACHE_MULTIRANGE_INFO);
     uint32      count = mr->rangeCount;
-    uint64      h = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
     uint32      i;
 
     h = logical_hash_uint32_le(h, count, algo);
@@ -426,13 +424,13 @@ logical_hash_multirange(Datum value, Oid typid, int depth, int algo)
 
 static uint64
 logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
-                        int32 typmod, int attnum, int depth, int algo)
+                        int32 typmod, int attnum, int depth, ChecksumAlgo algo)
 {
     LogicalTypeInfo *type_info;
     char        typtype;
     Oid         elemtype;
     bool        specialized = false;
-    uint64      h = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
 
     if (depth > 32)
         ereport(ERROR,
@@ -445,7 +443,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
         return CHECKSUM_NULL;
 
     type_info = logical_type_info(typid);
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
         h = type_info->tag_prefix;
     else
         h = type_info->tag_prefix64;
@@ -583,7 +581,7 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
                             format_type_be(typid))));
     }
 
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
     {
         if (h == 0 || h == CHECKSUM_NULL)
             h = hash_mix32((uint32) h ^ FNV_BASIS_32 ^ (uint32) attnum);
@@ -601,9 +599,9 @@ logical_hash_datum_algo(Datum value, bool isnull, Oid typid,
  * combine_logical - combine two canonical logical hashes
  */
 uint64
-combine_logical(uint64 current, uint64 new_val, int algo)
+combine_logical(uint64 current, uint64 new_val, ChecksumAlgo algo)
 {
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
         return combine_checksums((uint32) current, (uint32) new_val);
     return combine_checksums_64(current, new_val);
 }
@@ -616,18 +614,19 @@ logical_hash_datum(Datum value, bool isnull, Oid typid,
                    int32 typmod, int attnum, int depth)
 {
     return (uint32) logical_hash_datum_algo(value, isnull, typid, typmod,
-                                            attnum, depth, 0);
+                                            attnum, depth,
+                                            CHECKSUM_ALGO_FNV32);
 }
 
 /*
  * pg_cell_checksum_canonical_algo - canonical logical cell checksum
  *
- * algo == 0 selects the historical 32-bit FNV path; algo == 1 selects
+ * algo == CHECKSUM_ALGO_FNV32 selects the historical 32-bit FNV path; algo == CHECKSUM_ALGO_FNV64 selects
  * FNV-1a 64-bit. The canonicalization is shared by both paths.
  */
 uint64
 pg_cell_checksum_canonical_algo(Datum value, bool isnull, Oid typid,
-                                int32 typmod, int attnum, int algo)
+                                int32 typmod, int attnum, ChecksumAlgo algo)
 {
     return logical_hash_datum_algo(value, isnull, typid, typmod, attnum, 0,
                                    algo);

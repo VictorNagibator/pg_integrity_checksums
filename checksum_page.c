@@ -221,7 +221,7 @@ pg_page_checksum_status(PG_FUNCTION_ARGS)
  */
 static bool
 pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
-                        int algo, uint64 *out)
+                        ChecksumAlgo algo, uint64 *out)
 {
     Relation    rel;
     Buffer      buffer;
@@ -339,7 +339,8 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     if (!pg_cell_checksum_common(PG_GETARG_OID(0), PG_GETARG_ITEMPOINTER(1),
-                                 PG_GETARG_INT32(2), 0, &checksum))
+                                 PG_GETARG_INT32(2), CHECKSUM_ALGO_FNV32,
+                                 &checksum))
         PG_RETURN_NULL();
 
     PG_RETURN_INT32((int32) checksum);
@@ -350,7 +351,7 @@ PG_FUNCTION_INFO_V1(pg_cell_checksum_algo);
 Datum
 pg_cell_checksum_algo(PG_FUNCTION_ARGS)
 {
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      checksum;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) ||
@@ -363,6 +364,6 @@ pg_cell_checksum_algo(PG_FUNCTION_ARGS)
                                  PG_GETARG_INT32(2), algorithm, &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == 0 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
 }
 

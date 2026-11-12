@@ -85,24 +85,42 @@ RESET pg_integrity_checksums.workers;
 
 ### Strict mode
 
-Database checksum functions are **strict by default**.  If a relation cannot
-be checksummed (for example an invalid index, a relation that fails during the
-scan, or a corrupt page), the whole call fails:
+Database checksum functions are **strict by default**
+(`pg_integrity_checksums.strict = on`): if a relation in scope cannot be
+checksummed, the whole call fails.  This is deliberate.  A partial result is
+worse than no result for monitoring, because a skipped corrupt table would
+otherwise look like "nothing changed".
+
+| Situation | `strict = on` (default) | `strict = off` |
+| --- | --- | --- |
+| Invalid index, **logical** checksum | error: `relation "..." cannot be checksummed` | skipped, no warning |
+| Invalid index, **physical** checksum | included (its pages can still be read) | included |
+| Index with an access method that has no physical checksum (for example a third-party AM) | error: `relation "..." cannot be checksummed` | skipped, no warning |
+| Corrupt page, unreadable file | the original error, with a `CONTEXT` line naming the relation | skipped, `WARNING` per relation and a summary `WARNING` |
+| Relation dropped while the scan runs | error | skipped with a `WARNING` |
+| Unlogged table on a standby (it has no data there) | error naming the table | skipped with a `WARNING` |
+| Query cancellation, `statement_timeout`, out of memory, shutdown | always propagated | always propagated |
+
+An error looks like this:
 
 ```sql
 SELECT pg_database_logical_checksum(false, true);
--- ERROR: relation "..." cannot be checksummed
--- DETAIL: The relation has no usable checksum (invalid index, unsupported
---         relation kind, or a scan error).
+-- ERROR: relation "orders_old_idx" cannot be checksummed
+-- DETAIL: The index is invalid and has no content to checksum.
 -- HINT: Set pg_integrity_checksums.strict = false to skip relations without
 --       a usable checksum.
 ```
 
-This is deliberate: a partial result is worse than no result for monitoring,
-because a skipped corrupt table would otherwise look like "nothing changed".
+or, for a failure while reading the relation:
+
+```
+ERROR:  invalid page in block 0 of relation base/5/16414
+CONTEXT:  while computing the database checksum of relation "orders" (OID 16414)
+```
+
 Tables without a primary key are supported, and logical index checksums work
 for every access method.  Physical index checksums cover B-tree, Hash, GiST,
-GIN, SP-GiST and BRIN; other physical index AMs are skipped.
+GIN, SP-GiST and BRIN.
 
 For ad-hoc use you can allow skipping, per session or persistently:
 
@@ -115,9 +133,59 @@ SELECT pg_database_logical_checksum(false, true);
 ALTER DATABASE appdb SET pg_integrity_checksums.strict = off;  -- persistent
 ```
 
-With strict mode off, a skipped relation is excluded from the result and only
-reported as a warning (and, in parallel workers, in the server log), so do not
-use the value for integrity monitoring.  Before 2.5.0 the default was `off`.
+With strict mode off, a skipped relation is excluded from the result and is
+only reported as a warning (in parallel workers only in the server log), so do
+not use that value for integrity monitoring.  Before 2.5.0 the default was
+`off`.  The CLI's `--strict` flag is separate from this setting; it controls
+the CLI's own preflight, not the server GUC.
+
+### Investigating a mismatch
+
+A database or table checksum differs from the baseline.  Work from the outside
+in:
+
+1. **Physical or logical?**  A physical checksum also changes after
+   `VACUUM FULL`, `CLUSTER`, `REINDEX` or moving a table to another
+   tablespace; that is expected.  A logical difference means the data (or a
+   column or type name) changed.
+2. **Freeze the view of the data.**  Run the comparison in one transaction, so
+   that every call sees the same snapshot:
+
+   ```sql
+   BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;
+   ```
+
+3. **Find the table.**  Compare per-table logical checksums on both sides (or
+   against the baseline) and diff the two lists:
+
+   ```sql
+   SELECT c.oid::regclass AS tbl, pg_table_logical_checksum(c.oid) AS checksum
+   FROM pg_class c
+   WHERE c.relkind IN ('r', 'm') AND c.relnamespace = 'public'::regnamespace
+   ORDER BY 1;
+   ```
+
+   The CLI does this for you: `pg_integrity_checksums verify` reports each
+   object that differs.
+4. **Find the rows.**  Within a table, compare row checksums by key:
+
+   ```sql
+   SELECT id, pg_tuple_logical_checksum('orders'::regclass, ctid)
+   FROM orders ORDER BY id;
+   ```
+
+5. **If the data is identical but the storage is suspect**, verify the pages
+   against their stored checksums (needs `data_checksums = on`):
+
+   ```sql
+   SELECT blk, pg_page_checksum_status('orders'::regclass, blk) AS status
+   FROM generate_series(0,
+        pg_relation_size('orders') / current_setting('block_size')::bigint - 1) AS blk
+   WHERE pg_page_checksum_status('orders'::regclass, blk) = 'mismatch';
+   ```
+
+6. **If a database call fails instead of returning a value**, see
+   [`relation "..." cannot be checksummed`](troubleshooting.md).
 
 ### Correctness
 

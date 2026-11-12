@@ -159,7 +159,8 @@ ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.5.0';
 The new default is picked up when the new library is loaded (new sessions
 after the package upgrade).  Jobs that relied on the old behavior, for example
 a scheduled check that ran with an invalid index left over from a failed
-`CREATE INDEX CONCURRENTLY`, will now fail.  Fix the underlying problem
+`CREATE INDEX CONCURRENTLY`, with a third-party index access method, or on a
+standby that holds unlogged tables, will now fail.  Fix the underlying problem
 (`DROP` or `REINDEX` the invalid index), or keep skipping explicitly:
 
 ```sql

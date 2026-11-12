@@ -13,8 +13,13 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
       session, per role or database (ALTER ROLE/DATABASE ... SET) or in
       postgresql.conf.
     - No checksum values change.
-    - Add 2.4.0 -> 2.5.0 upgrade script (no SQL object changes) and regression
-      tests for the default.
+    - Errors raised in strict mode now name the relation (a CONTEXT line:
+      "while computing the database checksum of relation ..."), and the
+      invalid-index error says that the index is invalid.
+    - Add 2.4.0 -> 2.5.0 upgrade script (no SQL object changes), a regression
+      test for the strict default across all database-level functions and
+      parallel scans, and a TAP test for corrupt pages and unlogged tables on a
+      standby.
 
 2.4.0   2026-11-12
 

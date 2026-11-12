@@ -39,15 +39,16 @@ fnv1a_32_buf(const unsigned char *bytes, size_t len, uint32 hash)
 /*
  * fnv1a_32_hash - FNV-1a 32-bit hash implementation
  *
- * This function implements the FNV-1a 32-bit hash algorithm, which is
- * consistent with PostgreSQL's internal checksum implementation. The
- * algorithm processes each byte of the input data, XORing it with the
- * current hash and then multiplying by the FNV prime.
+ * Standard FNV-1a: each input byte is XORed into the hash, which is then
+ * multiplied by the FNV prime.  This is unrelated to PostgreSQL's own
+ * 16-bit page checksum algorithm.
  *
  * Parameters:
  *   data: Pointer to the data to hash
  *   len: Length of the data in bytes
- *   seed: Initial hash value (0 uses FNV_BASIS_32)
+ *   seed: Initial hash value.  Zero is treated as "no seed" and selects
+ *         FNV_BASIS_32, so seed 0 and seed FNV_BASIS_32 give identical
+ *         results.
  *
  * Returns: 32-bit FNV-1a hash value
  */
@@ -59,11 +60,10 @@ fnv1a_32_hash(const void *data, size_t len, uint32 seed)
 }
 
 /*
- * pg_checksum_data_custom - Wrapper for FNV-1a 32-bit hash
+ * pg_checksum_data_custom - FNV-1a 32-bit hash with the zero-seed convention
  *
- * Public wrapper function that provides the FNV-1a hash algorithm
- * to other parts of the extension. This maintains consistency with
- * PostgreSQL's internal checksum functions.
+ * Thin wrapper around fnv1a_32_hash() used by the data/text checksum
+ * functions and by the physical tuple checksum.
  */
 uint32
 pg_checksum_data_custom(const char *data, uint32 len, uint32 init_value)
@@ -90,7 +90,8 @@ fnv1a_64_buf(const unsigned char *bytes, size_t len, uint64 hash)
  * fnv1a_64_hash - FNV-1a 64-bit hash implementation
  *
  * A zero seed selects the standard FNV-1a offset basis, matching the
- * convention used by the 32-bit helper.
+ * convention used by the 32-bit helper (so seed 0 and FNV_BASIS_64 give
+ * identical results).
  */
 uint64
 fnv1a_64_hash(const void *data, size_t len, uint64 seed)
@@ -105,16 +106,16 @@ fnv1a_64_hash(const void *data, size_t len, uint64 seed)
  * The generic SQL functions accept the algorithm as text so future built-in
  * algorithms can be added without creating another family of function names.
  */
-int
+ChecksumAlgo
 checksum_algorithm(text *value)
 {
     char       *name = text_to_cstring(value);
-    int         result;
+    ChecksumAlgo result;
 
     if (strcmp(name, "fnv32") == 0)
-        result = 0;
+        result = CHECKSUM_ALGO_FNV32;
     else if (strcmp(name, "fnv64") == 0)
-        result = 1;
+        result = CHECKSUM_ALGO_FNV64;
     else
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -156,7 +157,7 @@ pg_data_checksum_algo(PG_FUNCTION_ARGS)
 {
     bytea      *data;
     int64       seed;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
         PG_RETURN_NULL();
@@ -165,7 +166,7 @@ pg_data_checksum_algo(PG_FUNCTION_ARGS)
     seed = PG_GETARG_INT64(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
     {
         uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(data),
                                                        VARSIZE_ANY_EXHDR(data),
@@ -189,7 +190,7 @@ pg_text_checksum_algo(PG_FUNCTION_ARGS)
 {
     text       *input_text;
     int64       seed;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
         PG_RETURN_NULL();
@@ -198,7 +199,7 @@ pg_text_checksum_algo(PG_FUNCTION_ARGS)
     seed = PG_GETARG_INT64(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
     {
         uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(input_text),
                                                        VARSIZE_ANY_EXHDR(input_text),
@@ -227,7 +228,7 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
     bytea      *value;
     unsigned char *bytes;
     int         len;
-    uint64      result = 0;
+    uint64      result = CHECKSUM_ALGO_FNV32;
     int         i;
     bool        unsigned_value = false;
 
@@ -267,10 +268,11 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
 /*
  * combine_checksums - Combine two 32-bit hash values using FNV-1a
  *
- * This function combines two hash values in a way that maintains the
- * avalanche effect of the FNV-1a algorithm. It processes the new hash
- * value byte by byte, ensuring that each bit of the input affects
- * multiple bits of the output.
+ * Feeds the four bytes of new_val into the running hash, most significant
+ * byte first.  The result depends on the order of the arguments, so this is
+ * for building ordered (not order-independent) combinations.  Note that
+ * combine_checksums_64() feeds its bytes least significant first; both byte
+ * orders are part of the stored baseline values and must not change.
  *
  * Parameters:
  *   current: Current hash value
@@ -283,7 +285,7 @@ combine_checksums(uint32 current, uint32 new_val)
 {
     uint32 hash = current;
 
-    /* Combine using FNV-1a with 4-byte chunks */
+    /* Feed the bytes of new_val, most significant byte first. */
     hash ^= (new_val >> 24) & 0xFF;
     hash *= FNV_PRIME_32;
     hash ^= (new_val >> 16) & 0xFF;
@@ -299,18 +301,19 @@ combine_checksums(uint32 current, uint32 new_val)
 /*
  * combine_checksums_64 - Combine two 64-bit hash values using FNV-1a
  *
- * Similar to combine_checksums but for 64-bit values. Uses the 64-bit
- * FNV prime for proper avalanche effect.
+ * Similar to combine_checksums but for 64-bit values, using the 64-bit FNV
+ * prime.  Unlike the 32-bit variant, the bytes of new_val are fed least
+ * significant first.
  */
 uint64
 combine_checksums_64(uint64 current, uint64 new_val)
 {
     uint64 hash = current;
-    uint64 prime = UINT64CONST(1099511628211);
+    uint64 prime = FNV_PRIME_64;
     uint8 bytes[8];
     int i;
 
-    /* Convert new_val to bytes in little-endian order */
+    /* Split new_val into bytes, least significant first. */
     for (i = 0; i < 8; i++)
     {
         bytes[i] = (new_val >> (i * 8)) & 0xFF;
@@ -437,7 +440,7 @@ uint64
 checksum_accum64_finalize(ChecksumAccum64 *acc)
 {
     if (acc->count == 0)
-        return UINT64CONST(14695981039346656037); /* FNV-1a 64-bit basis */
+        return FNV_BASIS_64;
 
     return combine_checksums_64(acc->partial, acc->count);
 }

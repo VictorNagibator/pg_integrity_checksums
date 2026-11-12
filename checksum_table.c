@@ -18,19 +18,6 @@
 
 #include "checksum_internal.h"
 
-/* Table implementations shared with the database scan. */
-extern uint64 pg_table_physical_checksum_calc(Oid reloid,
-                                              bool include_header,
-                                              bool check_privileges);
-extern uint64 pg_table_physical_checksum_calc64(Oid reloid,
-                                                bool include_header,
-                                                bool check_privileges);
-extern int64 pg_table_logical_checksum_calc(Oid reloid,
-                                            bool check_privileges,
-                                            bool *is_null);
-extern uint64 pg_table_logical_checksum_calc64(Oid reloid,
-                                               bool check_privileges,
-                                               bool *is_null);
 static void pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
                                             ChecksumLogicalAccum *acc,
                                             bool *is_null);
@@ -119,11 +106,10 @@ pg_integrity_checksums_leaf_indexes(Oid indexoid)
  * physical checksums of all tuples. Uses order-independent aggregation
  * to ensure the same checksum regardless of scan order.
  *
- * Returns a 64-bit value that combines:
- * 1. Aggregate checksum of all tuples (32 bits, shifted left)
- * 2. Relation OID (32 bits)
- *
- * This ensures that even empty tables have a unique checksum.
+ * Returns a 64-bit value: the upper 32 bits hold the aggregate of all
+ * tuple checksums combined with the relation identity (OID, relfilenode and
+ * tablespace); the lower 32 bits hold the relation OID.  Including the
+ * identity ensures that even empty tables have a distinct checksum.
  */
 PG_FUNCTION_INFO_V1(pg_table_physical_checksum);
 
@@ -157,7 +143,7 @@ pg_table_physical_checksum_algo(PG_FUNCTION_ARGS)
 {
     Oid         reloid;
     bool        include_header;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      result;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
@@ -167,7 +153,7 @@ pg_table_physical_checksum_algo(PG_FUNCTION_ARGS)
     include_header = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
         result = pg_table_physical_checksum_calc(reloid, include_header, true);
     else
         result = pg_table_physical_checksum_calc64(reloid, include_header,
@@ -296,7 +282,8 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     {
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
                                           reloid, include_header, nblocks,
-                                          workers, 0, &acc, NULL, NULL, NULL);
+                                          workers, CHECKSUM_ALGO_FNV32, &acc,
+                                          NULL, NULL, NULL);
     }
 
     relation_close(rel, AccessShareLock);
@@ -326,7 +313,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
  * pg_table_physical_checksum_calc64 - serial 64-bit physical table checksum
  */
 uint64
-extern pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
+pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
                                   bool check_privileges)
 {
     Relation    rel;
@@ -390,8 +377,6 @@ extern pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
 
     nblocks = RelationGetNumberOfBlocks(rel);
     workers = pg_integrity_checksums_worker_count();
-    if (IsInParallelMode())
-        workers = 0;
     if (workers < 1)
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
@@ -404,7 +389,8 @@ extern pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
     else
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_PHYSICAL,
                                                     reloid, include_header,
-                                                    nblocks, workers, 1,
+                                                    nblocks, workers,
+                                                    CHECKSUM_ALGO_FNV64,
                                                     NULL, NULL, &acc, NULL);
 
     relation_close(rel, AccessShareLock);
@@ -456,7 +442,7 @@ Datum
 pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
 {
     Oid         reloid;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
 
@@ -466,7 +452,7 @@ pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
     reloid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
 
-    if (algorithm == 0)
+    if (algorithm == CHECKSUM_ALGO_FNV32)
     {
         int64       legacy = pg_table_logical_checksum_calc(reloid, true,
                                                             &is_null);
@@ -489,7 +475,7 @@ pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
  * Sets *is_null when the checksum is undefined (a TOAST relation).
  */
 int64
-extern pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
+pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
                                bool *is_null)
 {
     ChecksumLogicalAccum acc = {0, 0};
@@ -649,8 +635,6 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
 
         workers = pg_integrity_checksums_worker_count();
-        if (IsInParallelMode())
-            workers = 0;
         if (workers < 1)
         {
             Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
@@ -663,7 +647,7 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
         else
             pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
                                                         reloid, false, nblocks,
-                                                        workers, 1, NULL, NULL,
+                                                        workers, CHECKSUM_ALGO_FNV64, NULL, NULL,
                                                         NULL, acc);
     }
 
@@ -674,7 +658,7 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
  * pg_table_logical_checksum_calc64 - 64-bit logical table checksum
  */
 uint64
-extern pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
+pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
                                  bool *is_null)
 {
     ChecksumLogicalAccum64 acc = {0, 0};

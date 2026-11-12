@@ -40,6 +40,18 @@ extern void _PG_init(void);
 extern bool pg_integrity_checksums_strict;
 
 /*
+ * ChecksumAlgo - hash algorithm selected by the SQL "algo" argument
+ *
+ * The numeric values are part of the shared-memory state layout only; they
+ * are never exposed in SQL.
+ */
+typedef enum ChecksumAlgo
+{
+    CHECKSUM_ALGO_FNV32 = 0,
+    CHECKSUM_ALGO_FNV64 = 1
+} ChecksumAlgo;
+
+/*
  * ChecksumAccum - order-independent aggregate of 32-bit physical hashes
  *
  * Each hash is mixed and XORed; the count distinguishes an empty scan from
@@ -149,7 +161,7 @@ typedef struct ChecksumParallelState
     ChecksumTaskType task_type;
     Oid         reloid;
     bool        include_header;
-    int         algo;
+    ChecksumAlgo         algo;
     uint32      nitems;
     uint32      snapshot_size;
     pg_atomic_uint32 next_item;
@@ -175,7 +187,7 @@ extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_ty
                                                         Oid reloid,
                                                         bool include_header,
                                                         uint32 nblocks,
-                                                        int workers, int algo,
+                                                        int workers, ChecksumAlgo algo,
                                                         ChecksumAccum *acc,
                                                         ChecksumLogicalAccum *logical_acc,
                                                         ChecksumAccum64 *acc64,
@@ -183,7 +195,7 @@ extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_ty
 extern void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                            ChecksumRelationItem *items,
                                                            uint32 nitems,
-                                                           int workers, int algo,
+                                                           int workers, ChecksumAlgo algo,
                                                            ChecksumAccum64 *acc,
                                                            ChecksumLogicalAccum *logical_acc,
                                                            ChecksumLogicalAccum64 *logical_acc64,
@@ -198,7 +210,7 @@ extern uint64 fnv1a_64_buf(const unsigned char *bytes, size_t len, uint64 hash);
 extern uint64 fnv1a_64_hash(const void *data, size_t len, uint64 seed);
 
 /* SQL argument validation/encoding shared by the hash entry points. */
-extern int checksum_algorithm(text *value);
+extern ChecksumAlgo checksum_algorithm(text *value);
 extern bytea *checksum_bytea(uint64 value, int len);
 
 /* Hash combination and order-independent aggregation. */
@@ -244,7 +256,7 @@ extern void pg_index_logical_scan_end(IndexLogicalScanState *scanstate);
 
 /* Database relation-range aggregation shared with the parallel scan. */
 extern void compute_database_items(ChecksumRelationItem *items, uint32 start,
-                                   uint32 end, bool physical, int algo,
+                                   uint32 end, bool physical, ChecksumAlgo algo,
                                    ChecksumAccum64 *acc,
                                    ChecksumLogicalAccum *logical_acc,
                                    ChecksumLogicalAccum64 *logical_acc64,
@@ -292,9 +304,9 @@ extern uint64 pg_tuple_physical_checksum_internal(Relation rel, Page page,
                                                   OffsetNumber offnum,
                                                   BlockNumber blkno,
                                                   bool include_header,
-                                                  bool validate, int algo);
+                                                  bool validate, ChecksumAlgo algo);
 extern uint64 pg_tuple_logical_checksum_internal(Relation rel,
-                                                 HeapTuple tuple, int algo);
+                                                 HeapTuple tuple, ChecksumAlgo algo);
 
 /* Serial block-range scans. */
 extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
@@ -324,13 +336,13 @@ extern void scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
                                          BufferAccessStrategy bstrategy);
 
 /* Canonical logical encoding. */
-extern uint64 combine_logical(uint64 current, uint64 new_val, int algo);
+extern uint64 combine_logical(uint64 current, uint64 new_val, ChecksumAlgo algo);
 extern void logical_type_cache_invalidate(Datum arg, int cacheid,
                                           uint32 hashvalue);
 extern uint32 pg_cell_checksum_canonical(Datum value, bool isnull, Oid typid,
                                          int32 typmod, int attnum);
 extern uint64 pg_cell_checksum_canonical_algo(Datum value, bool isnull,
                                               Oid typid, int32 typmod,
-                                              int attnum, int algo);
+                                              int attnum, ChecksumAlgo algo);
 
 #endif /* PG_INTEGRITY_CHECKSUMS_INTERNAL_H */

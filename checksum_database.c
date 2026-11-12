@@ -32,7 +32,7 @@
  * mode).
  */
 static void
-compute_database_item(Oid relid, char relkind, bool physical, int algo,
+compute_database_item(Oid relid, char relkind, bool physical, ChecksumAlgo algo,
                       uint64 *rel_checksum, bool *skip)
 {
     *rel_checksum = 0;
@@ -43,7 +43,7 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
         bool        is_null = false;
         uint32      value = 0;
 
-        if (physical && algo == 1)
+        if (physical && algo == CHECKSUM_ALGO_FNV64)
         {
             uint64      value64 = pg_index_physical_checksum_calc64(relid,
                                                                     false,
@@ -54,7 +54,7 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
         }
         else if (physical)
             value = pg_index_physical_checksum_calc(relid, false, &is_null);
-        else if (algo == 1)
+        else if (algo == CHECKSUM_ALGO_FNV64)
         {
             uint64      value64 = pg_index_logical_checksum_calc64(relid,
                                                                    false,
@@ -68,12 +68,12 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
 
         if (is_null)
             *skip = true;
-        else if (algo == 0)
+        else if (algo == CHECKSUM_ALGO_FNV32)
             *rel_checksum = (uint64) value;
     }
     else
     {
-        if (physical && algo == 1)
+        if (physical && algo == CHECKSUM_ALGO_FNV64)
             *rel_checksum = pg_table_physical_checksum_calc64(relid, false,
                                                               false);
         else if (physical)
@@ -83,7 +83,7 @@ compute_database_item(Oid relid, char relkind, bool physical, int algo,
         {
             bool        is_null = false;
 
-            if (algo == 1)
+            if (algo == CHECKSUM_ALGO_FNV64)
                 *rel_checksum = pg_table_logical_checksum_calc64(relid, false,
                                                                  &is_null);
             else
@@ -126,7 +126,7 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
  */
 void
 compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
-                       bool physical, int algo, ChecksumAccum64 *acc,
+                       bool physical, ChecksumAlgo algo, ChecksumAccum64 *acc,
                        ChecksumLogicalAccum *logical_acc,
                        ChecksumLogicalAccum64 *logical_acc64, bool *had_error)
 {
@@ -209,17 +209,15 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             ErrorData  *edata;
 
             /*
-             * Cancellation, shutdown and out-of-memory errors mean that the
-             * result cannot be trusted; propagate them instead of silently
-             * returning a partial database checksum.
-             */
-            /*
-             * OOM and shutdown errors are propagated immediately.  Other
-             * errors, including cancellation and strict-mode failures, first
-             * release the internal subtransaction: a caller (for example a
-             * PL/pgSQL exception block) may catch the error and continue, and
-             * an open parallel child transaction would keep
-             * IsInParallelMode() true.
+             * Out-of-memory and shutdown errors are re-thrown immediately:
+             * the backend is going away or cannot be trusted.  For every
+             * other error the internal subtransaction is rolled back first,
+             * because a caller (for example a PL/pgSQL exception block) may
+             * catch the error and continue, and an open child transaction
+             * would keep IsInParallelMode() true.  After the rollback,
+             * strict mode and query cancellation re-throw the error; any
+             * other error is reported as a warning and the relation is
+             * skipped.
              */
             if (sqlerrcode == ERRCODE_OUT_OF_MEMORY ||
                 sqlerrcode == ERRCODE_ADMIN_SHUTDOWN ||
@@ -285,7 +283,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
 static uint64
 compute_database_checksum_internal(bool physical, bool include_system,
                                   bool include_toast, bool include_indexes,
-                                  int algo)
+                                  ChecksumAlgo algo)
 {
     Relation    pg_class_rel;
     TableScanDesc scan;
@@ -389,13 +387,13 @@ compute_database_checksum_internal(bool physical, bool include_system,
     if (workers < 1)
         compute_database_items(items, 0, nitems, physical, algo, &acc,
                                physical ? NULL : &lacc,
-                               (!physical && algo == 1) ? &lacc64 : NULL,
+                               (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
                                &had_error);
     else
         pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
                                             workers, algo, &acc,
                                             physical ? NULL : &lacc,
-                                            (!physical && algo == 1) ? &lacc64 : NULL,
+                                            (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
                                             &had_error);
 
     pfree(items);
@@ -408,7 +406,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     if (physical)
         return checksum_accum64_finalize(&acc);
 
-    if (algo == 1)
+    if (algo == CHECKSUM_ALGO_FNV64)
         return logical_accum_finalize64(&lacc64);
 
     return (uint64) logical_accum_finalize(&lacc);
@@ -447,7 +445,8 @@ pg_database_physical_checksum(PG_FUNCTION_ARGS)
 
     /* Compute physical database checksum */
     db_checksum = compute_database_checksum_internal(true, include_system,
-                                                     include_toast, true, 0);
+                                                     include_toast, true,
+                                                     CHECKSUM_ALGO_FNV32);
 
     PG_RETURN_INT64((int64)db_checksum);
 }
@@ -481,7 +480,8 @@ pg_database_logical_checksum(PG_FUNCTION_ARGS)
 
     /* Compute logical database checksum */
     db_checksum = compute_database_checksum_internal(false, include_system,
-                                                     false, include_indexes, 0);
+                                                     false, include_indexes,
+                                                     CHECKSUM_ALGO_FNV32);
 
     PG_RETURN_INT64((int64)db_checksum);
 }
@@ -496,7 +496,7 @@ pg_database_logical_checksum_algo(PG_FUNCTION_ARGS)
 {
     bool        include_system = false;
     bool        include_indexes = true;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      db_checksum;
 
     if (PG_NARGS() >= 1)
@@ -514,7 +514,7 @@ pg_database_logical_checksum_algo(PG_FUNCTION_ARGS)
                                                      false, include_indexes,
                                                      algorithm);
 
-    PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, algorithm == 0 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
 }
 
 /*
@@ -527,7 +527,7 @@ pg_database_physical_checksum_algo(PG_FUNCTION_ARGS)
 {
     bool        include_system = false;
     bool        include_toast = false;
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      db_checksum;
 
     if (PG_NARGS() >= 1)

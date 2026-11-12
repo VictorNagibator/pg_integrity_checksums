@@ -81,8 +81,11 @@ pg_integrity_checksums_require_select(Oid reloid)
 }
 
 /*
- * pg_integrity_checksums_check_relation_kind - reject relations we cannot checksum
- * with the heap tuple routines.
+ * pg_integrity_checksums_check_relation_kind - reject unsupported relation kinds
+ *
+ * Ordinary tables and materialized views always pass.  Partitioned tables
+ * and TOAST relations pass only when the caller says it can handle them;
+ * indexes, sequences and every other kind raise an error.
  */
 void
 pg_integrity_checksums_check_relation_kind(Relation rel, bool allow_toast,

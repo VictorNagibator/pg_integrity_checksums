@@ -17,7 +17,7 @@
 
 #include "checksum_internal.h"
 
-static uint64 combine_physical(uint64 current, uint64 new_val, int algo);
+static uint64 combine_physical(uint64 current, uint64 new_val, ChecksumAlgo algo);
 
 /*-------------------------------------------------------------------------
  * TUPLE LEVEL FUNCTIONS (Physical and Logical)
@@ -43,7 +43,7 @@ uint64
 pg_tuple_physical_checksum_internal(Relation rel, Page page,
                                    OffsetNumber offnum,
                                    BlockNumber blkno, bool include_header,
-                                   bool validate, int algo)
+                                   bool validate, ChecksumAlgo algo)
 {
     ItemId      lp;
     HeapTupleHeader tuple;
@@ -109,7 +109,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     location = ((uint64)blkno << 32) | (uint64)offnum;
 
     /* Hash the location with the selected algorithm. */
-    location_hash = (algo == 0) ?
+    location_hash = (algo == CHECKSUM_ALGO_FNV32) ?
         fnv1a_32_hash(&location, sizeof(location), FNV_BASIS_32) :
         fnv1a_64_hash(&location, sizeof(location), FNV_BASIS_64);
 
@@ -137,7 +137,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     location_hash = combine_physical(location_hash, page_info, algo);
 
     /* Calculate checksum using location_hash as the initial value */
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
         checksum = pg_checksum_data_custom(data, len, (uint32) location_hash);
     else
         checksum = fnv1a_64_hash(data, len, location_hash);
@@ -152,7 +152,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     itemid_info = (ItemIdGetFlags(lp) << 24) | ItemIdGetLength(lp);
     checksum = combine_physical(checksum, itemid_info, algo);
 
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
     {
         if (checksum == CHECKSUM_NULL)
             checksum = (CHECKSUM_NULL ^ location_hash) & 0xFFFFFFFE;
@@ -174,32 +174,24 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
  * combine_physical - combine physical metadata with the selected algorithm
  */
 static uint64
-combine_physical(uint64 current, uint64 new_val, int algo)
+combine_physical(uint64 current, uint64 new_val, ChecksumAlgo algo)
 {
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
         return combine_checksums((uint32) current, (uint32) new_val);
     return combine_checksums_64(current, new_val);
 }
 
 /*
- * pg_tuple_physical_checksum - SQL function for physical tuple checksums
- *
- * Public interface for computing physical tuple checksums.
- * Uses exception handling to ensure resources are cleaned up
- * even if an error occurs.
- */
-/*
  * pg_tuple_physical_checksum_common - shared physical tuple implementation
  */
 static bool
 pg_tuple_physical_checksum_common(Oid reloid, ItemPointer tid,
-                                  bool include_header, int algo, uint64 *out)
+                                  bool include_header, ChecksumAlgo algo, uint64 *out)
 {
     Relation    rel;
-    volatile Buffer buffer = InvalidBuffer;
+    Buffer      buffer;
     Page        page;
-    volatile uint64 checksum = 0;
-    volatile bool lock_held = false;
+    uint64      checksum;
     BlockNumber blkno;
     OffsetNumber offnum;
 
@@ -219,28 +211,18 @@ pg_tuple_physical_checksum_common(Oid reloid, ItemPointer tid,
         return false;
     }
 
-    PG_TRY();
-    {
-        buffer = ReadBuffer(rel, blkno);
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        lock_held = true;
-        page = BufferGetPage(buffer);
+    /*
+     * No PG_TRY needed: on ERROR the buffer lock, pin and relation lock are
+     * released by transaction abort.
+     */
+    buffer = ReadBuffer(rel, blkno);
+    LockBuffer(buffer, BUFFER_LOCK_SHARE);
+    page = BufferGetPage(buffer);
 
-        checksum = pg_tuple_physical_checksum_internal(rel, page, offnum,
-                                                      blkno, include_header,
-                                                      true, algo);
-    }
-    PG_CATCH();
-    {
-        if (lock_held && BufferIsValid(buffer))
-            UnlockReleaseBuffer(buffer);
-        relation_close(rel, AccessShareLock);
-        PG_RE_THROW();
-    }
-    PG_END_TRY();
+    checksum = pg_tuple_physical_checksum_internal(rel, page, offnum, blkno,
+                                                   include_header, true, algo);
 
-    if (lock_held && BufferIsValid(buffer))
-        UnlockReleaseBuffer(buffer);
+    UnlockReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
 
     *out = checksum;
@@ -271,7 +253,7 @@ PG_FUNCTION_INFO_V1(pg_tuple_physical_checksum_algo);
 Datum
 pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
 {
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      checksum;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(3))
@@ -285,7 +267,7 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
                                            algorithm, &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == 0 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
 }
 
 /*-------------------------------------------------------------------------
@@ -308,10 +290,10 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
  * - Storage reorganization
  */
 uint64
-pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, int algo)
+pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo algo)
 {
     TupleDesc   tupdesc = RelationGetDescr(rel);
-    uint64      checksum = algo == 0 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      checksum = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
     int         i;
 
     for (i = 1; i <= tupdesc->natts; i++)
@@ -334,7 +316,7 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, int algo)
         checksum = combine_logical(checksum, col_hash, algo);
     }
 
-    if (algo == 0)
+    if (algo == CHECKSUM_ALGO_FNV32)
     {
         if (checksum == CHECKSUM_NULL || checksum == 0)
             checksum = hash_mix32((uint32) checksum ^ FNV_BASIS_32);
@@ -346,27 +328,20 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, int algo)
 }
 
 /*
- * pg_tuple_logical_checksum - SQL function for logical tuple checksums
- *
- * Public interface for computing logical tuple checksums.
- * Returns NULL for a missing tuple or a TOAST relation.
- */
-/*
  * pg_tuple_logical_checksum_common - shared implementations for tuple checksums
  */
 static bool
-pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, int algo,
+pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, ChecksumAlgo algo,
                                  uint64 *out)
 {
     Relation    rel;
-    volatile Buffer buffer = InvalidBuffer;
+    Buffer      buffer;
     Page        page;
     ItemId      lp;
     HeapTupleData heapTuple;
     HeapTupleHeader tuple;
-    volatile uint64 checksum = 0;
-    volatile bool lock_held = false;
-    volatile bool missing = false;
+    uint64      checksum = 0;
+    bool        missing = false;
     BlockNumber blkno;
     OffsetNumber offnum;
     Size        tuple_len;
@@ -393,62 +368,54 @@ pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, int algo,
         return false;
     }
 
-    PG_TRY();
-    {
-        buffer = ReadBuffer(rel, blkno);
-        LockBuffer(buffer, BUFFER_LOCK_SHARE);
-        lock_held = true;
-        page = BufferGetPage(buffer);
+    /*
+     * No PG_TRY needed: on ERROR the buffer lock, pin and relation lock are
+     * released by transaction abort.
+     */
+    buffer = ReadBuffer(rel, blkno);
+    LockBuffer(buffer, BUFFER_LOCK_SHARE);
+    page = BufferGetPage(buffer);
 
-        if (PageIsNew(page))
+    if (PageIsNew(page))
+        missing = true;
+    else
+    {
+        pg_integrity_checksums_check_page(rel, blkno, page);
+
+        if (offnum < FirstOffsetNumber ||
+            offnum > PageGetMaxOffsetNumber(page))
             missing = true;
         else
         {
-            pg_integrity_checksums_check_page(rel, blkno, page);
+            lp = PageGetItemId(page, offnum);
 
-            if (offnum < FirstOffsetNumber ||
-                offnum > PageGetMaxOffsetNumber(page))
+            if (!ItemIdIsNormal(lp))
                 missing = true;
             else
             {
-                lp = PageGetItemId(page, offnum);
-
-                if (!ItemIdIsNormal(lp))
-                    missing = true;
-                else if (!pg_integrity_checksums_item_is_sane(page, lp))
+                if (!pg_integrity_checksums_item_is_sane(page, lp))
                     ereport(ERROR,
                             (errcode(ERRCODE_DATA_CORRUPTED),
                              errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
                                     RelationGetRelationName(rel), blkno, offnum)));
-                else
-                {
-                    tuple = (HeapTupleHeader) PageGetItem(page, lp);
-                    tuple_len = ItemIdGetLength(lp);
-                    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum,
-                                                  tuple, tuple_len);
 
-                    heapTuple.t_len = tuple_len;
-                    heapTuple.t_data = tuple;
-                    heapTuple.t_tableOid = reloid;
-                    heapTuple.t_self = *tid;
+                tuple = (HeapTupleHeader) PageGetItem(page, lp);
+                tuple_len = ItemIdGetLength(lp);
+                pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum,
+                                                        tuple, tuple_len);
 
-                    checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple,
-                                                                  algo);
-                }
+                heapTuple.t_len = tuple_len;
+                heapTuple.t_data = tuple;
+                heapTuple.t_tableOid = reloid;
+                heapTuple.t_self = *tid;
+
+                checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple,
+                                                              algo);
             }
         }
     }
-    PG_CATCH();
-    {
-        if (lock_held && BufferIsValid(buffer))
-            UnlockReleaseBuffer(buffer);
-        relation_close(rel, AccessShareLock);
-        PG_RE_THROW();
-    }
-    PG_END_TRY();
 
-    if (lock_held && BufferIsValid(buffer))
-        UnlockReleaseBuffer(buffer);
+    UnlockReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
 
     if (missing || checksum == 0)
@@ -469,7 +436,8 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     if (!pg_tuple_logical_checksum_common(PG_GETARG_OID(0),
-                                          PG_GETARG_ITEMPOINTER(1), 0,
+                                          PG_GETARG_ITEMPOINTER(1),
+                                          CHECKSUM_ALGO_FNV32,
                                           &checksum))
         PG_RETURN_NULL();
 
@@ -481,7 +449,7 @@ PG_FUNCTION_INFO_V1(pg_tuple_logical_checksum_algo);
 Datum
 pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS)
 {
-    int         algorithm;
+    ChecksumAlgo         algorithm;
     uint64      checksum;
 
     if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
@@ -494,6 +462,6 @@ pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS)
                                           &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == 0 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
 }
 

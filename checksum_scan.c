@@ -93,7 +93,7 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
             tuple_checksum = pg_tuple_physical_checksum_internal(rel, page,
                                                                  offnum, blkno,
                                                                  include_header,
-                                                                 false, 0);
+                                                                 false, CHECKSUM_ALGO_FNV32);
             if (tuple_checksum != 0)
                 checksum_accum_add(acc, tuple_checksum);
         }
@@ -171,7 +171,7 @@ scan_table_blocks_physical64(Relation rel, BlockNumber start, BlockNumber end,
             tuple_checksum = pg_tuple_physical_checksum_internal(rel, page,
                                                                  offnum, blkno,
                                                                  include_header,
-                                                                 false, 1);
+                                                                 false, CHECKSUM_ALGO_FNV64);
             if (tuple_checksum != 0)
                 checksum_accum64_add(acc, tuple_checksum);
         }
@@ -248,7 +248,8 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
             if (!HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
                 continue;
 
-            tuple_checksum = pg_tuple_logical_checksum_internal(rel, &tuple, 0);
+            tuple_checksum = pg_tuple_logical_checksum_internal(rel, &tuple,
+                                                                  CHECKSUM_ALGO_FNV32);
             logical_accum_add(acc, tuple_checksum);
         }
 
@@ -327,7 +328,8 @@ scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
             if (!HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
                 continue;
 
-            tuple_checksum = pg_tuple_logical_checksum_internal(rel, &tuple, 1);
+            tuple_checksum = pg_tuple_logical_checksum_internal(rel, &tuple,
+                                                                  CHECKSUM_ALGO_FNV64);
             logical_accum_add64(acc, tuple_checksum);
         }
 

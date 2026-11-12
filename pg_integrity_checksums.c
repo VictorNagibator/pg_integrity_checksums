@@ -87,10 +87,12 @@ _PG_init(void)
 /*
  * pg_integrity_checksums_worker_count - determine how many parallel workers to use
  *
- * Returns 0 when the scan should run in a single backend. This happens
- * when the GUC is non-positive and max_parallel_workers is zero, when we
- * are already inside a parallel worker (nesting is not allowed), or when
- * there is nothing to parallelize.
+ * Returns 0 when the scan should run in a single backend.  This happens
+ * when the GUC is zero (the default), when max_parallel_workers or
+ * max_worker_processes is zero, or when parallel mode is already active
+ * (a parallel context cannot be nested).  Otherwise the GUC value is
+ * clamped to max_parallel_workers and max_worker_processes.  Callers further
+ * clamp the result to the amount of work available.
  */
 int
 pg_integrity_checksums_worker_count(void)
@@ -134,8 +136,3 @@ pg_integrity_checksums_get_snapshot(void)
 
     return snapshot;
 }
-
-/*-------------------------------------------------------------------------
- * Order-independent aggregation state
- *-------------------------------------------------------------------------
- */

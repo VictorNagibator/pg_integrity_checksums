@@ -49,7 +49,8 @@ REGRESS = \
 	checksum_errors \
 	checksum_fnv64 \
 	checksum_fnv64_extra \
-	checksum_page_status
+	checksum_page_status \
+	checksum_portability
 
 REGRESS_OPTS = \
     --inputdir=./ \

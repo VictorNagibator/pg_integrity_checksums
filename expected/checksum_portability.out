@@ -1,0 +1,93 @@
+-- Logical checksums must depend on the data only: not on dropped columns, not
+-- on the search_path, and physical tuple checksums with the header must not
+-- depend on hint bits that readers set lazily.
+-- Dropped columns do not matter (table, tuple and cell level).
+CREATE TABLE port_plain (x int, y text, z int);
+INSERT INTO port_plain VALUES (1, 'p', 2), (3, 'q', 4);
+CREATE TABLE port_dropped (junk int, x int, y text, z int);
+INSERT INTO port_dropped VALUES (0, 1, 'p', 2), (0, 3, 'q', 4);
+ALTER TABLE port_dropped DROP COLUMN junk;
+SELECT pg_table_logical_checksum('port_plain') =
+       pg_table_logical_checksum('port_dropped') AS table_same,
+       pg_tuple_logical_checksum('port_plain', '(0,1)') =
+       pg_tuple_logical_checksum('port_dropped', '(0,1)') AS tuple_same,
+       pg_cell_checksum('port_plain', '(0,1)', 3) =
+       pg_cell_checksum('port_dropped', '(0,1)', 4) AS cell_same,
+       pg_cell_checksum('port_dropped', '(0,1)', 1) IS NULL AS dropped_is_null;
+ table_same | tuple_same | cell_same | dropped_is_null 
+------------+------------+-----------+-----------------
+ t          | t          | t         | t
+(1 row)
+
+-- The search_path does not matter for user-defined types.  The same type name
+-- in two schemas gives the same checksum, whichever schema is visible.
+CREATE SCHEMA port_s1;
+-- Dropped composite attributes do not matter either.
+CREATE TYPE public.port_pair AS (a int, junk int, b int);
+ALTER TYPE public.port_pair DROP ATTRIBUTE junk;
+CREATE TYPE port_s1.port_pair AS (a int, b int);
+CREATE TABLE port_comp1 (v public.port_pair);
+CREATE TABLE port_comp2 (v port_s1.port_pair);
+INSERT INTO port_comp1 VALUES (ROW(1, 2));
+INSERT INTO port_comp2 VALUES (ROW(1, 2));
+SELECT pg_table_logical_checksum('port_comp1') =
+       pg_table_logical_checksum('port_comp2') AS composite_same;
+ composite_same 
+----------------
+ t
+(1 row)
+
+CREATE TYPE public.port_mood AS ENUM ('sad', 'ok');
+CREATE TYPE port_s1.port_mood AS ENUM ('sad', 'ok');
+CREATE TABLE port_m_public (v public.port_mood, w public.port_mood[]);
+CREATE TABLE port_m_s1 (v port_s1.port_mood, w port_s1.port_mood[]);
+INSERT INTO port_m_public VALUES ('ok', '{ok,sad}');
+INSERT INTO port_m_s1 VALUES ('ok', '{ok,sad}');
+SET search_path = public, pg_catalog;
+SELECT pg_table_logical_checksum('port_m_public') =
+       pg_table_logical_checksum('port_m_s1') AS same_default_path;
+ same_default_path 
+-------------------
+ t
+(1 row)
+
+SET search_path = port_s1, public, pg_catalog;
+SELECT pg_table_logical_checksum('port_m_public') =
+       pg_table_logical_checksum('port_m_s1') AS same_s1_path;
+ same_s1_path 
+--------------
+ t
+(1 row)
+
+RESET search_path;
+-- Physical tuple checksums that include the header must not change when a
+-- reader sets hint bits.
+CREATE TABLE port_hint (x int);
+INSERT INTO port_hint VALUES (1);
+CREATE TEMP TABLE port_hint_sums (label text, sum int);
+INSERT INTO port_hint_sums
+    SELECT 'before', pg_tuple_physical_checksum('port_hint', '(0,1)', true);
+SELECT count(*) FROM port_hint;   -- sets the xmin-committed hint bit
+ count 
+-------
+     1
+(1 row)
+
+INSERT INTO port_hint_sums
+    SELECT 'after', pg_tuple_physical_checksum('port_hint', '(0,1)', true);
+SELECT (SELECT sum FROM port_hint_sums WHERE label = 'before') =
+       (SELECT sum FROM port_hint_sums WHERE label = 'after')
+       AS header_checksum_ignores_hints;
+ header_checksum_ignores_hints 
+-------------------------------
+ t
+(1 row)
+
+DROP TABLE port_plain, port_dropped, port_comp1, port_comp2, port_m_public,
+           port_m_s1, port_hint;
+DROP TYPE public.port_pair;
+DROP TYPE public.port_mood;
+DROP SCHEMA port_s1 CASCADE;
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to type port_s1.port_pair
+drop cascades to type port_s1.port_mood

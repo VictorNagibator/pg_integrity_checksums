@@ -236,6 +236,8 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
     BlockNumber blkno;
     OffsetNumber offnum;
     Size        tuple_len;
+    int         ordinal = 0;
+    int         i;
 
     if (attnum_arg <= 0 || !ItemPointerIsValid(tid))
         return false;
@@ -311,11 +313,21 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
         return false;
     }
 
+    /*
+     * Hash the position among the live columns, exactly as the tuple
+     * checksum does, so that dropped columns do not matter.
+     */
+    for (i = 1; i <= attnum_arg; i++)
+    {
+        if (!TupleDescAttr(tupdesc, i - 1)->attisdropped)
+            ordinal++;
+    }
+
     value = heap_getattr(&heapTuple, attnum_arg, tupdesc, &isnull);
     *out = pg_cell_checksum_canonical_algo(value, isnull,
                                            attr->atttypid,
                                            attr->atttypmod,
-                                           attnum_arg, algo);
+                                           ordinal, algo);
 
     UnlockReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);

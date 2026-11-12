@@ -22,6 +22,47 @@
  *-------------------------------------------------------------------------
  */
 
+/* Infomask bits that are hints, set lazily by readers and not tuple state. */
+#define HEAP_HINT_BITS \
+    (HEAP_XMIN_COMMITTED | HEAP_XMIN_INVALID | \
+     HEAP_XMAX_COMMITTED | HEAP_XMAX_INVALID)
+
+/*
+ * hash_tuple_with_header - hash a whole tuple with its hint bits masked
+ *
+ * The header (t_hoff bytes) is copied and its hint bits cleared, then the
+ * hash continues over the unmodified rest of the tuple, so the result equals
+ * hashing the concatenation.  "seed" follows the usual convention that zero
+ * selects the offset basis.
+ */
+static uint64
+hash_tuple_with_header(HeapTupleHeader tuple, Size len, uint64 seed,
+                       ChecksumAlgo algo)
+{
+    unsigned char header[256];  /* t_hoff is a single byte */
+    Size        hoff = tuple->t_hoff;
+    const unsigned char *rest = (const unsigned char *) tuple + hoff;
+
+    /* Callers validated hoff <= len. */
+    Assert(hoff <= len && hoff <= sizeof(header));
+
+    memcpy(header, tuple, hoff);
+    ((HeapTupleHeader) header)->t_infomask &= ~HEAP_HINT_BITS;
+
+    if (algo == CHECKSUM_ALGO_FNV32)
+    {
+        uint32      h = fnv1a_32_hash(header, hoff, (uint32) seed);
+
+        return fnv1a_32_buf(rest, len - hoff, h);
+    }
+    else
+    {
+        uint64      h = fnv1a_64_hash(header, hoff, seed);
+
+        return fnv1a_64_buf(rest, len - hoff, h);
+    }
+}
+
 /*
  * pg_tuple_physical_checksum_internal - Core physical tuple checksum
  *
@@ -91,17 +132,14 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
         len = ItemIdGetLength(lp);
     }
 
-    if (include_header)
-    {
-        /* Include entire tuple (header + data) in checksum */
-        data = (char *) tuple;
-    }
-    else
+    if (!include_header)
     {
         /* Skip header, checksum only the tuple data */
         data = (char *) tuple + tuple->t_hoff;
         len -= tuple->t_hoff;
     }
+    else
+        data = (char *) tuple;
 
     /* Create 64-bit location from block number and offset */
     location = ((uint64)blkno << 32) | (uint64)offnum;
@@ -134,8 +172,16 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     page_info = PageGetPageSize(page) | (PageGetPageLayoutVersion(page) << 16);
     location_hash = combine_hash(location_hash, page_info, algo);
 
-    /* Calculate checksum using location_hash as the initial value */
-    if (algo == CHECKSUM_ALGO_FNV32)
+    /*
+     * Calculate the checksum using location_hash as the initial value.  When
+     * the header is included, its hint bits are masked out first: they are
+     * set lazily by whichever backend reads the tuple first (and differ
+     * between a primary and its standbys), so they are not part of the
+     * tuple's stable physical state.
+     */
+    if (include_header)
+        checksum = hash_tuple_with_header(tuple, len, location_hash, algo);
+    else if (algo == CHECKSUM_ALGO_FNV32)
         checksum = pg_checksum_data_custom(data, len, (uint32) location_hash);
     else
         checksum = fnv1a_64_hash(data, len, location_hash);
@@ -281,6 +327,7 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo a
 {
     TupleDesc   tupdesc = RelationGetDescr(rel);
     uint64      checksum = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
+    int         ordinal = 0;
     int         i;
 
     for (i = 1; i <= tupdesc->natts; i++)
@@ -293,12 +340,19 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo a
         if (attr->attisdropped)
             continue;
 
+        /*
+         * Hash the position among the live columns, not the physical
+         * attribute number: dropping a column must not change the checksum
+         * of the remaining data.
+         */
+        ordinal++;
+
         value = heap_getattr(tuple, i, tupdesc, &isnull);
 
         col_hash = pg_cell_checksum_canonical_algo(value, isnull,
                                                    attr->atttypid,
                                                    attr->atttypmod,
-                                                   i, algo);
+                                                   ordinal, algo);
 
         checksum = combine_hash(checksum, col_hash, algo);
     }

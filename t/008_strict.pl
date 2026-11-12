@@ -71,7 +71,7 @@ for my $call (@calls)
     is($ret, 0, "$label: strict = off completes");
     like($stderr, qr/skipping relation \d+ while computing database checksum/,
         "$label: strict = off warns about the skipped relation");
-    like($stderr, qr/database checksum skipped one or more relations/,
+    like($stderr, qr/database checksum skipped 1 relation\(s\)/,
         "$label: strict = off emits the summary warning");
 }
 

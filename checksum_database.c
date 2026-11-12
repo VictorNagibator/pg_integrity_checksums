@@ -152,6 +152,21 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
 }
 
 /*
+ * handle_skipped_relation - a relation has no usable checksum
+ *
+ * An error in strict mode; otherwise the relation is left out of the result
+ * and counted, so the caller can report how many were skipped.
+ */
+static void
+handle_skipped_relation(Oid relid, uint32 *skipped)
+{
+    pg_integrity_checksums_report_skipped_relation(relid);
+
+    if (skipped != NULL)
+        (*skipped)++;
+}
+
+/*
  * add_relation_result - fold one relation's checksum into the aggregate
  *
  * The accumulator is chosen by which pointer is set: logical_acc64 for
@@ -179,7 +194,7 @@ void
 compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
                        bool physical, ChecksumAlgo algo, ChecksumAccum64 *acc,
                        ChecksumLogicalAccum *logical_acc,
-                       ChecksumLogicalAccum64 *logical_acc64, bool *had_error)
+                       ChecksumLogicalAccum64 *logical_acc64, uint32 *skipped)
 {
     uint32      i;
 
@@ -206,7 +221,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                                   &skip);
             if (skip)
-                pg_integrity_checksums_report_skipped_relation(relid);
+                handle_skipped_relation(relid, skipped);
             else
                 add_relation_result(relid, rel_checksum, acc, logical_acc,
                                     logical_acc64);
@@ -273,8 +288,8 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
             MemoryContextSwitchTo(oldcontext);
             CurrentResourceOwner = oldowner;
 
-            if (had_error != NULL)
-                *had_error = true;
+            if (skipped != NULL)
+                (*skipped)++;
 
             if (pg_integrity_checksums_strict || sqlerrcode == ERRCODE_QUERY_CANCELED)
             {
@@ -319,7 +334,7 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
          * an ordinary error and not one caught by the handler above.
          */
         if (skip)
-            pg_integrity_checksums_report_skipped_relation(relid);
+            handle_skipped_relation(relid, skipped);
     }
 }
 
@@ -358,7 +373,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     ChecksumAccum64 acc = {0, 0};
     ChecksumLogicalAccum lacc = {0, 0};
     ChecksumLogicalAccum64 lacc64 = {0, 0};
-    bool        had_error = false;
+    uint32      skipped = 0;
     int         workers;
 
     /* Use a consistent snapshot */
@@ -451,20 +466,20 @@ compute_database_checksum_internal(bool physical, bool include_system,
         compute_database_items(items, 0, nitems, physical, algo, &acc,
                                physical ? NULL : &lacc,
                                (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
-                               &had_error);
+                               &skipped);
     else
         pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
                                             workers, algo, &acc,
                                             physical ? NULL : &lacc,
                                             (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
-                                            &had_error);
+                                            &skipped);
 
     pfree(items);
 
-    if (had_error)
+    if (skipped > 0)
         ereport(WARNING,
-                (errmsg("database checksum skipped one or more relations"),
-                 errhint("Inspect the server log for the affected relations.")));
+                (errmsg("database checksum skipped %u relation(s)", skipped),
+                 errhint("Set pg_integrity_checksums.strict = on to fail with the reason for the first skipped relation, or inspect the server log.")));
 
     if (physical)
         return checksum_accum64_finalize(&acc);

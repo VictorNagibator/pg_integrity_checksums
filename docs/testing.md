@@ -110,6 +110,16 @@ directory):
 make dist
 ```
 
+### Release metadata check
+
+The [Release Metadata workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release-metadata.yml)
+runs `.github/scripts/check_release_metadata.py` whenever the control file,
+`META.json`, `Changes` or an SQL script changes.  For the version in
+`pg_integrity_checksums.control` it checks that `META.json` agrees, the install
+script exists, the newest `Changes` section is for that version and is not
+empty, and an upgrade script from the previous `Changes` version exists.  You
+can run it locally: `python3 .github/scripts/check_release_metadata.py`.
+
 ### Automated releases
 
 Pushing a `v*` tag runs the [Release workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release.yml),

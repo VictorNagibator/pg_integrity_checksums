@@ -93,10 +93,10 @@ otherwise look like "nothing changed".
 
 | Situation | `strict = on` (default) | `strict = off` |
 | --- | --- | --- |
-| Invalid index, **logical** checksum | error: `relation "..." cannot be checksummed` | skipped, no warning |
+| Invalid index, **logical** checksum | error: `relation "..." cannot be checksummed` | skipped, counted in the summary `WARNING` |
 | Invalid index, **physical** checksum | included (its pages can still be read) | included |
-| Index with an access method that has no physical checksum (for example a third-party AM) | error: `relation "..." cannot be checksummed` | skipped, no warning |
-| Corrupt page, unreadable file | the original error, with a `CONTEXT` line naming the relation | skipped, `WARNING` per relation and a summary `WARNING` |
+| Index with an access method that has no physical checksum (for example a third-party AM) | error: `relation "..." cannot be checksummed` | skipped, counted in the summary `WARNING` |
+| Corrupt page, unreadable file | the original error, with a `CONTEXT` line naming the relation | skipped, `WARNING` per relation plus the summary `WARNING` |
 | Relation dropped while the scan runs | error | skipped with a `WARNING` |
 | Unlogged table on a standby (it has no data there) | error naming the table | skipped with a `WARNING` |
 | Query cancellation, `statement_timeout`, out of memory, shutdown | always propagated | always propagated |
@@ -128,7 +128,8 @@ For ad-hoc use you can allow skipping, per session or persistently:
 SET pg_integrity_checksums.strict = off;
 SELECT pg_database_logical_checksum(false, true);
 -- WARNING: skipping relation 16438 while computing database checksum
--- WARNING: database checksum skipped one or more relations
+-- WARNING: database checksum skipped 1 relation(s)
+-- HINT: Set pg_integrity_checksums.strict = on to fail with the reason ...
 
 ALTER DATABASE appdb SET pg_integrity_checksums.strict = off;  -- persistent
 ```

@@ -68,6 +68,16 @@ FROM (VALUES
     ('pg_database_logical_checksum(false, true, ''fnv64'')')
 ) AS v(f);
 
+-- A skipped relation is counted in one summary warning, serially and in
+-- parallel (the invalid index is the only relation skipped here).
+SET pg_integrity_checksums.strict = off;
+SET client_min_messages = warning;
+SELECT pg_database_logical_checksum(false, true) IS NOT NULL AS serial_skip_counted;
+SET pg_integrity_checksums.workers = 2;
+SELECT pg_database_logical_checksum(false, true) IS NOT NULL AS parallel_skip_counted;
+RESET pg_integrity_checksums.workers;
+SET client_min_messages = error;
+
 -- Excluding indexes means there is nothing to reject.
 RESET pg_integrity_checksums.strict;
 SELECT test_strict_outcome('SELECT pg_database_logical_checksum(false, false)')

@@ -10,6 +10,7 @@ on:
       - 'docker/**'
       - 'Makefile'
       - 'pg_integrity_checksums*'
+      - 'checksum_*'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 

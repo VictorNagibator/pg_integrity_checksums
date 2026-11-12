@@ -30,6 +30,15 @@ A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
 wider checksum or a raw `bytea` value is required.  It is described in the
 [function reference](docs/functions.md).
 
+## Errors and skipped relations
+
+Database-level checksums are **strict by default** (since 2.5): if a relation
+cannot be checksummed (an invalid index, a corrupt page, an unlogged table on a
+standby), the call fails and names the relation, instead of returning a value
+that silently leaves it out.  `SET pg_integrity_checksums.strict = off` skips
+such relations with a warning; do not use that value for monitoring.  See
+[Strict mode](docs/operations.md#strict-mode).
+
 ## Quick start
 
 ```sql

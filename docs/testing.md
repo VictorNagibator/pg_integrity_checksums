@@ -13,6 +13,22 @@ make installcheck
 make installcheck enable_tap_tests=yes PROVE=prove
 ```
 
+If your PostgreSQL installation is not writable by you (a system package, or a
+tree installed by root), run the TAP tests against a private copy: an install
+tree is relocatable, so copy it, install the extension into the copy and run
+`prove` with that copy's `bin` first on `PATH`:
+
+```bash
+cp -a /usr/local/pgsql /tmp/pginst            # or any installed PostgreSQL tree
+export PG_CONFIG=/tmp/pginst/bin/pg_config
+make && make install                           # installs into the copy
+B=/tmp/pginst
+mkdir -p tmp_check
+TESTLOGDIR=$PWD/tmp_check/log TESTDATADIR=$PWD/tmp_check PGPORT=65432 \
+PATH="$B/bin:$PATH" PG_REGRESS=$B/lib/pgxs/src/test/regress/pg_regress \
+prove -I $B/lib/pgxs/src/test/perl -I . t/*.pl
+```
+
 On merges to `main` and on releases, CI runs both suites on every supported
 major version (PostgreSQL 12 through 19) on Linux x86_64 and ARM64, macOS
 ARM64, Windows x64, and FreeBSD amd64 and ARM64.  Pull requests use a reduced
@@ -77,6 +93,12 @@ Physical checksums are storage- and architecture-dependent by design.
     rejection of mixed-hash diffs
 23. Streaming standby: logical table, index and database checksums match the
     primary after WAL replay
+24. Strict mode (default on): every database-level function rejects an invalid
+    index and a corrupt page, parallel scans follow the same rules, and
+    `strict = off` skips the relation with a warning and returns the checksum
+    of everything else; an unlogged table on a standby behaves the same
+25. Portability: logical checksums ignore dropped columns and the session's
+    `search_path`, and tuple checksums with the header ignore hint bits
 
 ## Building a Release
 
@@ -87,6 +109,16 @@ directory):
 ```bash
 make dist
 ```
+
+### Release metadata check
+
+The [Release Metadata workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release-metadata.yml)
+runs `.github/scripts/check_release_metadata.py` whenever the control file,
+`META.json`, `Changes` or an SQL script changes.  For the version in
+`pg_integrity_checksums.control` it checks that `META.json` agrees, the install
+script exists, the newest `Changes` section is for that version and is not
+empty, and an upgrade script from the previous `Changes` version exists.  You
+can run it locally: `python3 .github/scripts/check_release_metadata.py`.
 
 ### Automated releases
 

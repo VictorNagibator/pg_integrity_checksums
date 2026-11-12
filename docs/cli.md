@@ -153,7 +153,7 @@ Options:
 | `--include-system` | false | Include system schemas |
 | `--workers` | 0 | Extension parallel workers (GUC) |
 | `--timeout` | 0 | `statement_timeout`, e.g. `5m` |
-| `--strict` | false | Fail if an object cannot be checksummed |
+| `--strict` | false | Fail if an object cannot be checksummed (the CLI's own preflight; unrelated to the server setting `pg_integrity_checksums.strict`) |
 | `--quiet` | false | No progress on stderr |
 
 `--kind physical` is opt-in.  A physical baseline is tied to one cluster;

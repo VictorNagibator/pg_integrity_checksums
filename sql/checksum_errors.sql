@@ -46,8 +46,10 @@ WHERE indexrelid = 'test_errors_invalid_idx'::regclass;
 SELECT pg_index_logical_checksum('test_errors_invalid_idx'::regclass) IS NULL
        AS invalid_index_logical_null;
 
--- Strict database scans reject an invalid index; non-strict scans skip it.
-SET pg_integrity_checksums.strict = on;
+-- Database scans are strict by default: an invalid index aborts the scan
+-- instead of silently dropping out of the result.
+RESET pg_integrity_checksums.strict;
+SHOW pg_integrity_checksums.strict;
 DO $$
 DECLARE
     rejected boolean;
@@ -59,15 +61,17 @@ BEGIN
         rejected := true;
     END;
     IF NOT rejected THEN
-        RAISE EXCEPTION 'strict database scan accepted an invalid index';
+        RAISE EXCEPTION 'default (strict) database scan accepted an invalid index';
     END IF;
 END;
 $$;
-RESET pg_integrity_checksums.strict;
 
+-- With strict mode switched off the scan skips the invalid index.
+SET pg_integrity_checksums.strict = off;
 SET client_min_messages = error;
 SELECT pg_database_logical_checksum(false, true) IS NOT NULL
        AS invalid_index_skipped;
+RESET pg_integrity_checksums.strict;
 RESET client_min_messages;
 
 UPDATE pg_index SET indisvalid = true

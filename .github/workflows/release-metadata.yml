@@ -1,0 +1,42 @@
+name: Release Metadata
+
+# Catches a version bump without a Changes entry, an upgrade script or matching
+# META.json before the tag is pushed (the Release workflow would only fail
+# afterwards).
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - "*.control"
+      - "META.json"
+      - "Changes"
+      - "pg_integrity_checksums--*.sql"
+      - ".github/scripts/check_release_metadata.py"
+      - ".github/workflows/release-metadata.yml"
+  pull_request:
+    paths:
+      - "*.control"
+      - "META.json"
+      - "Changes"
+      - "pg_integrity_checksums--*.sql"
+      - ".github/scripts/check_release_metadata.py"
+      - ".github/workflows/release-metadata.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-metadata-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Version, Changes and upgrade script
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Check release metadata
+        run: python3 .github/scripts/check_release_metadata.py

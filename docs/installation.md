@@ -144,6 +144,31 @@ If the generic call reports that the function does not exist, the installed
 extension is older than 2.2 or the upgrade did not run.  See
 [Upgrading to 2.2](#upgrading-to-22).
 
+## Upgrading to 2.5
+
+2.5 changes one default: `pg_integrity_checksums.strict` is now `on`.  A
+database checksum (`pg_database_physical_checksum`,
+`pg_database_logical_checksum`) fails when a relation cannot be checksummed,
+instead of skipping it with a warning.  Checksum values do not change.
+Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.5.0';
+```
+
+The new default is picked up when the new library is loaded (new sessions
+after the package upgrade).  Jobs that relied on the old behavior, for example
+a scheduled check that ran with an invalid index left over from a failed
+`CREATE INDEX CONCURRENTLY`, with a third-party index access method, or on a
+standby that holds unlogged tables, will now fail.  Fix the underlying problem
+(`DROP` or `REINDEX` the invalid index), or keep skipping explicitly:
+
+```sql
+ALTER ROLE monitor SET pg_integrity_checksums.strict = off;
+```
+
+See [Strict mode](operations.md#strict-mode).
+
 ## Upgrading to 2.4
 
 2.4 fixes three cases where a logical or physical checksum depended on

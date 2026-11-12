@@ -281,7 +281,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
 
     myresult->partial = 0;
     myresult->count = 0;
-    myresult->had_error = false;
+    myresult->skipped = 0;
 
     if (state->snapshot_size > 0)
     {
@@ -330,7 +330,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                                            state->algo, &acc64,
                                            physical ? NULL : &lacc,
                                            (!physical && state->algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
-                                           &myresult->had_error);
+                                           &myresult->skipped);
 
                 if (pushed)
                     PopActiveSnapshot();
@@ -516,7 +516,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                                     ChecksumAccum64 *acc,
                                     ChecksumLogicalAccum *logical_acc,
                                     ChecksumLogicalAccum64 *logical_acc64,
-                                    bool *had_error)
+                                    uint32 *skipped)
 {
     ParallelContext *pcxt;
     ParallelContext *volatile pcxt_cleanup = NULL;
@@ -527,7 +527,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
     uint32      snapshot_size;
     uint32      start;
     uint32      end;
-    bool        local_had_error = false;
+    uint32      local_skipped = 0;
     int         i;
 
     /*
@@ -599,7 +599,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
         /* The leader processes its own share of the relations. */
         while (pg_integrity_checksums_consume(state, 1, &start, &end))
             compute_database_items(items, start, end, physical, algo, acc,
-                                   logical_acc, logical_acc64, &local_had_error);
+                                   logical_acc, logical_acc64, &local_skipped);
 
         if (pcxt->nworkers_launched > 0)
             WaitForParallelWorkersToFinish(pcxt);
@@ -622,8 +622,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                     logical_acc->count += results[i].count;
                 }
 
-                if (results[i].had_error)
-                    local_had_error = true;
+                local_skipped += results[i].skipped;
             }
         }
 
@@ -640,7 +639,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
     DestroyParallelContext(pcxt);
     ExitParallelMode();
 
-    if (had_error != NULL)
-        *had_error = local_had_error;
+    if (skipped != NULL)
+        *skipped = local_skipped;
 }
 

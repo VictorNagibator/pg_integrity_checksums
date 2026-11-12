@@ -137,14 +137,14 @@ typedef struct IndexLogicalScanState
  *
  * Each worker writes a single entry of this type into shared memory, so
  * no streaming or variable-sized shared memory is required. 32-bit scans
- * zero-extend their aggregate; 64-bit scans store it directly.  had_error is
- * set by database scans when one or more relations had to be skipped.
+ * zero-extend their aggregate; 64-bit scans store it directly.  skipped is
+ * the number of relations a database scan had to skip.
  */
 typedef struct ChecksumWorkerResult
 {
     uint64      partial;
     uint64      count;
-    bool        had_error;
+    uint32      skipped;
 } ChecksumWorkerResult;
 
 /*
@@ -199,7 +199,7 @@ extern void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                            ChecksumAccum64 *acc,
                                                            ChecksumLogicalAccum *logical_acc,
                                                            ChecksumLogicalAccum64 *logical_acc64,
-                                                           bool *had_error);
+                                                           uint32 *skipped);
 
 /* FNV-1a helpers. */
 extern uint32 fnv1a_32_buf(const unsigned char *bytes, size_t len, uint32 hash);
@@ -263,7 +263,7 @@ extern void compute_database_items(ChecksumRelationItem *items, uint32 start,
                                    ChecksumAccum64 *acc,
                                    ChecksumLogicalAccum *logical_acc,
                                    ChecksumLogicalAccum64 *logical_acc64,
-                                   bool *had_error);
+                                   uint32 *skipped);
 
 /* Table checksum implementations shared with the database scan. */
 extern uint64 pg_table_physical_checksum_calc(Oid reloid,

@@ -25,6 +25,26 @@ The checksum functions require SELECT on each object.  Row-level security is
 rejected because a direct heap scan cannot apply policies.  Use a role with
 SELECT or restrict the scope with the CLI filters.
 
+## `relation "..." cannot be checksummed`
+
+Since 2.5 database checksums are strict by default: a relation without a usable
+checksum aborts the call instead of being skipped.  The message and the
+`CONTEXT` line name the relation; the `DETAIL` says why.  Common causes:
+
+- **Invalid index** (for example left over from a failed
+  `CREATE INDEX CONCURRENTLY`): `DROP` or `REINDEX` it.  Only logical checksums
+  reject it.
+- **Unsupported physical index access method** (a third-party AM such as
+  Bloom): use the logical checksum, or skip it with `strict = off`.
+- **Unlogged table on a standby**: the table has no data there.  Drop it on the
+  primary, make it logged, or run the check on the primary.
+- **Relation dropped during the scan**: retry.
+- **Corrupt page or missing file**: investigate with `pg_page_checksum_status`
+  (see [Investigating a mismatch](operations.md#investigating-a-mismatch)).
+
+To skip such relations anyway, `SET pg_integrity_checksums.strict = off`; the
+result then excludes them.  See [Strict mode](operations.md#strict-mode).
+
 ## Unknown checksum algorithm
 
 The generic API accepts exactly `fnv32` and `fnv64`:

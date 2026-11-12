@@ -50,7 +50,8 @@ REGRESS = \
 	checksum_fnv64 \
 	checksum_fnv64_extra \
 	checksum_page_status \
-	checksum_portability
+	checksum_portability \
+	checksum_strict
 
 REGRESS_OPTS = \
     --inputdir=./ \

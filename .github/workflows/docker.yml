@@ -103,6 +103,11 @@ jobs:
 
           if [ "$extension_ready" -ne 1 ]; then
             echo "extension was not created in the smoke database after $attempt attempts" >&2
+            # "exit 1" does not fire the ERR trap, so show why explicitly.
+            echo "--- docker ps -a" >&2
+            docker ps -a >&2 || true
+            echo "--- container logs" >&2
+            docker logs pg-integrity-smoke >&2 || true
             exit 1
           fi
 

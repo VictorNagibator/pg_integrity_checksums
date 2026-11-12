@@ -175,12 +175,14 @@ in:
    ```
 
 5. **If the data is identical but the storage is suspect**, verify the pages
-   against their stored checksums (needs `data_checksums = on`):
+   against their stored checksums (needs `data_checksums = on`).  The check
+   reads the on-disk copy of each page, so run `CHECKPOINT` first; pages that
+   have not been written yet are reported as `new`:
 
    ```sql
    SELECT blk, pg_page_checksum_status('orders'::regclass, blk) AS status
    FROM generate_series(0,
-        pg_relation_size('orders') / current_setting('block_size')::bigint - 1) AS blk
+        (pg_relation_size('orders') / current_setting('block_size')::int)::int - 1) AS blk
    WHERE pg_page_checksum_status('orders'::regclass, blk) = 'mismatch';
    ```
 

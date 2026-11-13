@@ -389,6 +389,9 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		Prior:       prior,
 		Reused:      &reused,
 		Progress:    progress(*quiet, stderr),
+		Warning: func(msg string) {
+			fmt.Fprintln(stderr, "warning: "+msg)
+		},
 	})
 	if err != nil {
 		return commandError(stderr, err)

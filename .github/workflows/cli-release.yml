@@ -17,7 +17,7 @@ concurrency:
 jobs:
   build:
     name: Build CLI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -67,7 +67,7 @@ jobs:
 
   publish:
     name: Sign and publish CLI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     needs: build
     permissions:

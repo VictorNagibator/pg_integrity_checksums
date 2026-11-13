@@ -49,7 +49,7 @@ concurrency:
 jobs:
   coverage:
     name: Coverage (PostgreSQL ${{ matrix.pg }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     strategy:
       fail-fast: false
@@ -136,7 +136,7 @@ jobs:
 
   sanitizers:
     name: ASAN + UBSAN (PostgreSQL ${{ matrix.pg }})
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       ASAN_OPTIONS: "detect_leaks=0:abort_on_error=1"

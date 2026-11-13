@@ -30,7 +30,7 @@ permissions:
 jobs:
   analyze:
     name: Analyze C sources
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
@@ -67,7 +67,7 @@ jobs:
 
   analyze-go:
     name: Analyze Go CLI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:

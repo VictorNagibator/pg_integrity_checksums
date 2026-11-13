@@ -323,13 +323,20 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
             ordinal++;
     }
 
+    /*
+     * Hash with the buffer pinned but not locked: canonicalization may
+     * detoast the value and call type send functions, which must not run
+     * under a buffer content lock.  The pin keeps the tuple in place.
+     */
+    LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+
     value = heap_getattr(&heapTuple, attnum_arg, tupdesc, &isnull);
     *out = pg_cell_checksum_canonical_algo(value, isnull,
                                            attr->atttypid,
                                            attr->atttypmod,
                                            ordinal, algo);
 
-    UnlockReleaseBuffer(buffer);
+    ReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
     return true;
 }

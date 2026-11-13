@@ -22,11 +22,6 @@
  *-------------------------------------------------------------------------
  */
 
-/* Infomask bits that are hints, set lazily by readers and not tuple state. */
-#define HEAP_HINT_BITS \
-    (HEAP_XMIN_COMMITTED | HEAP_XMIN_INVALID | \
-     HEAP_XMAX_COMMITTED | HEAP_XMAX_INVALID)
-
 /*
  * hash_tuple_with_header - hash a whole tuple with its hint bits masked
  *
@@ -383,6 +378,7 @@ pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, ChecksumAlgo algo,
     HeapTupleHeader tuple;
     uint64      checksum = 0;
     bool        missing = false;
+    bool        locked = true;
     BlockNumber blkno;
     OffsetNumber offnum;
     Size        tuple_len;
@@ -450,13 +446,25 @@ pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, ChecksumAlgo algo,
                 heapTuple.t_tableOid = reloid;
                 heapTuple.t_self = *tid;
 
+                /*
+                 * Hash with the buffer pinned but not locked: the logical
+                 * encoding detoasts values and calls type send functions,
+                 * which must not run under a buffer content lock.  The pin
+                 * keeps the tuple in place.
+                 */
+                LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+                locked = false;
+
                 checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple,
                                                               algo);
             }
         }
     }
 
-    UnlockReleaseBuffer(buffer);
+    if (locked)
+        UnlockReleaseBuffer(buffer);
+    else
+        ReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
 
     if (missing || checksum == 0)

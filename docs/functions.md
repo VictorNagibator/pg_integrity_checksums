@@ -360,7 +360,12 @@ FNV_PRIME_64 = 1099511628211
 CHECKSUM_NULL = 0xFFFFFFFF (signed -1, 32-bit path)
 ```
 
-The 64-bit path uses `UINT64_MAX` as its NULL sentinel and a 64-bit final mix.
+The 64-bit path uses a 64-bit final mix.  Its NULL sentinel is the 32-bit
+sentinel zero-extended, `0x00000000FFFFFFFF`: `pg_cell_checksum(..., 'fnv64')`
+returns `\x00000000ffffffff` for a NULL cell.  (Earlier documentation said
+`UINT64_MAX`; the value has always been `0x00000000FFFFFFFF`, and it is kept so
+existing v2 baselines stay valid.)  Non-NULL values that hash to zero or to
+`UINT64_MAX` are remapped by the final mix.
 All canonical value handling (types, arrays, ranges, numerics, endianness)
 is shared between the 32-bit and 64-bit paths.
 

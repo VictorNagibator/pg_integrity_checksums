@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.6.0   2026-11-14
 
     - Fix: physical index checksums no longer change when nothing changed.
       Index pages were hashed as raw buffer bytes, including the page LSN,
@@ -26,6 +26,24 @@ Unreleased
       lock; hashing now runs with the buffer only pinned.
     - Add regression tests checksum_physical_hints and checksum_buffer_locks
       and TAP test 009_physical_restart.
+    - The pure utility functions are IMMUTABLE and PARALLEL SAFE:
+      pg_data_checksum and pg_text_checksum (both overloads) and
+      pg_checksum_bigint.  The algorithm overloads and pg_checksum_bigint
+      used to be VOLATILE, and none was PARALLEL SAFE, so they could not be
+      used in index expressions or generated columns.
+    - Build: drop the PostgreSQL 19 version gates.  Arrays are decomposed
+      with deconstruct_array() instead of the array_iter API, and the
+      pg_class scan of database checksums uses systable_beginscan(); both
+      have the same signature on every supported release, so the extension
+      also builds against PostgreSQL 19 development snapshots from before
+      the API changes.  Checksum values are unchanged.
+    - Docs: the fnv64 NULL sentinel is 0x00000000FFFFFFFF (the 32-bit
+      sentinel zero-extended), not UINT64_MAX as documented.  The value is
+      unchanged.
+    - Add 2.5.0 -> 2.6.0 upgrade script and the checksum_upgrade regression
+      test, which installs 2.0.0, updates to the default version and checks
+      that every function matches a fresh install (attributes, privileges
+      and comments).
 
 2.5.0   2026-11-12
 

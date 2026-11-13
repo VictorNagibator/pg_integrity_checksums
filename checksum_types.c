@@ -13,7 +13,6 @@
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
 #include "utils/array.h"
-#include "utils/arrayaccess.h"
 #include "utils/builtins.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
@@ -259,12 +258,18 @@ logical_type_info(Oid typid)
 static uint64
 logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
 {
-    AnyArrayType *arr = (AnyArrayType *) DatumGetArrayTypeP(value);
-    Oid         elemtype = AARR_ELEMTYPE(arr);
+    /*
+     * DatumGetArrayTypeP() returns a flat (detoasted, non-expanded) array,
+     * and deconstruct_array() has had the same signature on every supported
+     * release, unlike the array_iter API that changed in PostgreSQL 19.
+     */
+    ArrayType  *arr = DatumGetArrayTypeP(value);
+    Oid         elemtype = ARR_ELEMTYPE(arr);
     LogicalTypeInfo elem_info = logical_type_info(elemtype);
-    array_iter  iter;
+    Datum      *elems = NULL;
+    bool       *elem_nulls = NULL;
     int         nelems;
-    int         ndim = AARR_NDIM(arr);
+    int         ndim = ARR_NDIM(arr);
     int         i;
     uint64      h = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
 
@@ -273,39 +278,35 @@ logical_hash_array(Datum value, int depth, ChecksumAlgo algo)
     if (ndim > 0)
     {
         for (i = 0; i < ndim; i++)
-            h = logical_hash_uint32_le(h, (uint32) AARR_DIMS(arr)[i], algo);
+            h = logical_hash_uint32_le(h, (uint32) ARR_DIMS(arr)[i], algo);
         for (i = 0; i < ndim; i++)
-            h = logical_hash_uint32_le(h, (uint32) AARR_LBOUND(arr)[i], algo);
+            h = logical_hash_uint32_le(h, (uint32) ARR_LBOUND(arr)[i], algo);
     }
 
-    nelems = (ndim > 0) ? ArrayGetNItems(ndim, AARR_DIMS(arr)) : 0;
+    nelems = (ndim > 0) ? ArrayGetNItems(ndim, ARR_DIMS(arr)) : 0;
     h = logical_hash_uint32_le(h, (uint32) nelems, algo);
 
     if (nelems > 0)
     {
-#if PG_VERSION_NUM >= 190000
-        array_iter_setup(&iter, arr, elem_info.typlen,
-                         elem_info.typbyval, elem_info.typalign);
-#else
-        array_iter_setup(&iter, arr);
-#endif
+        int         ndeconstructed;
+
+        deconstruct_array(arr, elemtype, elem_info.typlen,
+                          elem_info.typbyval, elem_info.typalign,
+                          &elems, &elem_nulls, &ndeconstructed);
+        Assert(ndeconstructed == nelems);
 
         for (i = 0; i < nelems; i++)
         {
-            bool        isnull;
-            Datum       elem;
             uint64      elem_hash;
 
-#if PG_VERSION_NUM >= 190000
-            elem = array_iter_next(&iter, &isnull, i);
-#else
-            elem = array_iter_next(&iter, &isnull, i, elem_info.typlen,
-                                   elem_info.typbyval, elem_info.typalign);
-#endif
-            elem_hash = logical_hash_datum_algo(elem, isnull, elemtype, -1,
-                                                i + 1, depth + 1, algo);
+            elem_hash = logical_hash_datum_algo(elems[i], elem_nulls[i],
+                                                elemtype, -1, i + 1,
+                                                depth + 1, algo);
             h = combine_hash(h, elem_hash, algo);
         }
+
+        pfree(elems);
+        pfree(elem_nulls);
     }
 
     if ((Pointer) arr != DatumGetPointer(value))

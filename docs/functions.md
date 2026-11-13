@@ -126,9 +126,9 @@ FROM customers WHERE customer_id = 456;
 Aggregates physical tuple checksums for entire table (order-independent).
 Requires `SELECT` on the table.  The function accepts ordinary tables,
 materialized views, partitioned tables and (for physical checksums) TOAST
-relations.  A TOAST relation is checksummed as raw pages, because its tuples
-are not heap tuples.  A corrupted page produces a clean error rather than
-crashing the backend.
+relations.  A TOAST relation is checksummed page by page, with hint bits,
+the page LSN and the in-buffer `pd_checksum` masked out.  A corrupted page
+produces a clean error rather than crashing the backend.
 
 For an ordinary table, the physical checksum covers the main heap only: a
 TOAST value is represented by its pointer in the main tuple, so corruption

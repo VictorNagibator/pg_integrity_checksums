@@ -36,13 +36,34 @@
  * rules as a sequential scan so that the resulting tuple set is identical
  * to what the serial path would have seen.  Corrupt page headers, line
  * pointers and tuple headers raise an error instead of being followed.
+ *
+ * Validation and visibility checks always run under a share lock.  With
+ * needs_lock the visitor runs under that lock too.  Without it the scan
+ * works like heapgetpage() in page-at-a-time mode: it remembers the visible
+ * tuples, releases the content lock but keeps the pin, and then calls the
+ * visitor.  This is required for visitors that detoast values, call type
+ * send functions or evaluate index expressions: such code reads other
+ * buffers and the catalogs and may run user-defined functions, and doing it
+ * under a buffer content lock delays query cancellation (interrupts are held
+ * off) and risks an undetectable LWLock deadlock.
  */
+typedef struct VisibleTuple
+{
+    OffsetNumber offnum;
+    HeapTupleHeader htup;
+    uint32      len;
+} VisibleTuple;
+
 void
 scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
                     Snapshot snapshot, BufferAccessStrategy bstrategy,
-                    TupleVisitor visitor, void *arg)
+                    bool needs_lock, TupleVisitor visitor, void *arg)
 {
     BlockNumber blkno;
+    VisibleTuple *visible = NULL;
+
+    if (!needs_lock)
+        visible = palloc(sizeof(VisibleTuple) * MaxHeapTuplesPerPage);
 
     for (blkno = start; blkno < end; blkno++)
     {
@@ -50,6 +71,8 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
         Page        page;
         OffsetNumber maxoff;
         OffsetNumber offnum;
+        int         nvisible = 0;
+        int         i;
 
         buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
                                     bstrategy);
@@ -98,14 +121,60 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
             if (!HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
                 continue;
 
-            visitor(rel, page, blkno, offnum, &tuple, arg);
+            if (needs_lock)
+            {
+                visitor(rel, page, blkno, offnum, &tuple, arg);
+                continue;
+            }
+
+            /* More visible tuples than a heap page can hold: not a heap page. */
+            if (nvisible >= MaxHeapTuplesPerPage)
+                ereport(ERROR,
+                        (errcode(ERRCODE_DATA_CORRUPTED),
+                         errmsg("too many tuples in relation \"%s\" at block %u",
+                                RelationGetRelationName(rel), blkno)));
+
+            visible[nvisible].offnum = offnum;
+            visible[nvisible].htup = htup;
+            visible[nvisible].len = (uint32) tuple_len;
+            nvisible++;
         }
 
-        UnlockReleaseBuffer(buffer);
+        if (needs_lock)
+        {
+            UnlockReleaseBuffer(buffer);
+        }
+        else
+        {
+            /*
+             * The pin keeps the tuples where they are: pruning and
+             * defragmentation need a cleanup lock, which our pin blocks.
+             */
+            LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+
+            for (i = 0; i < nvisible; i++)
+            {
+                HeapTupleData tuple;
+
+                tuple.t_len = visible[i].len;
+                tuple.t_data = visible[i].htup;
+                tuple.t_tableOid = RelationGetRelid(rel);
+                ItemPointerSet(&tuple.t_self, blkno, visible[i].offnum);
+
+                visitor(rel, page, blkno, visible[i].offnum, &tuple, arg);
+
+                CHECK_FOR_INTERRUPTS();
+            }
+
+            ReleaseBuffer(buffer);
+        }
 
         if ((blkno & (SCAN_INTERRUPT_INTERVAL - 1)) == 0)
             CHECK_FOR_INTERRUPTS();
     }
+
+    if (visible != NULL)
+        pfree(visible);
 }
 
 /* State of a physical heap scan; only the accumulator for "algo" is used. */
@@ -151,7 +220,8 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
     PhysicalVisitorState state = {include_header, CHECKSUM_ALGO_FNV32,
                                   acc, NULL};
 
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy,
+    /* Reads xmax and the infomask, which concurrent backends change. */
+    scan_visible_tuples(rel, start, end, snapshot, bstrategy, true,
                         physical_tuple_visitor, &state);
 }
 
@@ -167,7 +237,8 @@ scan_table_blocks_physical64(Relation rel, BlockNumber start, BlockNumber end,
     PhysicalVisitorState state = {include_header, CHECKSUM_ALGO_FNV64,
                                   NULL, acc};
 
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy,
+    /* Reads xmax and the infomask, which concurrent backends change. */
+    scan_visible_tuples(rel, start, end, snapshot, bstrategy, true,
                         physical_tuple_visitor, &state);
 }
 
@@ -205,7 +276,7 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
 {
     LogicalVisitorState state = {CHECKSUM_ALGO_FNV32, acc, NULL};
 
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy,
+    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
                         logical_tuple_visitor, &state);
 }
 
@@ -219,7 +290,7 @@ scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
 {
     LogicalVisitorState state = {CHECKSUM_ALGO_FNV64, NULL, acc};
 
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy,
+    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
                         logical_tuple_visitor, &state);
 }
 
@@ -234,13 +305,24 @@ scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
  * Handles both generic index types and BRIN.  The page is hashed as a
  * complete block of BLCKSZ bytes: PageGetPageSize() comes from the page
  * header and a corrupted value could make us read past the buffer.
+ *
+ * The hash covers a copy made by pg_integrity_checksums_mask_page(), not the
+ * buffer itself: the stale in-buffer pd_checksum, pd_lsn and the LP_DEAD and
+ * "has garbage" hints set by index scans used to change the checksum after a
+ * plain SELECT or a server restart.  "masked" is caller-provided scratch
+ * space of BLCKSZ bytes.
  */
 static uint64
-index_page_hash(Page page, BlockNumber blkno, bool is_brin, ChecksumAlgo algo)
+index_page_hash(Page buffer_page, char *masked, BlockNumber blkno,
+                bool is_brin, Oid relam, ChecksumAlgo algo)
 {
-    PageHeader  phdr = (PageHeader) page;
+    Page        page = (Page) masked;
+    PageHeader  phdr = (PageHeader) masked;
     const Size  page_size = BLCKSZ;
     uint64      page_hash;
+
+    pg_integrity_checksums_mask_page(buffer_page, masked, CHECKSUM_PAGE_INDEX,
+                                     relam);
 
     if (PageIsNew(page))
     {
@@ -305,6 +387,8 @@ scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
                                   BufferAccessStrategy bstrategy)
 {
     BlockNumber blkno;
+    Oid         relam = idxRel->rd_rel->relam;
+    PGAlignedBlock masked;
 
     for (blkno = start; blkno < end; blkno++)
     {
@@ -315,8 +399,8 @@ scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
                                     RBM_NORMAL, bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-        page_hash = index_page_hash(BufferGetPage(buffer), blkno, is_brin,
-                                    algo);
+        page_hash = index_page_hash(BufferGetPage(buffer), masked.data, blkno,
+                                    is_brin, relam, algo);
 
         if (algo == CHECKSUM_ALGO_FNV32)
             checksum_accum_add(acc32, (uint32) page_hash);

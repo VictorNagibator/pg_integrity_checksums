@@ -1,5 +1,32 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Fix: physical index checksums no longer change when nothing changed.
+      Index pages were hashed as raw buffer bytes, including the page LSN,
+      the in-buffer pd_checksum (stale until the page is evicted, because
+      PostgreSQL sets the checksum on the copy it writes out) and the hints
+      index scans set under a share lock (LP_DEAD line pointers, B-tree
+      BTP_HAS_GARBAGE, hash LH_PAGE_HAS_DEAD_TUPLES, GiST F_HAS_GARBAGE).  A
+      plain SELECT or a server restart therefore changed the result.  Pages
+      are now hashed from a copy with that state masked out.
+    - Fix: physical TOAST checksums (pg_table_physical_checksum on a TOAST
+      relation, database physical checksums with include_toast) mask the same
+      page state and the infomask hint bits of TOAST tuples.
+    - Value change: physical checksums of indexes and TOAST relations differ
+      from 2.5.0.  Re-capture physical baselines after upgrading.  Logical
+      checksums and physical heap checksums are unchanged.
+    - Fix: logical table, tuple, cell and index checksums no longer
+      canonicalize values under a buffer content lock.  Detoasting, type send
+      functions and index expressions ran with interrupts held off, so a slow
+      expression or a large toasted value could not be cancelled
+      (statement_timeout and pg_cancel_backend waited for it to finish), and
+      reading other buffers and the catalogs under the lock risked an
+      undetectable LWLock deadlock.  Visibility is still checked under the
+      lock; hashing now runs with the buffer only pinned.
+    - Add regression tests checksum_physical_hints and checksum_buffer_locks
+      and TAP test 009_physical_restart.
+
 2.5.0   2026-11-12
 
     - Behavior change: pg_integrity_checksums.strict now defaults to on.  A

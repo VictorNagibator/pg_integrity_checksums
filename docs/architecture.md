@@ -68,10 +68,24 @@ storage layout:
 - MVCC fields stored in the tuple header;
 - index page bytes and page layout metadata for index physical checksums.
 
-Physical checksums deliberately omit page LSN, `pd_checksum` and `pd_flags`
-from tuple hashing, because hint-bit updates can change those fields during a
-concurrent scan.  A physical checksum identifies one cluster's storage and is
-not a replica-comparison value.
+Physical checksums deliberately omit state that changes without any change
+to the stored data:
+
+- tuple hashing leaves out the page LSN, `pd_checksum` and `pd_flags`, and
+  masks the tuple's infomask hint bits;
+- index pages and raw TOAST pages are hashed from a masked copy: the page LSN,
+  `pd_checksum`, `pd_prune_xid` and the `pd_flags` hint bits are cleared, as
+  are the hints index scans set under a share lock (`LP_DEAD` line pointers,
+  the B-tree `BTP_HAS_GARBAGE`, hash `LH_PAGE_HAS_DEAD_TUPLES` and GiST
+  `F_HAS_GARBAGE` flags) and the infomask hint bits of TOAST tuples.
+
+The in-buffer `pd_checksum` matters even when nothing is modified:
+PostgreSQL sets the checksum on the copy of the page it writes out, so the
+value in shared buffers is stale until the page is evicted and read back.
+Hashing it made physical checksums change across a server restart.
+
+A physical checksum identifies one cluster's storage and is not a
+replica-comparison value.
 
 ## Aggregation
 
@@ -118,6 +132,16 @@ Scans take `AccessShareLock` on relations.  Table, page, cell, tuple and index
 functions require `SELECT` and reject row-level-security relations because a
 direct heap scan cannot apply RLS policies.  Database-level functions require
 superuser.
+
+Pages are validated and tuple visibility is checked under a buffer share
+lock.  Logical checksums then hash the visible tuples with the buffer only
+pinned, like a page-at-a-time sequential scan: canonicalization detoasts
+values, calls type send functions and evaluates index expressions, and none
+of that may run under a buffer content lock (interrupts are held off, so the
+call could not be cancelled, and reading other buffers or the catalogs under
+the lock risks an undetectable lock-ordering deadlock).  Physical tuple
+hashing only reads the page and stays under the share lock, because it
+includes header fields such as `xmax` that concurrent backends change.
 
 ## Error handling
 

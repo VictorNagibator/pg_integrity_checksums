@@ -11,6 +11,7 @@
 #include "postgres.h"
 #include "pg_integrity_checksums.h"
 
+#include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "executor/executor.h"
@@ -297,6 +298,24 @@ extern void pg_integrity_checksums_check_heap_tuple(Relation rel,
                                                     OffsetNumber offnum,
                                                     HeapTupleHeader tuple,
                                                     Size len);
+/*
+ * Infomask bits that are hints, set lazily by readers and not tuple state.
+ * Physical checksums mask them out.
+ */
+#define HEAP_HINT_BITS \
+    (HEAP_XMIN_COMMITTED | HEAP_XMIN_INVALID | \
+     HEAP_XMAX_COMMITTED | HEAP_XMAX_INVALID)
+
+/* Page format interpreted by pg_integrity_checksums_mask_page(). */
+typedef enum ChecksumPageKind
+{
+    CHECKSUM_PAGE_HEAP,         /* heap page (TOAST relations) */
+    CHECKSUM_PAGE_INDEX         /* index page; relam selects the AM */
+} ChecksumPageKind;
+
+extern void pg_integrity_checksums_mask_page(Page page, char *dst,
+                                             ChecksumPageKind kind,
+                                             Oid relam);
 extern void scan_relation_raw_pages(Relation rel, BlockNumber start,
                                      BlockNumber end, ChecksumAccum *acc);
 extern void scan_relation_raw_pages64(Relation rel, BlockNumber start,
@@ -314,7 +333,13 @@ extern uint64 pg_tuple_logical_checksum_internal(Relation rel,
 /*
  * TupleVisitor - called for every heap tuple that is visible to a snapshot
  *
- * The page is share-locked for the duration of the call.
+ * When scan_visible_tuples() is called with needs_lock, the page is
+ * share-locked for the duration of the call; use that only for visitors that
+ * read tuple header fields which concurrent backends may change (xmax,
+ * infomask) and that do nothing but local computation.  Otherwise the buffer
+ * is only pinned: the pin keeps the tuple in place (pruning needs a cleanup
+ * lock), and the visitor may detoast, call type I/O functions or evaluate
+ * expressions, none of which may run while a buffer content lock is held.
  */
 typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
                               OffsetNumber offnum, HeapTuple tuple,
@@ -324,6 +349,7 @@ typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
 extern void scan_visible_tuples(Relation rel, BlockNumber start,
                                 BlockNumber end, Snapshot snapshot,
                                 BufferAccessStrategy bstrategy,
+                                bool needs_lock,
                                 TupleVisitor visitor, void *arg);
 extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
                                        BlockNumber end, bool include_header,

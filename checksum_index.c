@@ -486,7 +486,8 @@ pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
                                       NULL};
 
     scan_visible_tuples(scanstate->heapRel, start, end, scanstate->snapshot,
-                        scanstate->bstrategy, index_logical_tuple_visitor,
+                        scanstate->bstrategy, false,
+                        index_logical_tuple_visitor,
                         &state);
 }
 
@@ -502,7 +503,8 @@ pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
                                       acc};
 
     scan_visible_tuples(scanstate->heapRel, start, end, scanstate->snapshot,
-                        scanstate->bstrategy, index_logical_tuple_visitor,
+                        scanstate->bstrategy, false,
+                        index_logical_tuple_visitor,
                         &state);
 }
 

@@ -6,8 +6,12 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "access/gist.h"
+#include "access/hash.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
+#include "access/nbtree.h"
+#include "catalog/pg_am.h"
 #include "access/tableam.h"
 #include "catalog/index.h"
 #include "catalog/pg_class.h"
@@ -244,11 +248,110 @@ pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
 }
 
 /*
+ * pg_integrity_checksums_mask_page - copy a page without its unstable state
+ *
+ * A page in shared buffers carries state that changes although nothing about
+ * its content changed, so hashing the raw bytes made physical checksums
+ * depend on who read the page first and on whether it was evicted:
+ *
+ * - pd_checksum is set on a private copy when the buffer is written out
+ *   (PageSetChecksumCopy), so the value in shared buffers is stale until the
+ *   page is evicted and read again;
+ * - pd_lsn moves when setting a hint bit emits a full-page image;
+ * - pd_prune_xid and the pd_flags hint bits are set and cleared
+ *   opportunistically;
+ * - index scans mark line pointers LP_DEAD and set "page has garbage" flags
+ *   (B-tree, hash, GiST) under a share lock, as hints;
+ * - heap (TOAST) tuples get their infomask hint bits set by readers.
+ *
+ * Copy BLCKSZ bytes of "page" into "dst" and clear that state in the copy.
+ * Bits outside PD_VALID_FLAG_BITS are kept, so a corrupt header still changes
+ * the checksum.  Line pointers and tuples are only touched when the header
+ * passes the sanity checks; otherwise the raw copy is hashed.
+ */
+void
+pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
+                                 Oid relam)
+{
+    PageHeader  phdr = (PageHeader) dst;
+    OffsetNumber maxoff;
+    OffsetNumber offnum;
+
+    memcpy(dst, page, BLCKSZ);
+
+    if (PageIsNew((Page) dst))
+        return;
+
+    memset(&phdr->pd_lsn, 0, sizeof(phdr->pd_lsn));
+    phdr->pd_checksum = 0;
+    phdr->pd_prune_xid = InvalidTransactionId;
+    phdr->pd_flags &= ~PD_VALID_FLAG_BITS;
+
+    if (!pg_integrity_checksums_page_header_sane(page))
+        return;
+
+    maxoff = PageGetMaxOffsetNumber((Page) dst);
+
+    for (offnum = FirstOffsetNumber; offnum <= maxoff;
+         offnum = OffsetNumberNext(offnum))
+    {
+        ItemId      lp = PageGetItemId((Page) dst, offnum);
+
+        if (kind == CHECKSUM_PAGE_INDEX)
+        {
+            /*
+             * In an index, LP_DEAD only says "known dead to everyone"; the
+             * tuple stays in place until a cleanup removes it.  (In a heap,
+             * LP_DEAD is a pruning result and is real state.)
+             */
+            if (ItemIdIsDead(lp) && ItemIdHasStorage(lp))
+                lp->lp_flags = LP_NORMAL;
+        }
+        else if (ItemIdIsNormal(lp) &&
+                 pg_integrity_checksums_item_is_sane((Page) dst, lp) &&
+                 ItemIdGetLength(lp) >= SizeofHeapTupleHeader)
+        {
+            HeapTupleHeader htup = (HeapTupleHeader) PageGetItem((Page) dst, lp);
+
+            htup->t_infomask &= ~HEAP_HINT_BITS;
+        }
+    }
+
+    if (kind != CHECKSUM_PAGE_INDEX)
+        return;
+
+    /* Access-method "page has garbage" hints live in the special space. */
+    if (relam == BTREE_AM_OID &&
+        PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(BTPageOpaqueData)))
+    {
+        BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer((Page) dst);
+
+        opaque->btpo_flags &= ~BTP_HAS_GARBAGE;
+    }
+    else if (relam == HASH_AM_OID &&
+             PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(HashPageOpaqueData)))
+    {
+        HashPageOpaque opaque = (HashPageOpaque) PageGetSpecialPointer((Page) dst);
+
+        opaque->hasho_flag &= ~LH_PAGE_HAS_DEAD_TUPLES;
+    }
+    else if (relam == GIST_AM_OID &&
+             PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(GISTPageOpaqueData)))
+    {
+        GISTPageOpaque opaque = (GISTPageOpaque) PageGetSpecialPointer((Page) dst);
+
+        opaque->flags &= ~F_HAS_GARBAGE;
+    }
+}
+
+/*
  * scan_relation_raw_pages_common - checksum a relation as a sequence of raw pages
  *
- * Used for TOAST relations, whose tuples are not HeapTupleHeader structures
- * and therefore cannot go through the regular heap tuple path.  Only the
- * accumulator that matches "algo" is used.
+ * Used for TOAST relations, which are checksummed page by page rather than
+ * through the visible-tuple path.  Pages are hashed through
+ * pg_integrity_checksums_mask_page(), so hint bits and the stale in-buffer
+ * pd_checksum do not leak into the result.  Only the accumulator that
+ * matches "algo" is used.
  */
 static void
 scan_relation_raw_pages_common(Relation rel, BlockNumber start,
@@ -257,6 +360,7 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
 {
     BlockNumber blkno;
     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+    PGAlignedBlock masked;
 
     for (blkno = start; blkno < end; blkno++)
     {
@@ -267,7 +371,9 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
                                     bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
-        page_hash = hash_bytes_algo(0, BufferGetPage(buffer), BLCKSZ, algo);
+        pg_integrity_checksums_mask_page(BufferGetPage(buffer), masked.data,
+                                         CHECKSUM_PAGE_HEAP, InvalidOid);
+        page_hash = hash_bytes_algo(0, masked.data, BLCKSZ, algo);
         page_hash = combine_hash(page_hash, blkno, algo);
 
         if (algo == CHECKSUM_ALGO_FNV32)

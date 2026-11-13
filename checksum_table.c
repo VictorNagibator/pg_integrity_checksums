@@ -224,9 +224,9 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
     }
 
     /*
-     * TOAST tuples are not HeapTupleHeader structures.  Checksum the raw
-     * pages of a TOAST relation instead of trying to interpret them as heap
-     * tuples.
+     * A TOAST relation is checksummed page by page (with hint bits and other
+     * unstable page state masked) rather than through the visible-tuple
+     * path; its chunks are covered logically through the parent table.
      */
     if (rel->rd_rel->relkind == RELKIND_TOASTVALUE)
     {

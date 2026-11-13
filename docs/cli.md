@@ -462,6 +462,10 @@ The statistics counters are a heuristic: a reset, overflow or missing stats row
 forces a full checksum. Use a normal verify when exactness matters. Physical
 baselines do not support `--changed-since`.
 
+On a standby (`pg_is_in_recovery()`), `--changed-since` is ignored with a
+warning and every object is checksummed: WAL replay does not update the table
+statistics, so unchanged counters there say nothing about the data.
+
 ### No automatic baseline updates
 
 The CLI does not install triggers, start background workers or update

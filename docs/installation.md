@@ -144,6 +144,31 @@ If the generic call reports that the function does not exist, the installed
 extension is older than 2.2 or the upgrade did not run.  See
 [Upgrading to 2.2](#upgrading-to-22).
 
+## Upgrading to 2.6
+
+2.6 fixes physical index and TOAST checksums that changed without any change
+to the data (after a plain `SELECT` through an index, or after a server
+restart with data checksums enabled).  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.6.0';
+```
+
+What changes:
+
+- **Physical index and TOAST checksum values differ from 2.5.**  Re-capture
+  physical baselines (`pg_integrity_checksums capture --kind physical`) after
+  the upgrade; a verify against an older physical baseline reports every
+  index as changed.  Logical checksums and physical heap (table) checksums do
+  not change, so logical baselines stay valid.
+- Logical checksums no longer run type I/O functions and index expressions
+  under a buffer content lock, so long calls can be cancelled with
+  `statement_timeout` or `pg_cancel_backend()`.
+- The pure utility functions (`pg_data_checksum`, `pg_text_checksum` and
+  their algorithm overloads, `pg_checksum_bigint`) are `IMMUTABLE` and
+  `PARALLEL SAFE`, so they can be used in index expressions, generated
+  columns and parallel queries.  The `ALTER EXTENSION` step applies this.
+
 ## Upgrading to 2.5
 
 2.5 changes one default: `pg_integrity_checksums.strict` is now `on`.  A

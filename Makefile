@@ -53,7 +53,8 @@ REGRESS = \
 	checksum_portability \
 	checksum_strict \
 	checksum_physical_hints \
-	checksum_buffer_locks
+	checksum_buffer_locks \
+	checksum_upgrade
 
 REGRESS_OPTS = \
     --inputdir=./ \

@@ -56,11 +56,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04-arm]
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
         arch: [x86_64, arm64]
         pg: ${{ github.event_name == 'pull_request' && fromJSON('[12,16,19]') || fromJSON('[12,13,14,15,16,17,18,19]') }}
         exclude:
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
             arch: arm64
           - os: ubuntu-24.04-arm
             arch: x86_64
@@ -159,7 +159,7 @@ jobs:
   # FreeBSD - every PostgreSQL version on amd64 and arm64.
   freebsd:
     name: FreeBSD ${{ matrix.arch }} / PostgreSQL ${{ matrix.pg }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       PG: ${{ matrix.pg }}

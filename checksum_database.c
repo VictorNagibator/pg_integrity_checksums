@@ -7,6 +7,7 @@
  */
 #include "postgres.h"
 #include "fmgr.h"
+#include "access/genam.h"
 #include "access/heapam.h"
 #include "access/parallel.h"
 #include "catalog/namespace.h"
@@ -364,7 +365,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
                                   ChecksumAlgo algo)
 {
     Relation    pg_class_rel;
-    TableScanDesc scan;
+    SysScanDesc scan;
     HeapTuple   classTuple;
     Snapshot    snapshot;
     ChecksumRelationItem *items;
@@ -387,13 +388,16 @@ compute_database_checksum_internal(bool physical, bool include_system,
     items = (ChecksumRelationItem *) palloc(capacity * sizeof(ChecksumRelationItem));
 
     pg_class_rel = table_open(RelationRelationId, AccessShareLock);
-#if PG_VERSION_NUM >= 190000
-    scan = table_beginscan(pg_class_rel, snapshot, 0, NULL, 0);
-#else
-    scan = table_beginscan(pg_class_rel, snapshot, 0, NULL);
-#endif
 
-    while ((classTuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+    /*
+     * A sequential catalog scan with the statement snapshot.  The
+     * systable_beginscan() signature is the same on every supported release,
+     * unlike table_beginscan(), which gained an argument in PostgreSQL 19.
+     */
+    scan = systable_beginscan(pg_class_rel, InvalidOid, false, snapshot,
+                              0, NULL);
+
+    while ((classTuple = systable_getnext(scan)) != NULL)
     {
         Form_pg_class classForm = (Form_pg_class) GETSTRUCT(classTuple);
         Oid         relid = classForm->oid;
@@ -455,7 +459,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
         CHECK_FOR_INTERRUPTS();
     }
 
-    table_endscan(scan);
+    systable_endscan(scan);
     table_close(pg_class_rel, AccessShareLock);
 
     workers = pg_integrity_checksums_worker_count();

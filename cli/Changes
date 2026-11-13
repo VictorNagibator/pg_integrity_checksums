@@ -1,5 +1,14 @@
 Revision history for pg_integrity_checksums CLI
 
+Unreleased
+
+    - verify --changed-since is ignored on a standby, with a warning, and
+      every object is checksummed.  WAL replay does not update the table
+      statistics the shortcut relies on.  They are normally zero on a
+      standby, which already forced full checksums, but a standby with
+      non-zero counters (for example cloned from a cleanly stopped primary)
+      could reuse a stale checksum for a changed table.
+
 0.4.0   2026-11-09
 
     - Add capture --hash fnv64 and the v2 baseline format with an explicit

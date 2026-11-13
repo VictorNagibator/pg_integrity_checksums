@@ -37,6 +37,8 @@ type Options struct {
 	Timeout     time.Duration
 	Strict      bool
 	Progress    func(string)
+	// Warning, when set, receives non-fatal notices about the capture.
+	Warning func(string)
 
 	// ChangedOnly enables the --changed-since heuristic. It is valid only for
 	// logical checksums and requires Prior (the baseline being verified).
@@ -189,6 +191,24 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 
 	if opts.ChangedOnly && opts.Kind != baseline.KindLogical {
 		return nil, errors.New("--changed-since is supported only for logical checksums")
+	}
+	if opts.ChangedOnly {
+		// WAL replay does not update pg_stat_all_tables on a standby, so the
+		// counters --changed-since relies on stay flat while the data
+		// changes.  They are usually zero there, which already disables the
+		// shortcut, but a standby can carry non-zero counters (for example a
+		// data directory cloned from a cleanly stopped primary).  Never reuse
+		// checksums on a standby; checksum every object instead.
+		var inRecovery bool
+		if err := tx.QueryRowContext(ctx, "SELECT pg_is_in_recovery()").Scan(&inRecovery); err != nil {
+			return nil, fmt.Errorf("read recovery state: %w", err)
+		}
+		if inRecovery {
+			opts.ChangedOnly = false
+			if opts.Warning != nil {
+				opts.Warning("--changed-since is ignored on a standby (WAL replay does not update table statistics); checksumming every object")
+			}
+		}
 	}
 
 	// Schema hashes and table statistics are needed for every candidate

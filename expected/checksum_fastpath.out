@@ -211,8 +211,12 @@ FROM fastpath_domain;
 
 -- textsend() converts to the client encoding; with a client encoding that
 -- differs from the server encoding the text types must still hash what the
--- send function returns.  Only ASCII is sent from here on.
-SET client_encoding = 'LATIN1';
+-- send function returns.  LATIN1 for a UTF8 server, otherwise UTF8 (every
+-- server encoding converts to it; LATIN1 does not, for example, to WIN1252).
+-- Only ASCII is sent from here on.
+SELECT CASE WHEN current_setting('server_encoding') = 'UTF8'
+            THEN 'LATIN1' ELSE 'UTF8' END AS other_encoding \gset
+SET client_encoding = :'other_encoding';
 SELECT c.tag,
        bool_and(pg_cell_checksum('fastpath'::regclass, c.tid, c.ordinal + 1,
                                  'fnv64')

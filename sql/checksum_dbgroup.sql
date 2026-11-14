@@ -85,10 +85,9 @@ $$;
 -- indexes are still counted, so the result equals the database without it.
 SET pg_integrity_checksums.strict = off;
 SET client_min_messages = error;        -- the skip warnings name OIDs
+-- (Only the serial scan is checked: before PostgreSQL 17 a parallel database
+-- scan cannot use subtransactions, so any error aborts it.)
 SELECT pg_database_logical_checksum(false, true, 'fnv64') AS with_bad \gset
-SET pg_integrity_checksums.workers = 2;
-SELECT pg_database_logical_checksum(false, true, 'fnv64') = :'with_bad' AS parallel_with_bad_matches;
-SET pg_integrity_checksums.workers = 0;
 DROP INDEX dbgroup.dbgroup_t_bad;
 SELECT pg_database_logical_checksum(false, true, 'fnv64') = :'with_bad' AS bad_index_skipped,
        pg_database_logical_checksum(false, true, 'fnv64') = :'serial64' AS rest_unchanged;

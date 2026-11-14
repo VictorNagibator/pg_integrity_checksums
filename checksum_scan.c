@@ -71,6 +71,7 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
         Page        page;
         OffsetNumber maxoff;
         OffsetNumber offnum;
+        bool        all_visible;
         int         nvisible = 0;
         int         i;
 
@@ -88,6 +89,16 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
         }
 
         pg_integrity_checksums_check_page(rel, blkno, page);
+
+        /*
+         * On an all-visible page every tuple is visible to every MVCC
+         * snapshot, so the per-tuple visibility check can be skipped, as
+         * heapgetpage() does.  A snapshot taken during recovery cannot rely
+         * on the flag: it may be set ahead of what the standby has replayed.
+         */
+        all_visible = PageIsAllVisible(page) &&
+            snapshot->snapshot_type == SNAPSHOT_MVCC &&
+            !snapshot->takenDuringRecovery;
 
         maxoff = PageGetMaxOffsetNumber(page);
         for (offnum = FirstOffsetNumber; offnum <= maxoff;
@@ -118,7 +129,8 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
             tuple.t_tableOid = RelationGetRelid(rel);
             ItemPointerSet(&tuple.t_self, blkno, offnum);
 
-            if (!HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
+            if (!all_visible &&
+                !HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
                 continue;
 
             if (needs_lock)
@@ -248,6 +260,7 @@ typedef struct LogicalVisitorState
     ChecksumAlgo algo;
     ChecksumLogicalAccum *acc32;
     ChecksumLogicalAccum64 *acc64;
+    LogicalRowHasher hasher;
 } LogicalVisitorState;
 
 static void
@@ -257,13 +270,36 @@ logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
     LogicalVisitorState *state = (LogicalVisitorState *) arg;
     uint64      tuple_checksum;
 
-    tuple_checksum = pg_tuple_logical_checksum_internal(rel, tuple,
-                                                        state->algo);
+    tuple_checksum = logical_row_hash(&state->hasher, tuple, state->algo);
 
     if (state->algo == CHECKSUM_ALGO_FNV32)
         logical_accum_add(state->acc32, (uint32) tuple_checksum);
     else
         logical_accum_add64(state->acc64, tuple_checksum);
+}
+
+/*
+ * scan_table_blocks_logical_common - logical checksum over heap blocks
+ */
+static void
+scan_table_blocks_logical_common(Relation rel, BlockNumber start,
+                                 BlockNumber end, Snapshot snapshot,
+                                 ChecksumAlgo algo,
+                                 ChecksumLogicalAccum *acc32,
+                                 ChecksumLogicalAccum64 *acc64,
+                                 BufferAccessStrategy bstrategy)
+{
+    LogicalVisitorState state;
+
+    state.algo = algo;
+    state.acc32 = acc32;
+    state.acc64 = acc64;
+    logical_row_hasher_init(&state.hasher, RelationGetDescr(rel));
+
+    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
+                        logical_tuple_visitor, &state);
+
+    logical_row_hasher_free(&state.hasher);
 }
 
 /*
@@ -274,10 +310,9 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
                           Snapshot snapshot, ChecksumLogicalAccum *acc,
                           BufferAccessStrategy bstrategy)
 {
-    LogicalVisitorState state = {CHECKSUM_ALGO_FNV32, acc, NULL};
-
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
-                        logical_tuple_visitor, &state);
+    scan_table_blocks_logical_common(rel, start, end, snapshot,
+                                     CHECKSUM_ALGO_FNV32, acc, NULL,
+                                     bstrategy);
 }
 
 /*
@@ -288,10 +323,9 @@ scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
                             Snapshot snapshot, ChecksumLogicalAccum64 *acc,
                             BufferAccessStrategy bstrategy)
 {
-    LogicalVisitorState state = {CHECKSUM_ALGO_FNV64, NULL, acc};
-
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
-                        logical_tuple_visitor, &state);
+    scan_table_blocks_logical_common(rel, start, end, snapshot,
+                                     CHECKSUM_ALGO_FNV64, NULL, acc,
+                                     bstrategy);
 }
 
 /*-------------------------------------------------------------------------
@@ -300,29 +334,26 @@ scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
  */
 
 /*
- * index_page_hash - hash one index page together with its header fields
+ * index_page_hash - hash one masked index page together with its header
  *
  * Handles both generic index types and BRIN.  The page is hashed as a
  * complete block of BLCKSZ bytes: PageGetPageSize() comes from the page
  * header and a corrupted value could make us read past the buffer.
  *
- * The hash covers a copy made by pg_integrity_checksums_mask_page(), not the
- * buffer itself: the stale in-buffer pd_checksum, pd_lsn and the LP_DEAD and
- * "has garbage" hints set by index scans used to change the checksum after a
- * plain SELECT or a server restart.  "masked" is caller-provided scratch
- * space of BLCKSZ bytes.
+ * "masked" is a private copy made by pg_integrity_checksums_mask_page(), not
+ * the buffer itself: the stale in-buffer pd_checksum, pd_lsn and the LP_DEAD
+ * and "has garbage" hints set by index scans used to change the checksum
+ * after a plain SELECT or a server restart.  Hashing the copy also means the
+ * buffer content lock is only held for the memcpy, not for the hash.
  */
 static uint64
-index_page_hash(Page buffer_page, char *masked, BlockNumber blkno,
-                bool is_brin, Oid relam, ChecksumAlgo algo)
+index_page_hash(const char *masked, BlockNumber blkno, bool is_brin,
+                ChecksumAlgo algo)
 {
     Page        page = (Page) masked;
     PageHeader  phdr = (PageHeader) masked;
     const Size  page_size = BLCKSZ;
     uint64      page_hash;
-
-    pg_integrity_checksums_mask_page(buffer_page, masked, CHECKSUM_PAGE_INDEX,
-                                     relam);
 
     if (PageIsNew(page))
     {
@@ -398,16 +429,16 @@ scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
         buffer = ReadBufferExtended(idxRel, MAIN_FORKNUM, blkno,
                                     RBM_NORMAL, bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
+        pg_integrity_checksums_mask_page(BufferGetPage(buffer), masked.data,
+                                         CHECKSUM_PAGE_INDEX, relam);
+        UnlockReleaseBuffer(buffer);
 
-        page_hash = index_page_hash(BufferGetPage(buffer), masked.data, blkno,
-                                    is_brin, relam, algo);
+        page_hash = index_page_hash(masked.data, blkno, is_brin, algo);
 
         if (algo == CHECKSUM_ALGO_FNV32)
             checksum_accum_add(acc32, (uint32) page_hash);
         else
             checksum_accum64_add(acc64, page_hash);
-
-        UnlockReleaseBuffer(buffer);
 
         if ((blkno & (SCAN_INTERRUPT_INTERVAL - 1)) == 0)
             CHECK_FOR_INTERRUPTS();

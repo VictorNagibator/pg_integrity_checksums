@@ -40,6 +40,15 @@ Use `PG_CONFIG` for non-default PostgreSQL installations. If the test server
 is not on the default socket or port, set `PGHOST`, `PGPORT`, and `PGUSER`
 for `make installcheck`.
 
+PGXS does not track header dependencies: after changing
+`checksum_internal.h`, run `make clean` before building, or modules compiled
+against the old structure layouts are linked with the new ones.
+
+For changes to a hot path, compare the old and the new build with the
+benchmark in `bench/` (see [Testing](docs/testing.md#benchmark)).  It also
+prints every checksum value, so it doubles as a check that a performance
+change did not change a result.
+
 ## Branches and commits
 
 `main` is release-ready. Create a short-lived branch for each change:

@@ -1,7 +1,10 @@
 /*-------------------------------------------------------------------------
  *
  * checksum_hash.c
- *    FNV-1a hashing, combination and order-independent aggregation
+ *    SQL hash entry points and order-independent aggregation
+ *
+ * The FNV-1a and hash combination primitives, and the per-item accumulator
+ * steps, are static inline functions in checksum_internal.h.
  *
  *-------------------------------------------------------------------------
  */
@@ -13,122 +16,9 @@
 #include "checksum_internal.h"
 
 /*-------------------------------------------------------------------------
- * FNV-1a Hash Implementation
+ * SQL argument handling and hash entry points
  *-------------------------------------------------------------------------
  */
-
-/*
- * fnv1a_32_buf - continue an FNV-1a hash over a byte range
- *
- * Unlike fnv1a_32_hash(), the incoming hash is used as-is (an all-zero value
- * is a legitimate state), so calls may be chained over several buffers and
- * still produce exactly what a single pass over their concatenation would.
- */
-uint32
-fnv1a_32_buf(const unsigned char *bytes, size_t len, uint32 hash)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        hash ^= bytes[i];
-        hash *= FNV_PRIME_32;
-    }
-
-    return hash;
-}
-
-/*
- * fnv1a_32_hash - FNV-1a 32-bit hash implementation
- *
- * Standard FNV-1a: each input byte is XORed into the hash, which is then
- * multiplied by the FNV prime.  This is unrelated to PostgreSQL's own
- * 16-bit page checksum algorithm.
- *
- * Parameters:
- *   data: Pointer to the data to hash
- *   len: Length of the data in bytes
- *   seed: Initial hash value.  Zero is treated as "no seed" and selects
- *         FNV_BASIS_32, so seed 0 and seed FNV_BASIS_32 give identical
- *         results.
- *
- * Returns: 32-bit FNV-1a hash value
- */
-uint32
-fnv1a_32_hash(const void *data, size_t len, uint32 seed)
-{
-    return fnv1a_32_buf((const unsigned char *) data, len,
-                        seed == 0 ? FNV_BASIS_32 : seed);
-}
-
-/*
- * pg_checksum_data_custom - FNV-1a 32-bit hash with the zero-seed convention
- *
- * Thin wrapper around fnv1a_32_hash() used by the data/text checksum
- * functions and by the physical tuple checksum.
- */
-uint32
-pg_checksum_data_custom(const char *data, uint32 len, uint32 init_value)
-{
-    return fnv1a_32_hash(data, len, init_value);
-}
-
-/*
- * fnv1a_64_buf - continue an FNV-1a 64-bit hash over a byte range
- */
-uint64
-fnv1a_64_buf(const unsigned char *bytes, size_t len, uint64 hash)
-{
-    for (size_t i = 0; i < len; i++)
-    {
-        hash ^= bytes[i];
-        hash *= FNV_PRIME_64;
-    }
-
-    return hash;
-}
-
-/*
- * fnv1a_64_hash - FNV-1a 64-bit hash implementation
- *
- * A zero seed selects the standard FNV-1a offset basis, matching the
- * convention used by the 32-bit helper (so seed 0 and FNV_BASIS_64 give
- * identical results).
- */
-uint64
-fnv1a_64_hash(const void *data, size_t len, uint64 seed)
-{
-    return fnv1a_64_buf((const unsigned char *) data, len,
-                        seed == 0 ? FNV_BASIS_64 : seed);
-}
-
-/*
- * hash_bytes_algo - FNV-1a over a byte range with the selected algorithm
- *
- * "seed" is the running hash (or 0 to start from the offset basis, as in
- * fnv1a_32_hash() / fnv1a_64_hash()).  For fnv32 the result is zero-extended.
- */
-uint64
-hash_bytes_algo(uint64 seed, const void *data, size_t len, ChecksumAlgo algo)
-{
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return fnv1a_32_hash(data, len, (uint32) seed);
-
-    return fnv1a_64_hash(data, len, seed);
-}
-
-/*
- * combine_hash - order-dependent combination with the selected algorithm
- *
- * Dispatches to combine_checksums() or combine_checksums_64().  For fnv32
- * both operands are truncated to 32 bits.
- */
-uint64
-combine_hash(uint64 current, uint64 new_val, ChecksumAlgo algo)
-{
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return combine_checksums((uint32) current, (uint32) new_val);
-
-    return combine_checksums_64(current, new_val);
-}
 
 /*
  * checksum_algorithm - parse the SQL algorithm name
@@ -291,121 +181,9 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
 }
 
 /*-------------------------------------------------------------------------
- * Checksum Combination Functions
- *-------------------------------------------------------------------------
- */
-
-/*
- * combine_checksums - Combine two 32-bit hash values using FNV-1a
- *
- * Feeds the four bytes of new_val into the running hash, most significant
- * byte first.  The result depends on the order of the arguments, so this is
- * for building ordered (not order-independent) combinations.  Note that
- * combine_checksums_64() feeds its bytes least significant first; both byte
- * orders are part of the stored baseline values and must not change.
- *
- * Parameters:
- *   current: Current hash value
- *   new_val: New hash value to combine
- *
- * Returns: Combined 32-bit hash value
- */
-uint32
-combine_checksums(uint32 current, uint32 new_val)
-{
-    uint32 hash = current;
-
-    /* Feed the bytes of new_val, most significant byte first. */
-    hash ^= (new_val >> 24) & 0xFF;
-    hash *= FNV_PRIME_32;
-    hash ^= (new_val >> 16) & 0xFF;
-    hash *= FNV_PRIME_32;
-    hash ^= (new_val >> 8) & 0xFF;
-    hash *= FNV_PRIME_32;
-    hash ^= new_val & 0xFF;
-    hash *= FNV_PRIME_32;
-
-    return hash;
-}
-
-/*
- * combine_checksums_64 - Combine two 64-bit hash values using FNV-1a
- *
- * Similar to combine_checksums but for 64-bit values, using the 64-bit FNV
- * prime.  Unlike the 32-bit variant, the bytes of new_val are fed least
- * significant first.
- */
-uint64
-combine_checksums_64(uint64 current, uint64 new_val)
-{
-    uint64 hash = current;
-    uint64 prime = FNV_PRIME_64;
-    uint8 bytes[8];
-    int i;
-
-    /* Split new_val into bytes, least significant first. */
-    for (i = 0; i < 8; i++)
-    {
-        bytes[i] = (new_val >> (i * 8)) & 0xFF;
-    }
-
-    /* Process each byte with FNV-1a */
-    for (i = 0; i < 8; i++)
-    {
-        hash ^= bytes[i];
-        hash *= prime;
-    }
-
-    return hash;
-}
-
-/*-------------------------------------------------------------------------
  * Order-Independent Aggregation
  *-------------------------------------------------------------------------
  */
-
-/*
- * hash_mix32 - 32-bit avalanche finalizer
- *
- * Applies a final mixing step (based on MurmurHash3's fmix) to spread the
- * bits of a hash before it is combined into an order-independent
- * aggregate. This ensures that even highly correlated input hashes
- * contribute uniformly to the final result.
- */
-uint32
-hash_mix32(uint32 h)
-{
-    h ^= h >> 16;
-    h *= 0x85EBCA6Bu;
-    h ^= h >> 13;
-    h *= 0xC2B2AE35u;
-    h ^= h >> 16;
-    return h;
-}
-
-/*
- * hash_mix64 - 64-bit avalanche finalizer
- */
-uint64
-hash_mix64(uint64 h)
-{
-    h ^= h >> 33;
-    h *= UINT64CONST(0xFF51AFD7ED558CCD);
-    h ^= h >> 33;
-    h *= UINT64CONST(0xC4CEB9FE1A85EC53);
-    h ^= h >> 33;
-    return h;
-}
-
-/*
- * checksum_accum_add - fold a single raw 32-bit hash into an accumulator
- */
-void
-checksum_accum_add(ChecksumAccum *acc, uint32 h)
-{
-    acc->partial ^= hash_mix32(h);
-    acc->count++;
-}
 
 /*
  * checksum_accum_merge - merge another accumulator's partial result
@@ -441,16 +219,6 @@ checksum_accum_finalize(ChecksumAccum *acc)
 }
 
 /*
- * checksum_accum64_add - fold a single raw 64-bit hash into an accumulator
- */
-void
-checksum_accum64_add(ChecksumAccum64 *acc, uint64 h)
-{
-    acc->partial ^= hash_mix64(h);
-    acc->count++;
-}
-
-/*
  * checksum_accum64_merge - merge another 64-bit accumulator's partial result
  */
 void
@@ -476,16 +244,6 @@ checksum_accum64_finalize(ChecksumAccum64 *acc)
 }
 
 /*
- * logical_accum_add - fold one logical item into an accumulator
- */
-void
-logical_accum_add(ChecksumLogicalAccum *acc, uint32 h)
-{
-    acc->sum += hash_mix64((uint64) h);
-    acc->count++;
-}
-
-/*
  * logical_accum_finalize - fold an accumulator into a 32-bit checksum
  */
 uint32
@@ -504,16 +262,6 @@ logical_accum_finalize(ChecksumLogicalAccum *acc)
         result = hash_mix32(result ^ FNV_BASIS_32);
 
     return result;
-}
-
-/*
- * logical_accum_add64 - fold one 64-bit logical row into an accumulator
- */
-void
-logical_accum_add64(ChecksumLogicalAccum64 *acc, uint64 h)
-{
-    acc->sum += hash_mix64(h);
-    acc->count++;
 }
 
 /*

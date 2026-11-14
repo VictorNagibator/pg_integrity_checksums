@@ -99,6 +99,36 @@ Physical checksums are storage- and architecture-dependent by design.
     of everything else; an unlogged table on a standby behaves the same
 25. Portability: logical checksums ignore dropped columns and the session's
     `search_path`, and tuple checksums with the header ignore hint bits
+26. Direct encodings: for every built-in type encoded without its send
+    function, cell and tuple checksums are recomputed in SQL from the real
+    send function (`int4send()`, `textsend()`, ...) and must match, including
+    extreme values, dropped and added columns, a domain, and a client
+    encoding that differs from the server encoding
+27. Grouped logical database scan: serial (grouped) and parallel
+    (per-relation) results agree, and an index whose expression fails is
+    retried per relation, so strict mode names it and `strict = off` skips
+    only that index
+
+## Benchmark
+
+`bench/` measures the checksum functions on a generated data set (about
+400 MB at scale 1: a 1M-row table with fixed-width columns, a text/numeric/
+array table, a 60-column table with NULLs, a TOAST table, and expression,
+partial and INCLUDE indexes).  It reports the median time of each function
+and its value:
+
+```bash
+# against a running server with the extension installed (libpq environment)
+bench/run_bench.sh                     # load the data set and time everything
+SETUP=no WORKERS=4 bench/run_bench.sh  # reuse the data set, 4 parallel workers
+SCALE=4 RUNS=3 bench/run_bench.sh      # larger data set, fewer runs
+```
+
+To compare two builds, run it once per build on the same data set
+(`SETUP=no` for the second run) and diff the output: the `result` column must
+be identical; only `median_ms` may change.  Restart the server with `pg_ctl
+stop` and `pg_ctl start` from the other installation; `pg_ctl restart`
+reuses the `postgres` binary recorded in `postmaster.opts`.
 
 ## Building a Release
 

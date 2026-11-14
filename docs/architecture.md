@@ -57,6 +57,29 @@ headers and physical layout.  The encoder:
 These rules are shared by the 32-bit and 64-bit logical paths.  The only
 difference is the hash width and finalizer.
 
+### How the encoder stays fast
+
+The logical checksum runs per value, so its overhead matters more than the
+hash itself:
+
+- **Type cache.**  Per-type metadata (tag hash, base type, structural kind and
+  the `FmgrInfo` of the send or output function) is cached per backend.  An
+  invalidation of `pg_type` or `pg_proc` only bumps a generation counter;
+  entries are rebuilt in place on their next use and never move, so scans can
+  hold pointers to them.
+- **Direct encodings.**  For the common built-in types the bytes the send
+  function would return are produced directly: network-order integers for
+  `int2/int4/int8`, `oid`, `date`, `time`, `timestamp(tz)` and `money`, the
+  IEEE bits for `float4/float8`, the fixed layouts of `timetz`, `interval` and
+  `uuid`, and the raw bytes of `bytea` and of the text types.  `textsend()`
+  converts to the client encoding, so the text types fall back to the real
+  send function when that conversion would change the bytes.  The
+  `checksum_fastpath` regression test compares every direct encoding with the
+  real send function.
+- **Row hashing.**  A scan deforms each row once, knows the live columns and
+  their positions up front, keeps a per-column hint with the cache entry and
+  the hashed type tag and position, and resets a per-row memory context.
+
 ## Physical encoding
 
 Physical checksums include the information that identifies a particular
@@ -120,6 +143,23 @@ The same worker implementation handles 32-bit and 64-bit scans.  Parallelism
 is disabled when already inside a worker, because parallel workers cannot
 start nested parallel workers.
 
+## Logical database scans
+
+A logical index checksum is computed from the heap, so computing a table and
+each of its indexes separately reads the table once per relation.  A serial
+`pg_database_logical_checksum` therefore groups every table with its indexes
+and reads the heap once: each visible tuple is hashed as a table row and, for
+every index, as that index's entry.  Each relation still gets its own
+accumulator, so the per-relation results are the same as computing them one
+at a time.  A group runs in one internal subtransaction; if anything in it
+fails, the subtransaction is rolled back and the relations are computed one
+by one, which keeps the warnings, strict-mode errors and skipped count of the
+per-relation scan.
+
+A parallel database scan hands out whole relations to workers and keeps the
+per-relation split: grouping would give one worker a table together with all
+of its indexes, and the work balances better without it.
+
 ## Snapshots, locks and privileges
 
 A single SQL statement uses one snapshot.  Separate calls under `READ
@@ -165,7 +205,7 @@ The implementation is split into a small set of translation units:
 | File | Responsibility |
 |---|---|
 | `pg_integrity_checksums.c` | module entry point, GUCs and shared worker/snapshot helpers |
-| `checksum_hash.c` | FNV-1a, hash combination, order-independent aggregation |
+| `checksum_hash.c` | SQL hash entry points and accumulator finalizers; the FNV-1a and combination primitives are inline functions in `checksum_internal.h` |
 | `checksum_types.c` | canonical encoding for scalar, array, composite, range and multirange values |
 | `checksum_validation.c` | relation, page, line-pointer and tuple validation |
 | `checksum_page.c` | page checksum verification and canonical cell checksums |

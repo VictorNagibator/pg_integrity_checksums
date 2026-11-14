@@ -1,0 +1,235 @@
+-- Canonical encoding fast paths
+--
+-- For common built-in types the logical checksum hashes the bytes the type's
+-- binary send function would return without calling it.  This test computes
+-- the expected cell and tuple checksums independently, from the real send
+-- functions (int4send(), textsend(), ...) and pg_data_checksum(), and
+-- compares them with what the extension returns.
+--
+-- A value is hashed as FNV-1a over
+--   fnv64: LE8(fnv64(type tag)) || LE8(attnum) || send bytes
+--   fnv32: BE4(fnv32(type tag)) || BE4(attnum) || send bytes
+-- and a row as FNV-1a over the concatenated column hashes (LE8 for fnv64,
+-- BE4 for fnv32), where attnum is the position among the live columns.
+SET TimeZone = 'UTC';
+SET DateStyle = 'ISO, YMD';
+SET IntervalStyle = 'postgres';
+SET extra_float_digits = 0;
+SET lc_monetary = 'C';
+-- bytea little-endian copy of an 8-byte big-endian value
+CREATE FUNCTION pg_temp.le8(b bytea) RETURNS bytea
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT string_agg(substr(b, i, 1), ''::bytea ORDER BY i DESC)
+    FROM generate_series(1, 8) AS i
+$$;
+CREATE FUNCTION pg_temp.expected_cell(tag text, attnum int, payload bytea,
+                                      algo text) RETURNS bytea
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT CASE algo
+        WHEN 'fnv64' THEN
+            pg_data_checksum(pg_temp.le8(pg_text_checksum(tag, 0, 'fnv64')) ||
+                             pg_temp.le8(int8send(attnum::bigint)) || payload,
+                             0, 'fnv64')
+        ELSE
+            pg_data_checksum(pg_text_checksum(tag, 0, 'fnv32') ||
+                             int4send(attnum) || payload,
+                             0, 'fnv32')
+        END
+$$;
+-- The first column is dropped, so physical attribute numbers are one larger
+-- than the ordinals that are hashed.  c_missing is added after the data, so
+-- the rows read its value from the attribute's missing value.
+CREATE TABLE fastpath (
+    c_dropped   integer,
+    c_bool      boolean,
+    c_char      "char",
+    c_int2      smallint,
+    c_int4      integer,
+    c_oid       oid,
+    c_date      date,
+    c_int8      bigint,
+    c_time      time,
+    c_ts        timestamp,
+    c_tstz      timestamptz,
+    c_money     money,
+    c_f4        real,
+    c_f8        double precision,
+    c_timetz    timetz,
+    c_interval  interval,
+    c_uuid      uuid,
+    c_text      text,
+    c_varchar   varchar(20),
+    c_bpchar    char(8),
+    c_name      name,
+    c_bytea     bytea
+);
+INSERT INTO fastpath VALUES
+    (0, true, 'a', 1, 1, 1, '2024-02-29', 1, '00:00:01', '2024-02-29 12:34:56.789',
+     '2024-02-29 12:34:56.789+00', 1.25, 1.5, 2.5, '12:00:00+05:30',
+     '1 year 2 mons 3 days 04:05:06.789', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11',
+     'plain', 'vc', 'ab', 'nm', '\x00ff10'),
+    (0, false, 'Z', -32768, -2147483648, 4294967295, '0001-01-01 BC',
+     -9223372036854775808, '23:59:59.999999', '-infinity', 'infinity',
+     -92233720368547758.08, -3.4e38, -1.7e308, '00:00:00-14',
+     '-178000000 years', '00000000-0000-0000-0000-000000000000',
+     '', '', '', '', ''),
+    (0, true, '0', 32767, 2147483647, 0, 'infinity', 9223372036854775807,
+     '24:00:00', '294276-12-31 23:59:59.999999', '4713-01-01 00:00:00+00 BC',
+     0.01, 'Infinity', '-Infinity', '24:00:00+15:59', '-1 days 00:00:00.000001',
+     'ffffffff-ffff-ffff-ffff-ffffffffffff',
+     'multibyte é and trailing  ', 'é', 'x  ', 'é',
+     '\xdeadbeef'),
+    (0, false, ' ', 7, 7, 7, '2000-01-01', 7, '12:00', '2000-01-01', '2000-01-01+00',
+     0, 1e-40, 5e-324, '12:00+00', '0', '12345678-1234-1234-1234-123456789abc',
+     repeat('long text that is compressed ', 2000), repeat('v', 20), 'full8chr',
+     repeat('n', 63), decode(repeat('ab', 5000), 'hex'));
+ALTER TABLE fastpath DROP COLUMN c_dropped;
+ALTER TABLE fastpath ADD COLUMN c_missing integer DEFAULT 42;
+-- One row per (row, column): the column's ordinal, tag and send bytes.
+CREATE FUNCTION pg_temp.fastpath_cells()
+RETURNS TABLE (tid tid, ordinal int, tag text, payload bytea)
+LANGUAGE sql STABLE AS $$
+    SELECT f.ctid, v.ordinal, format_type(v.typ, NULL), v.payload
+    FROM fastpath AS f,
+    LATERAL (VALUES
+        (1,  'boolean'::regtype,          boolsend(f.c_bool)),
+        (2,  '"char"'::regtype,           charsend(f.c_char)),
+        (3,  'smallint'::regtype,         int2send(f.c_int2)),
+        (4,  'integer'::regtype,          int4send(f.c_int4)),
+        (5,  'oid'::regtype,              oidsend(f.c_oid)),
+        (6,  'date'::regtype,             date_send(f.c_date)),
+        (7,  'bigint'::regtype,           int8send(f.c_int8)),
+        (8,  'time'::regtype,             time_send(f.c_time)),
+        (9,  'timestamp'::regtype,        timestamp_send(f.c_ts)),
+        (10, 'timestamptz'::regtype,      timestamptz_send(f.c_tstz)),
+        (11, 'money'::regtype,            cash_send(f.c_money)),
+        (12, 'real'::regtype,             float4send(f.c_f4)),
+        (13, 'double precision'::regtype, float8send(f.c_f8)),
+        (14, 'timetz'::regtype,           timetz_send(f.c_timetz)),
+        (15, 'interval'::regtype,         interval_send(f.c_interval)),
+        (16, 'uuid'::regtype,             uuid_send(f.c_uuid)),
+        (17, 'text'::regtype,             textsend(f.c_text)),
+        (18, 'varchar'::regtype,          varcharsend(f.c_varchar)),
+        (19, 'bpchar'::regtype,           bpcharsend(f.c_bpchar)),
+        (20, 'name'::regtype,             namesend(f.c_name)),
+        (21, 'bytea'::regtype,            byteasend(f.c_bytea)),
+        (22, 'integer'::regtype,          int4send(f.c_missing))
+    ) AS v(ordinal, typ, payload)
+$$;
+-- Cell checksums: every column of every row matches its send function.
+SELECT c.tag, a.algo,
+       count(*) AS cells,
+       count(*) FILTER (WHERE pg_cell_checksum('fastpath'::regclass, c.tid,
+                                               c.ordinal + 1, a.algo)
+                        = pg_temp.expected_cell(c.tag, c.ordinal, c.payload,
+                                                a.algo)) AS matching
+FROM pg_temp.fastpath_cells() AS c,
+     (VALUES ('fnv32'), ('fnv64')) AS a(algo)
+GROUP BY c.ordinal, c.tag, a.algo
+ORDER BY c.ordinal, a.algo;
+             tag             | algo  | cells | matching 
+-----------------------------+-------+-------+----------
+ boolean                     | fnv32 |     4 |        4
+ boolean                     | fnv64 |     4 |        4
+ "char"                      | fnv32 |     4 |        4
+ "char"                      | fnv64 |     4 |        4
+ smallint                    | fnv32 |     4 |        4
+ smallint                    | fnv64 |     4 |        4
+ integer                     | fnv32 |     4 |        4
+ integer                     | fnv64 |     4 |        4
+ oid                         | fnv32 |     4 |        4
+ oid                         | fnv64 |     4 |        4
+ date                        | fnv32 |     4 |        4
+ date                        | fnv64 |     4 |        4
+ bigint                      | fnv32 |     4 |        4
+ bigint                      | fnv64 |     4 |        4
+ time without time zone      | fnv32 |     4 |        4
+ time without time zone      | fnv64 |     4 |        4
+ timestamp without time zone | fnv32 |     4 |        4
+ timestamp without time zone | fnv64 |     4 |        4
+ timestamp with time zone    | fnv32 |     4 |        4
+ timestamp with time zone    | fnv64 |     4 |        4
+ money                       | fnv32 |     4 |        4
+ money                       | fnv64 |     4 |        4
+ real                        | fnv32 |     4 |        4
+ real                        | fnv64 |     4 |        4
+ double precision            | fnv32 |     4 |        4
+ double precision            | fnv64 |     4 |        4
+ time with time zone         | fnv32 |     4 |        4
+ time with time zone         | fnv64 |     4 |        4
+ interval                    | fnv32 |     4 |        4
+ interval                    | fnv64 |     4 |        4
+ uuid                        | fnv32 |     4 |        4
+ uuid                        | fnv64 |     4 |        4
+ text                        | fnv32 |     4 |        4
+ text                        | fnv64 |     4 |        4
+ character varying           | fnv32 |     4 |        4
+ character varying           | fnv64 |     4 |        4
+ character                   | fnv32 |     4 |        4
+ character                   | fnv64 |     4 |        4
+ name                        | fnv32 |     4 |        4
+ name                        | fnv64 |     4 |        4
+ bytea                       | fnv32 |     4 |        4
+ bytea                       | fnv64 |     4 |        4
+ integer                     | fnv32 |     4 |        4
+ integer                     | fnv64 |     4 |        4
+(44 rows)
+
+-- Tuple checksums: the deformed row hashes the same cells in order.
+SELECT t.tid,
+       pg_tuple_logical_checksum('fastpath'::regclass, t.tid, 'fnv64')
+         = pg_data_checksum(string_agg(pg_temp.le8(
+               pg_temp.expected_cell(t.tag, t.ordinal, t.payload, 'fnv64')),
+               ''::bytea ORDER BY t.ordinal), 0, 'fnv64') AS fnv64_matches,
+       pg_tuple_logical_checksum('fastpath'::regclass, t.tid, 'fnv32')
+         = pg_data_checksum(string_agg(
+               pg_temp.expected_cell(t.tag, t.ordinal, t.payload, 'fnv32'),
+               ''::bytea ORDER BY t.ordinal), 0, 'fnv32') AS fnv32_matches
+FROM pg_temp.fastpath_cells() AS t
+GROUP BY t.tid
+ORDER BY t.tid;
+  tid  | fnv64_matches | fnv32_matches 
+-------+---------------+---------------
+ (0,1) | t             | t
+ (0,2) | t             | t
+ (0,3) | t             | t
+ (0,4) | t             | t
+(4 rows)
+
+-- A domain is tagged with its own name but encoded like its base type.
+CREATE DOMAIN fastpath_dom AS text;
+CREATE TABLE fastpath_domain (v fastpath_dom);
+INSERT INTO fastpath_domain VALUES ('domain value');
+SELECT pg_cell_checksum('fastpath_domain'::regclass, ctid, 1, 'fnv64')
+       = pg_temp.expected_cell('fastpath_dom', 1, textsend(v::text), 'fnv64')
+       AS domain_matches
+FROM fastpath_domain;
+ domain_matches 
+----------------
+ t
+(1 row)
+
+-- textsend() converts to the client encoding; with a client encoding that
+-- differs from the server encoding the text types must still hash what the
+-- send function returns.  Only ASCII is sent from here on.
+SET client_encoding = 'LATIN1';
+SELECT c.tag,
+       bool_and(pg_cell_checksum('fastpath'::regclass, c.tid, c.ordinal + 1,
+                                 'fnv64')
+                = pg_temp.expected_cell(c.tag, c.ordinal, c.payload, 'fnv64'))
+       AS all_match
+FROM pg_temp.fastpath_cells() AS c
+WHERE c.tag IN ('text', 'character varying', 'character', 'name')
+GROUP BY c.ordinal, c.tag
+ORDER BY c.ordinal;
+        tag        | all_match 
+-------------------+-----------
+ text              | t
+ character varying | t
+ character         | t
+ name              | t
+(4 rows)
+
+RESET client_encoding;
+DROP TABLE fastpath, fastpath_domain;
+DROP DOMAIN fastpath_dom;

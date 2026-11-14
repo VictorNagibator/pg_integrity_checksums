@@ -13,6 +13,7 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 #include "utils/rel.h"
 
 #include "checksum_internal.h"
@@ -304,11 +305,58 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
  */
 
 /*
- * pg_tuple_logical_checksum_internal - Core logical tuple checksum
+ * logical_row_hasher_init - prepare to hash many rows of one relation
+ *
+ * Works out the live (non-dropped) columns and their ordinals once, and
+ * allocates the deform arrays, the per-column type cache hints and a memory
+ * context that is reset after every row.  The tuple descriptor must stay
+ * valid while the hasher is in use, which holding a lock on the relation
+ * guarantees.
+ */
+void
+logical_row_hasher_init(LogicalRowHasher *hasher, TupleDesc tupdesc)
+{
+    int         natts = tupdesc->natts;
+    int         i;
+
+    hasher->tupdesc = tupdesc;
+    hasher->ncols = 0;
+    hasher->attidx = palloc(sizeof(int) * Max(natts, 1));
+    hasher->hints = palloc0(sizeof(LogicalColumnHint) * Max(natts, 1));
+    hasher->values = palloc(sizeof(Datum) * Max(natts, 1));
+    hasher->nulls = palloc(sizeof(bool) * Max(natts, 1));
+    hasher->rowcxt = AllocSetContextCreate(CurrentMemoryContext,
+                                           "pg_integrity_checksums row",
+                                           ALLOCSET_DEFAULT_SIZES);
+
+    for (i = 0; i < natts; i++)
+    {
+        if (!TupleDescAttr(tupdesc, i)->attisdropped)
+            hasher->attidx[hasher->ncols++] = i;
+    }
+}
+
+/*
+ * logical_row_hasher_free - release what logical_row_hasher_init() allocated
+ */
+void
+logical_row_hasher_free(LogicalRowHasher *hasher)
+{
+    pfree(hasher->attidx);
+    pfree(hasher->hints);
+    pfree(hasher->values);
+    pfree(hasher->nulls);
+    MemoryContextDelete(hasher->rowcxt);
+}
+
+/*
+ * logical_row_hash - Core logical tuple checksum
  *
  * Computes a canonical logical checksum for a tuple.  All non-dropped
  * columns are hashed; relation OIDs, heap TIDs and the tuple header are not
- * included.
+ * included.  Each column is hashed with its position among the live columns,
+ * not its physical attribute number: dropping a column must not change the
+ * checksum of the remaining data.
  *
  * This checksum is stable across:
  * - VACUUM FULL
@@ -316,41 +364,42 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
  * - REINDEX
  * - Physical data movement
  * - Storage reorganization
+ *
+ * The tuple is deformed once (heap_getattr() per column is quadratic in the
+ * number of columns once a varlena or NULL precedes them), and everything
+ * the encoding allocates (detoasted values, send function results) is
+ * released with the per-row memory context.
  */
 uint64
-pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo algo)
+logical_row_hash(LogicalRowHasher *hasher, HeapTuple tuple, ChecksumAlgo algo)
 {
-    TupleDesc   tupdesc = RelationGetDescr(rel);
+    TupleDesc   tupdesc = hasher->tupdesc;
     uint64      checksum = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
-    int         ordinal = 0;
-    int         i;
+    MemoryContext oldcontext;
+    int         c;
 
-    for (i = 1; i <= tupdesc->natts; i++)
+    oldcontext = MemoryContextSwitchTo(hasher->rowcxt);
+
+    heap_deform_tuple(tuple, tupdesc, hasher->values, hasher->nulls);
+
+    for (c = 0; c < hasher->ncols; c++)
     {
-        Form_pg_attribute attr = TupleDescAttr(tupdesc, i - 1);
-        Datum       value;
-        bool        isnull;
+        int         i = hasher->attidx[c];
+        Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
         uint64      col_hash;
 
-        if (attr->attisdropped)
-            continue;
-
-        /*
-         * Hash the position among the live columns, not the physical
-         * attribute number: dropping a column must not change the checksum
-         * of the remaining data.
-         */
-        ordinal++;
-
-        value = heap_getattr(tuple, i, tupdesc, &isnull);
-
-        col_hash = pg_cell_checksum_canonical_algo(value, isnull,
-                                                   attr->atttypid,
-                                                   attr->atttypmod,
-                                                   ordinal, algo);
+        col_hash = pg_cell_checksum_canonical_hinted(hasher->values[i],
+                                                     hasher->nulls[i],
+                                                     attr->atttypid,
+                                                     attr->atttypmod,
+                                                     c + 1, algo,
+                                                     &hasher->hints[c]);
 
         checksum = combine_hash(checksum, col_hash, algo);
     }
+
+    MemoryContextSwitchTo(oldcontext);
+    MemoryContextReset(hasher->rowcxt);
 
     if (algo == CHECKSUM_ALGO_FNV32)
     {
@@ -359,6 +408,22 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo a
     }
     else if (checksum == CHECKSUM_NULL_64 || checksum == 0)
         checksum = hash_mix64(checksum ^ FNV_BASIS_64);
+
+    return checksum;
+}
+
+/*
+ * pg_tuple_logical_checksum_internal - logical checksum of a single tuple
+ */
+uint64
+pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo algo)
+{
+    LogicalRowHasher hasher;
+    uint64      checksum;
+
+    logical_row_hasher_init(&hasher, RelationGetDescr(rel));
+    checksum = logical_row_hash(&hasher, tuple, algo);
+    logical_row_hasher_free(&hasher);
 
     return checksum;
 }

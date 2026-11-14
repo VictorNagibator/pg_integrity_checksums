@@ -2,6 +2,15 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: parallel table and index checksums used the snapshot restored in
+      a worker without making it active.  PostgreSQL builds with assertions
+      (--enable-cassert) aborted the worker; release builds were not
+      affected.  The worker now makes the snapshot active, as the database
+      scan already did.
+    - Fix: pg_page_checksum and pg_page_checksum_status read the page from
+      disk into a buffer that was not I/O-aligned, which PostgreSQL 16 and
+      later require (an assertion failure in assert-enabled builds, and a
+      problem with debug_io_direct).
     - Performance: logical checksums are 2-5x faster and every checksum
       value is unchanged.  Measured with bench/ on PostgreSQL 19devel, data
       in shared buffers, no parallel workers: logical table checksums of a

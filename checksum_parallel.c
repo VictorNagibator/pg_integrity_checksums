@@ -299,7 +299,19 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
             {
                 ScanAccums  accs = {{0, 0}, {0, 0}, {0, 0}, {0, 0}};
 
+                /*
+                 * The restored snapshot must be registered or active before
+                 * heap visibility checks use it (PostgreSQL asserts this).
+                 * Make it the active snapshot, as the database task does.
+                 */
+                if (snapshot != NULL)
+                    PushActiveSnapshot(snapshot);
+
                 run_block_task(state, snapshot, &accs);
+
+                if (snapshot != NULL)
+                    PopActiveSnapshot();
+
                 accums_to_result(state->task_type, state->algo, &accs,
                                  &myresult->partial, &myresult->count);
                 break;

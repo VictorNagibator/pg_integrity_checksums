@@ -83,6 +83,16 @@ SELECT pg_table_physical_checksum('large_table'::regclass, false);
 RESET pg_integrity_checksums.workers;
 ```
 
+### Database checksums and parallelism
+
+A serial logical database checksum reads each table once for the table and
+all of its indexes.  A parallel one gives whole relations to the workers, so a
+table and each of its indexes may be read by different workers.  With the
+data in memory the parallel scan finishes sooner; when the scan is bound by
+reading a few large tables from disk, the serial scan reads less.  Table and
+index checksums split the blocks of a single relation across workers and
+benefit from parallelism in both cases.
+
 ### Strict mode
 
 Database checksum functions are **strict by default**

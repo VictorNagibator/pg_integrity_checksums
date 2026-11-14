@@ -58,8 +58,8 @@ bool pg_integrity_checksums_strict = true;
 /*
  * _PG_init - extension load-time initialization
  *
- * Registers the extension GUCs and the syscache invalidation callback used by
- * the canonical logical type cache.
+ * Registers the extension GUCs and the syscache invalidation callbacks used
+ * by the canonical logical type cache.
  */
 void
 _PG_init(void)
@@ -86,6 +86,9 @@ _PG_init(void)
                              NULL, NULL, NULL);
 
     CacheRegisterSyscacheCallback(TYPEOID, logical_type_cache_invalidate, 0);
+
+    /* The type cache also holds FmgrInfo for type send/output functions. */
+    CacheRegisterSyscacheCallback(PROCOID, logical_type_cache_invalidate, 0);
 }
 
 /*

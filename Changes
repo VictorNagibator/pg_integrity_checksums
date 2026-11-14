@@ -1,5 +1,42 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Performance: logical checksums are 2-5x faster and every checksum
+      value is unchanged.  Measured with bench/ on PostgreSQL 19devel, data
+      in shared buffers, no parallel workers: logical table checksums of a
+      1M-row table 354 -> 118 ms, of a 60-column table 538 -> 108 ms,
+      logical index checksums up to 2.2x, pg_database_logical_checksum
+      2018 -> 801 ms.  With 4 workers the gains are the same.
+    - The type cache keeps the FmgrInfo of send and output functions, so a
+      value no longer costs a pg_proc lookup.  Cache entries stay in place
+      across invalidations (a generation counter marks them out of date), and
+      the cache is also invalidated by pg_proc changes.
+    - The common built-in types (bool, "char", int2/4/8, oid, date, time,
+      timetz, timestamp(tz), money, float4/8, interval, uuid, text, varchar,
+      bpchar, name, bytea) are encoded without calling the send function and
+      without its 1 kB buffer.  The bytes hashed are exactly what the send
+      function returns; text types still go through textsend() when it would
+      convert to a different client encoding.
+    - Rows are deformed once instead of with heap_getattr() per column
+      (quadratic in the number of columns), the type tag and column position
+      are hashed once per column instead of once per value, and the FNV-1a
+      primitives are inlined.
+    - A serial pg_database_logical_checksum reads each table once for the
+      table and all of its indexes instead of once per relation.  If the
+      combined pass fails, the relations are computed one by one as before,
+      so warnings, strict-mode errors and the skipped count do not change.
+      Parallel database scans keep the per-relation split, which balances
+      better across workers.
+    - Heap scans skip per-tuple visibility checks on all-visible pages (as a
+      sequential scan does), and physical index and TOAST pages are hashed
+      after the buffer lock is released, from the masked copy.
+    - Add bench/, a benchmark that loads a data set and reports the median
+      time and the value of each checksum, for comparing two builds.
+    - Add regression tests checksum_fastpath (the direct encodings against
+      the real send functions, including another client encoding) and
+      checksum_dbgroup (the grouped database scan and its fallback).
+
 2.6.0   2026-11-14
 
     - Fix: physical index checksums no longer change when nothing changed.

@@ -355,6 +355,7 @@ pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
     scanstate->nulls = palloc(sizeof(bool) * scanstate->nattrs);
     scanstate->inputtypid = palloc(sizeof(Oid) * scanstate->nattrs);
     scanstate->inputtypmod = palloc(sizeof(int32) * scanstate->nattrs);
+    scanstate->hints = palloc0(sizeof(LogicalColumnHint) * scanstate->nattrs);
 
     {
         ListCell   *expr_item = list_head(scanstate->indexInfo->ii_Expressions);
@@ -427,19 +428,19 @@ typedef struct IndexLogicalVisitorState
 } IndexLogicalVisitorState;
 
 /*
- * index_logical_tuple_visitor - hash the index entry of one visible heap tuple
+ * pg_index_logical_row_hash - hash the index entry of one visible heap tuple
  *
  * Evaluates the index expressions and predicate on the heap tuple and hashes
  * the resulting index columns, so that the checksum covers the index
- * definition's view of the data rather than its physical layout.
+ * definition's view of the data rather than its physical layout.  Returns
+ * false (and no hash) when a partial index predicate excludes the tuple.
  */
-static void
-index_logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
-                            OffsetNumber offnum, HeapTuple tuple, void *arg)
+bool
+pg_index_logical_row_hash(IndexLogicalScanState *scanstate, HeapTuple tuple,
+                          ChecksumAlgo algo, uint64 *row_hash)
 {
-    IndexLogicalVisitorState *state = (IndexLogicalVisitorState *) arg;
-    IndexLogicalScanState *scanstate = state->scanstate;
-    uint64      row_hash;
+    MemoryContext oldcontext;
+    uint64      h;
     int         i;
 
     ResetExprContext(scanstate->econtext);
@@ -448,25 +449,49 @@ index_logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 
     if (scanstate->predicate != NULL &&
         !ExecQual(scanstate->predicate, scanstate->econtext))
-        return;
+        return false;
 
     FormIndexDatum(scanstate->indexInfo, scanstate->slot, scanstate->estate,
                    scanstate->values, scanstate->nulls);
 
-    row_hash = (state->algo == CHECKSUM_ALGO_FNV32) ? FNV_BASIS_32
-        : FNV_BASIS_64;
+    h = (algo == CHECKSUM_ALGO_FNV32) ? FNV_BASIS_32 : FNV_BASIS_64;
+
+    /*
+     * Hash in the per-tuple memory context, which the next row resets, so
+     * detoasted values and send function results do not accumulate.
+     */
+    oldcontext = MemoryContextSwitchTo(scanstate->econtext->ecxt_per_tuple_memory);
 
     for (i = 0; i < scanstate->nattrs; i++)
     {
         uint64      col_hash;
 
-        col_hash = pg_cell_checksum_canonical_algo(scanstate->values[i],
-                                                   scanstate->nulls[i],
-                                                   scanstate->inputtypid[i],
-                                                   scanstate->inputtypmod[i],
-                                                   i + 1, state->algo);
-        row_hash = combine_hash(row_hash, col_hash, state->algo);
+        col_hash = pg_cell_checksum_canonical_hinted(scanstate->values[i],
+                                                     scanstate->nulls[i],
+                                                     scanstate->inputtypid[i],
+                                                     scanstate->inputtypmod[i],
+                                                     i + 1, algo,
+                                                     &scanstate->hints[i]);
+        h = combine_hash(h, col_hash, algo);
     }
+
+    MemoryContextSwitchTo(oldcontext);
+
+    *row_hash = h;
+    return true;
+}
+
+/* index_logical_tuple_visitor - fold one heap tuple's index entry */
+static void
+index_logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
+                            OffsetNumber offnum, HeapTuple tuple, void *arg)
+{
+    IndexLogicalVisitorState *state = (IndexLogicalVisitorState *) arg;
+    uint64      row_hash;
+
+    if (!pg_index_logical_row_hash(state->scanstate, tuple, state->algo,
+                                   &row_hash))
+        return;
 
     if (state->algo == CHECKSUM_ALGO_FNV32)
         logical_accum_add(state->acc32, (uint32) row_hash);

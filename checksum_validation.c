@@ -370,9 +370,11 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
         buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
                                     bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
-
         pg_integrity_checksums_mask_page(BufferGetPage(buffer), masked.data,
                                          CHECKSUM_PAGE_HEAP, InvalidOid);
+        UnlockReleaseBuffer(buffer);
+
+        /* Hash the private copy; the content lock was only needed for it. */
         page_hash = hash_bytes_algo(0, masked.data, BLCKSZ, algo);
         page_hash = combine_hash(page_hash, blkno, algo);
 
@@ -380,8 +382,6 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
             checksum_accum_add(acc32, (uint32) page_hash);
         else
             checksum_accum64_add(acc64, page_hash);
-
-        UnlockReleaseBuffer(buffer);
 
         if ((blkno & 63) == 0)
             CHECK_FOR_INTERRUPTS();

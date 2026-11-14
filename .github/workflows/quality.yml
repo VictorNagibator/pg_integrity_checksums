@@ -2,7 +2,7 @@ name: Quality
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
@@ -20,7 +20,7 @@ on:
       - "docker/**"
       - ".github/workflows/quality.yml"
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
@@ -216,10 +216,13 @@ jobs:
 
       - name: Run regression tests with sanitizers
         run: |
-          # Parallel workers fork; ASAN reports them less reliably than the
-          # serial suite.  Parallel coverage is still exercised by the normal
-          # CI matrix and by the coverage job.
-          REGRESS="checksum_basic checksum_database checksum_index checksum_table checksum_stability checksum_partition checksum_safety checksum_types checksum_crossversion checksum_catalog checksum_ddl checksum_access checksum_toast checksum_errors"
+          # Every regression test except checksum_parallel, which exists to
+          # start parallel workers: they are separate processes, and ASAN
+          # reports them less reliably than the serial suite.  The test list
+          # comes from the Makefile, so new tests are covered automatically.
+          REGRESS="$(make -s PG_CONFIG="$PWD/pgsan/bin/pg_config" print-regress |
+                     tr ' ' '\n' | grep -vx 'checksum_parallel' | tr '\n' ' ')"
+          echo "Sanitizer tests: $REGRESS"
           REGRESS_OPTS="--inputdir=./ --dbname=contrib_regression --use-existing"
           PGHOST=/tmp PGPORT=55433 PGUSER="$(id -un)" \
             make PG_CONFIG="$PWD/pgsan/bin/pg_config" REGRESS="$REGRESS" REGRESS_OPTS="$REGRESS_OPTS" installcheck

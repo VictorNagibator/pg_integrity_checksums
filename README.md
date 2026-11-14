@@ -46,20 +46,25 @@ CREATE EXTENSION pg_integrity_checksums;
 SELECT pg_table_logical_checksum('public.orders'::regclass);
 ```
 
-Install from packages, Docker, PGXN or build with PGXS:
+Install it with any of these ([details](docs/installation.md)):
 
 ```bash
+pgxn install pg_integrity_checksums                     # PGXN
+sudo apt install postgresql-16-pg-integrity-checksums   # PIGSTY APT repository
+docker run -e POSTGRES_PASSWORD=secret \
+  ghcr.io/victornagibator/pg_integrity_checksums:pg16   # image with the extension
+
 git clone https://github.com/VictorNagibator/pg_integrity_checksums.git
-cd pg_integrity_checksums
-make
-sudo make install
+cd pg_integrity_checksums && make && sudo make install  # from source (PGXS)
 ```
 
-The CLI lives in [cli/](cli/README.md):
+The companion CLI captures baselines and verifies a database against them,
+with text, JSON and JUnit reports for CI.  Download a
+[release binary](https://github.com/VictorNagibator/pg_integrity_checksums/releases?q=cli-v)
+or use the `ghcr.io/victornagibator/pg_integrity_checksums-cli` image (see
+[CLI installation](docs/cli.md#installation)), then:
 
 ```bash
-cd cli
-go build ./cmd/pg_integrity_checksums
 pg_integrity_checksums capture --db "$DATABASE_URL" --output baseline.json
 pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 ```
@@ -72,6 +77,7 @@ The CLI uses the 32-bit v1 baseline format by default.  Add
 - [Documentation site](https://victornagibator.github.io/pg_integrity_checksums/)
 - [Getting started](docs/getting-started.md)
 - [Installation](docs/installation.md)
+- [Upgrading](docs/upgrading.md)
 - [Concepts](docs/concepts.md)
 - [Function reference](docs/functions.md)
 - [Architecture](docs/architecture.md)

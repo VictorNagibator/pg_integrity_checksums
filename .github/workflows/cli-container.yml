@@ -23,10 +23,24 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Clean version
+      - name: Image tags
         id: version
         shell: bash
-        run: echo "clean=${GITHUB_REF_NAME#cli-v}" >> "$GITHUB_OUTPUT"
+        run: |
+          image=ghcr.io/victornagibator/pg_integrity_checksums-cli
+          clean="${GITHUB_REF_NAME#cli-v}"
+          echo "clean=$clean" >> "$GITHUB_OUTPUT"
+          {
+            echo "tags<<EOF"
+            echo "$image:$GITHUB_REF_NAME"
+            # Only a release tag moves the version and "latest" tags; a manual
+            # run from a branch publishes just the branch-named tag.
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              echo "$image:$clean"
+              echo "$image:latest"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
@@ -43,9 +57,7 @@ jobs:
           push: true
           build-args: |
             VERSION=${{ steps.version.outputs.clean }}
-          tags: |
-            ghcr.io/victornagibator/pg_integrity_checksums-cli:${{ github.ref_name }}
-            ghcr.io/victornagibator/pg_integrity_checksums-cli:latest
+          tags: ${{ steps.version.outputs.tags }}
 
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 

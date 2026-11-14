@@ -3,6 +3,7 @@ name: CLI Integration
 
 on:
   push:
+    branches: [ main ]
     paths:
       - "cli/**"
       - ".github/workflows/cli-integration.yml"
@@ -141,10 +142,12 @@ jobs:
         if: matrix.pg == 16
         run: |
           PGBIN="$(dirname "$PG_CONFIG")"
-          "$PGBIN/psql" -h 127.0.0.1 -p 5433 -U postgres -d cli_test             -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS action_smoke (id int primary key)"
+          "$PGBIN/psql" -h 127.0.0.1 -p 5433 -U postgres -d cli_test \
+            -v ON_ERROR_STOP=1 -c "CREATE TABLE IF NOT EXISTS action_smoke (id int primary key)"
           cd cli
           go build -trimpath -o /tmp/pgics-action ./cmd/pg_integrity_checksums
-          /tmp/pgics-action capture --dsn "host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable"             --schema public --output /tmp/action-baseline.json --quiet
+          /tmp/pgics-action capture --dsn "host=127.0.0.1 port=5433 user=postgres dbname=cli_test sslmode=disable" \
+            --schema public --output /tmp/action-baseline.json --quiet
 
       - name: Run composite action
         if: matrix.pg == 16

@@ -23,9 +23,20 @@ These limitations are documented rather than silently ignored.
   checksums remain architecture- and storage-dependent.
 * **Physical checksums are not replica fingerprints.** Tuple/table physical
   checksums depend on tuple locations, MVCC fields, tuple bytes and the
-  relation's relfilenode/reltablespace; index physical checksums hash raw
-  index pages, including page LSNs.  Use physical checksums for on-disk
-  corruption within one cluster, not for comparing replicas.
+  relation's relfilenode/reltablespace; index physical checksums hash the
+  index pages (with the page LSN, the stored page checksum and hint bits
+  masked out).  Use physical checksums for on-disk corruption within one
+  cluster, not for comparing replicas.
+* **Text values depend on the client encoding.** The text types (`text`,
+  `varchar`, `char(n)`, `name`) are hashed in the form their send function
+  returns, which is converted to the session's `client_encoding`.  When it
+  differs from the server encoding, logical checksums of non-ASCII text
+  differ from those of a session with the same encoding as the server, and
+  characters the client encoding cannot represent raise an error.  Compute
+  checksums that will be compared with each other with the same
+  `client_encoding`, preferably equal to the server encoding (the default
+  unless the connection or the role sets another one).  This is planned to
+  change in a future major release.
 * **Logical index checksums describe expected content, not stored pages.**
   They are derived from visible table rows and the index definition, so a
   missing or corrupt index entry is not detected by this value.  Use
@@ -261,8 +272,8 @@ SELECT
 -- Compare source and replica logical content.
 -- Logical checksums exclude relation OIDs, heap TIDs and type OIDs, so they
 -- are the appropriate values to compare when schema/type names and row
--- content match.  Physical checksums include page LSNs, tuple locations and
--- other storage details, so they will normally differ on a standby.
+-- content match.  Physical checksums depend on tuple locations and other
+-- storage details and are not meant for comparing two servers.
 -- Run on source and replica and compare logical_cs only:
 SELECT
     c.relname,
@@ -372,13 +383,14 @@ with a database checksum.
 
 ## Platform Support
 
-CI runs regression and TAP tests for PostgreSQL 12–19 on:
+CI runs regression and TAP tests for PostgreSQL 12–19 on (see
+[Continuous integration](testing.md#continuous-integration)):
 
 - Linux x86_64 and arm64
 - macOS arm64
 - Windows x86_64
 - FreeBSD amd64 and arm64
-- Linux s390x (big-endian, manually triggered [Big-endian workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/big-endian.yml))
+- Linux s390x (big-endian, PostgreSQL 16, weekly [Big-endian workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/big-endian.yml))
 
 Logical checksums use a canonical little-endian encoding for the few fixed-width
 integers in the canonical form (array shape, composite field count and

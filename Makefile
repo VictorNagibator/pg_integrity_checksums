@@ -79,3 +79,9 @@ dist:
 		-o $(EXTENSION)-$(EXTVERSION).zip HEAD
 
 .PHONY: dist
+
+# Print the regression test list; CI derives the sanitizer subset from it.
+print-regress:
+	@echo $(REGRESS)
+
+.PHONY: print-regress

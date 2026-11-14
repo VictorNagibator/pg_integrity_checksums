@@ -6,7 +6,7 @@ name: Release Metadata
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "*.control"
       - "META.json"

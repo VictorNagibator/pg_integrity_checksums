@@ -50,6 +50,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Image tags
+        id: tags
+        env:
+          PG_MAJOR: ${{ matrix.pg }}
+        run: |
+          image=ghcr.io/victornagibator/pg_integrity_checksums
+          {
+            echo "tags<<EOF"
+            echo "$image:pg$PG_MAJOR-$GITHUB_REF_NAME"
+            # Only a release tag moves the floating pgNN tag; a manual run
+            # from a branch publishes just the branch-named tag.
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              echo "$image:pg$PG_MAJOR"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
@@ -59,9 +76,7 @@ jobs:
           push: true
           build-args: |
             PG_MAJOR=${{ matrix.pg }}
-          tags: |
-            ghcr.io/victornagibator/pg_integrity_checksums:pg${{ matrix.pg }}-${{ github.ref_name }}
-            ghcr.io/victornagibator/pg_integrity_checksums:pg${{ matrix.pg }}
+          tags: ${{ steps.tags.outputs.tags }}
 
   smoke:
     name: Smoke test PostgreSQL 16 image

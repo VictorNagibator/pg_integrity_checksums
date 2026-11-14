@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
@@ -20,7 +20,7 @@ on:
       - "docker/**"
       - ".github/workflows/ci.yml"
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
@@ -147,6 +147,10 @@ jobs:
       - name: Show TAP log on failure
         if: failure()
         run: cat tmp_check/log/regress_log_* 2>/dev/null || true
+
+      - name: Show cluster log on failure
+        if: failure()
+        run: cat "$PGDATA/server.log" 2>/dev/null || true
 
       - name: Stop test cluster
         if: always()

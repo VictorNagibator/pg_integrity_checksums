@@ -11,25 +11,83 @@ database through SQL and does not install or modify extension objects.  Release
 notes live in [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/cli/Changes) and the release workflow reads the section for
 the pushed `cli-v*` tag automatically.
 
-## Quick start
+## Installation
 
-The CLI requires the extension in the target database.  The default 32-bit
-baseline works with any supported extension version; the optional `fnv64`
-format requires extension 2.2 or newer.
+The CLI is a single static binary with no dependencies.  It needs the
+extension installed in the database it connects to.
+
+### Release binaries (recommended)
+
+Each [`cli-v*` release](https://github.com/VictorNagibator/pg_integrity_checksums/releases?q=cli-v)
+has binaries for Linux (amd64, arm64), macOS (amd64, arm64), FreeBSD (amd64)
+and Windows (amd64):
 
 ~~~bash
-# From the repository (Go 1.25+)
-cd cli
-go build ./cmd/pg_integrity_checksums
+VERSION=cli-v0.4.0
+ASSET=pg_integrity_checksums-$VERSION-linux-amd64
+BASE=https://github.com/VictorNagibator/pg_integrity_checksums/releases/download/$VERSION
 
+curl -LO "$BASE/$ASSET"
+curl -LO "$BASE/SHA256SUMS"
+sha256sum --check --ignore-missing SHA256SUMS
+
+install -m 0755 "$ASSET" ~/.local/bin/pg_integrity_checksums
+pg_integrity_checksums version
+~~~
+
+To also check that `SHA256SUMS` was produced by the release workflow, see
+[Release artifacts](#release-artifacts).
+
+### Container image
+
+A signed multi-arch image (amd64, arm64) is published to GHCR.  It contains
+only the CLI, not PostgreSQL:
+
+~~~bash
+docker run --rm -e DATABASE_URL -v "$PWD:/work" -w /work \
+  ghcr.io/victornagibator/pg_integrity_checksums-cli:latest \
+  verify --baseline baseline.json
+~~~
+
+Tags: `latest`, the release tag (for example `cli-v0.4.0`) and, from the next
+release on, the plain version (`0.4.1`).  The image runs as an unprivileged
+user, so the mounted directory must be writable by it if the command writes a
+baseline or a report.
+
+### go install
+
+With Go 1.25 or newer:
+
+~~~bash
+go install github.com/VictorNagibator/pg_integrity_checksums/cli/cmd/pg_integrity_checksums@cli-v0.4.0
+~~~
+
+The binary works the same, but `version` reports a `-dev` suffix because
+`go install` does not stamp the release version.  Use a release binary when the
+version string matters (it is recorded in baselines as `tool_version`).
+
+### From source
+
+~~~bash
+git clone https://github.com/VictorNagibator/pg_integrity_checksums.git
+cd pg_integrity_checksums/cli
+go build -o pg_integrity_checksums ./cmd/pg_integrity_checksums
+~~~
+
+## Quick start
+
+The default 32-bit baseline works with any supported extension version; the
+optional `fnv64` format requires extension 2.2 or newer.
+
+~~~bash
 # Capture a logical baseline (32-bit v1 by default)
-./pg_integrity_checksums capture \
+pg_integrity_checksums capture \
   --db "$DATABASE_URL" \
   --schema public \
   --output baseline.json
 
 # Verify the database against it
-./pg_integrity_checksums verify \
+pg_integrity_checksums verify \
   --db "$DATABASE_URL" \
   --baseline baseline.json
 ~~~
@@ -263,21 +321,41 @@ pg_integrity_checksums completion powershell
 
 ### Docker
 
+See [Container image](#container-image).  To build the image yourself:
+
 ```bash
 docker build -t pgics-cli ./cli
-docker run --rm -e DATABASE_URL -v "$PWD:/work" pgics-cli verify --baseline /work/baseline.json
+docker run --rm -e DATABASE_URL -v "$PWD:/work" -w /work pgics-cli verify --baseline baseline.json
 ```
 
 ### GitHub Action
 
-The composite action at `cli/action.yml` builds the CLI and runs verify:
+The composite action in `cli/action.yml` builds the CLI from the referenced
+tag and runs `verify`.  The job needs a reachable database with the extension
+(for example a service container) and Go is set up by the action itself:
 
 ```yaml
-- uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.2.0
+- uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.4.0
   with:
     baseline: baselines/prod.json
+    dsn: ${{ secrets.DATABASE_URL }}
     fail_on: changed
+    format: junit
+    output: pgics-report.xml
 ```
+
+| Input | Default | Meaning |
+|---|---|---|
+| `baseline` | (required) | Path to the JSON baseline |
+| `dsn` | `DATABASE_URL` from the environment | Connection string |
+| `format` | `json` | Report format: `text`, `json` or `junit` |
+| `fail_on` | `any` | What fails the step: `changed`, `schema-changed`, `new`, `missing`, `any` or `none` |
+| `changed_since` | `false` | `true` passes `--changed-since` |
+| `output` | (stdout) | Write the report to this file |
+| `quiet` | `true` | Suppress progress output |
+
+The step fails with the CLI's [exit code](#exit-codes).  Pin the action to a
+release tag; `main` may contain unreleased changes.
 
 ## Exit codes
 
@@ -443,7 +521,7 @@ views, sequences and TOAST relations are not captured as separate objects.
 
 `physical` is opt-in:
 
-- depends on storage, page locations, LSNs and architecture;
+- depends on storage, tuple locations, relfilenodes and architecture;
 - only valid for the same cluster and storage state;
 - the baseline records `system_identifier` and is rejected on another cluster.
 
@@ -534,7 +612,8 @@ go build ./cmd/pg_integrity_checksums
 The integration test is opt-in and needs an installed extension:
 
 ```bash
-PGICS_TEST_DSN="postgresql:///app?host=/tmp"   go test ./internal/cli -run TestIntegration -v
+PGICS_TEST_DSN="postgresql:///app?host=/tmp" \
+  go test ./internal/cli -run TestIntegration -v
 ```
 
 It creates and drops a temporary schema, so use a test database.

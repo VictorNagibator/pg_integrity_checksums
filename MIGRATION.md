@@ -1,5 +1,9 @@
 # Migrating from pg_checksums 1.x
 
+This page is only for installations of the old `pg_checksums` extension (1.x).
+To upgrade a 2.x installation, see
+[Upgrading](https://victornagibator.github.io/pg_integrity_checksums/upgrading/).
+
 `pg_integrity_checksums` 2.0.0 is the renamed continuation of the
 `pg_checksums` extension. PostgreSQL does not support renaming an extension
 with `ALTER EXTENSION`, so the old extension must be dropped and the new one

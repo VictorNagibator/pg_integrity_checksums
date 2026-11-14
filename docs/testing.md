@@ -29,18 +29,8 @@ PATH="$B/bin:$PATH" PG_REGRESS=$B/lib/pgxs/src/test/regress/pg_regress \
 prove -I $B/lib/pgxs/src/test/perl -I . t/*.pl
 ```
 
-On merges to `main` and on releases, CI runs both suites on every supported
-major version (PostgreSQL 12 through 19) on Linux x86_64 and ARM64, macOS
-ARM64, Windows x64, and FreeBSD amd64 and ARM64.  Pull requests use a reduced
-PostgreSQL 12/16/19 matrix on the same platforms; the full matrix runs after
-merge.  [CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/codeql.yml) analyzes the C and Go sources, the
-[Quality workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/quality.yml) runs ASAN/UBSAN and coverage
-builds for PostgreSQL 12–19, and the
-[Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml) builds PG 12–18 images and
-smoke-tests PostgreSQL 16 on pull requests.  The CLI has its own
-[CLI workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/cli.yml), the
-[CLI integration matrix](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/cli-integration.yml) for PostgreSQL
-12–19, and independent `cli-v*` releases.
+See [Continuous integration](#continuous-integration) for where these suites
+run automatically.
 
 Logical checksums are canonical across endianness: the same schema and data
 produce the same logical values on little-endian and big-endian systems.
@@ -130,52 +120,80 @@ be identical; only `median_ms` may change.  Restart the server with `pg_ctl
 stop` and `pg_ctl start` from the other installation; `pg_ctl restart`
 reuses the `postgres` binary recorded in `postmaster.opts`.
 
-## Building a Release
+## Continuous integration
 
-The `dist` target packs the current `HEAD` into the archive that PGXN expects
-(`pg_integrity_checksums-<version>.zip`, with everything under a `pg_integrity_checksums-<version>/`
-directory):
+Workflows are in `.github/workflows`.  Pull requests run a reduced
+PostgreSQL matrix (12, 16 and 19: the oldest, a middle and the newest
+version); merges to `main` run all of 12 to 19.  A workflow only runs when the
+files it tests change.
 
-```bash
-make dist
-```
+| Workflow | When | What |
+|---|---|---|
+| CI | PRs, `main` | Regression and TAP tests on Linux x86_64 and arm64, macOS arm64, Windows x64 (MinGW), FreeBSD amd64 and arm64 |
+| Quality | PRs, `main` | Coverage (regression tests) and an ASAN/UBSAN build running every regression test except `checksum_parallel` |
+| CodeQL | PRs, `main`, weekly | Static analysis of the C and Go sources |
+| Big-endian | weekly, manual | Fixed logical baselines (arrays, ranges, multiranges, composites, enums, numeric, text) on s390x (QEMU, PostgreSQL 16) |
+| Release Metadata | PRs, `main` | Version in the control file, `META.json`, `Changes` and upgrade scripts agree |
+| Docs | PRs, `main` | `mkdocs build --strict`; deploys the site from `main` |
+| Workflow Lint | PRs, `main` | `actionlint` on the workflows |
+| CLI | PRs, `main` | Go unit tests, `-race`, `go vet`, build, Codecov upload |
+| CLI Integration | PRs, `main` | CLI against a real server for each PostgreSQL version, plus the composite action |
+| CLI Docker | PRs, `main` | Builds and smoke-tests the CLI image |
+| Docker images | PRs (smoke test), `v*` tags | PostgreSQL 12–18 images with the extension, pushed to GHCR on a tag |
+| Release | `v*` tags | Extension release: GitHub Release and PGXN upload |
+| CLI Release | `cli-v*` tags | CLI binaries, `SHA256SUMS`, Sigstore bundle and SBOM |
+| CLI Container | `cli-v*` tags | Signed multi-arch CLI image on GHCR |
 
-### Release metadata check
+Actions are pinned to commit SHAs.  Dependabot updates them (including the
+composite action in `cli/action.yml`), the Go modules, the CLI base image and
+the documentation dependencies.
 
-The [Release Metadata workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release-metadata.yml)
-runs `.github/scripts/check_release_metadata.py` whenever the control file,
-`META.json`, `Changes` or an SQL script changes.  For the version in
-`pg_integrity_checksums.control` it checks that `META.json` agrees, the install
-script exists, the newest `Changes` section is for that version and is not
-empty, and an upgrade script from the previous `Changes` version exists.  You
-can run it locally: `python3 .github/scripts/check_release_metadata.py`.
+## Releasing
 
-### Automated releases
+Tags are created from `main` after its CI is green.  The extension and the
+CLI are released independently.
 
-Pushing a `v*` tag runs the [Release workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/release.yml),
-which:
+### Extension (`vX.Y.Z`)
 
-1. checks that the tag, `pg_integrity_checksums.control` and `META.json` all carry the
-   same version;
-2. builds the archive with `make dist` and verifies its contents;
-3. takes the release notes from the matching `Changes` entry (the release fails
-   if there is none, rather than publishing an empty note);
-4. creates the GitHub Release and attaches the archive (tags containing
-   `-rc`, `-beta` or `-alpha` are marked as pre-releases);
-5. uploads the archive to [PGXN](https://manager.pgxn.org/) when the
-   `PGXN_USERNAME` and `PGXN_PASSWORD` repository secrets are configured.
+1. In a `release/X.Y.Z` branch:
+    - set `default_version` in `pg_integrity_checksums.control` and both
+      versions in `META.json`;
+    - add `pg_integrity_checksums--X.Y.Z.sql` (the full install script) and
+      `pg_integrity_checksums--PREV--X.Y.Z.sql` (the upgrade script; it may
+      contain only a comment when no SQL object changes);
+    - rename the `Unreleased` section of `Changes` to `X.Y.Z   YYYY-MM-DD`;
+    - add the release to [Upgrading](upgrading.md), including any checksum
+      value change, and update the supported versions in `SECURITY.md`.
+2. Open a pull request.  The Release Metadata workflow checks the version
+   files; you can run it locally with
+   `python3 .github/scripts/check_release_metadata.py`.
+3. After the merge, tag `main` and push the tag:
 
----
+    ```bash
+    git tag -a vX.Y.Z -m "pg_integrity_checksums X.Y.Z"
+    git push origin vX.Y.Z
+    ```
 
-## Repository checks
+The Release workflow then checks that the tag, the control file and
+`META.json` agree, builds the PGXN archive with `make dist` and verifies its
+contents, takes the release notes from the `Changes` entry (it fails rather
+than publish empty notes), creates the GitHub Release (tags with `-rc`,
+`-beta` or `-alpha` become pre-releases) and uploads the archive to
+[PGXN](https://manager.pgxn.org/) when the `PGXN_USERNAME` and
+`PGXN_PASSWORD` secrets are set.  The Docker images workflow publishes the
+`pgNN-vX.Y.Z` and `pgNN` images.
 
-Every relevant change runs:
+`make dist` packs `HEAD` into `pg_integrity_checksums-<version>.zip`, so it can
+also be run locally to inspect the archive.
 
-- `actionlint` for all GitHub Actions workflows;
-- CLI unit tests with `-race` and a coverage upload to Codecov;
-- the PostgreSQL 12-19 CLI integration matrix;
-- a Docker CLI image smoke test;
-- a local composite-action smoke test on PostgreSQL 16.
+### CLI (`cli-vX.Y.Z`)
 
-GitHub Actions are pinned to commit SHAs and updated by Dependabot.  Go
-dependencies are updated by Dependabot as well.
+1. Rename the `Unreleased` section of `cli/Changes` to `X.Y.Z   YYYY-MM-DD`
+   and update the version examples in [CLI](cli.md) (installation, GitHub
+   Action) and the supported versions in `SECURITY.md`.
+2. After the merge, tag `main` with `cli-vX.Y.Z` and push the tag.
+
+The CLI Release workflow builds the binaries with the version stamped in,
+writes `SHA256SUMS`, signs it with Sigstore, generates an SBOM and publishes
+the release with the notes from `cli/Changes`.  The CLI Container workflow
+publishes the signed image.

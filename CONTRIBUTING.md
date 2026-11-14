@@ -14,7 +14,21 @@ Requirements:
 - PostgreSQL 12 or newer with server headers;
 - PGXS;
 - a C compiler;
-- Perl and `IPC::Run` for the TAP tests.
+- Perl and `IPC::Run` for the TAP tests;
+- Go (the version in `cli/go.mod`) for the CLI;
+- Python 3 for the documentation site.
+
+The repository contains:
+
+| Path | What |
+|---|---|
+| `*.c`, `*.h`, `*.sql`, `*.control` | the extension |
+| `sql/`, `expected/`, `t/` | regression and TAP tests |
+| `bench/` | benchmark for performance changes |
+| `cli/` | the Go CLI and the GitHub Action (`cli/action.yml`) |
+| `docs/`, `mkdocs.yml` | the documentation site |
+| `Dockerfile`, `docker/` | the PostgreSQL image with the extension |
+| `.github/` | workflows, release scripts and templates |
 
 Build and install:
 
@@ -38,7 +52,24 @@ make PG_CONFIG=/path/to/pg_config installcheck \
 
 Use `PG_CONFIG` for non-default PostgreSQL installations. If the test server
 is not on the default socket or port, set `PGHOST`, `PGPORT`, and `PGUSER`
-for `make installcheck`.
+for `make installcheck`.  `run_tests.sh` builds, installs, starts a server if
+needed and runs the suite in one go.
+
+Test the CLI:
+
+```bash
+cd cli
+go test ./...
+go vet ./...
+```
+
+Preview the documentation site at http://127.0.0.1:8000:
+
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements-docs.txt
+mkdocs serve        # CI runs: mkdocs build --strict
+```
 
 PGXS does not track header dependencies: after changing
 `checksum_internal.h`, run `make clean` before building, or modules compiled
@@ -97,6 +128,8 @@ Tags are created only from `main` after the relevant CI is green:
 - `cli-vX.Y.Z` for CLI releases;
 - `vX.Y.Z` for extension releases.
 
+The full release checklist is in [Releasing](docs/testing.md#releasing).
+
 ## Pull requests
 
 - Keep each pull request focused on one change.
@@ -104,7 +137,8 @@ Tags are created only from `main` after the relevant CI is green:
 - Update `expected/*.out` only after reviewing the actual diff. Run the tests,
   inspect `results/` or `regression.diffs`, and confirm that the new output is
   correct.
-- Update `README.md` and `Changes` when user-visible behavior changes.
+- Update the documentation in `docs/` and `Changes` (or `cli/Changes`) when
+  user-visible behavior changes.
 - If the SQL API changes, add an install script and an upgrade script, and
   update `pg_integrity_checksums.control` and `META.json`.
 - Do not commit build artifacts such as `*.o`, `*.so`, or test output.
@@ -122,8 +156,8 @@ first and describe:
 - how users should migrate or recompute baselines;
 - which release and version should contain it.
 
-Breaking changes must be called out explicitly in `Changes` and documented in
-the README.
+Breaking changes must be called out explicitly in `Changes` and in
+[Upgrading](docs/upgrading.md#which-upgrades-change-checksum-values).
 
 ## Code style
 

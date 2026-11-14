@@ -1,0 +1,52 @@
+name: Feature request
+description: Suggest a new capability or an improvement.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Extension (SQL functions)
+        - CLI
+        - GitHub Action
+        - Docker image
+        - Documentation
+    validations:
+      required: true
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation and why the current tools are not enough.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like to happen?
+      description: The behavior you have in mind, with an example call if you can.
+      placeholder: |
+        SELECT ...;
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do today instead?
+
+  - type: checkboxes
+    id: compatibility
+    attributes:
+      label: Compatibility
+      description: |
+        Changing checksum values invalidates every stored baseline, so such
+        changes are only made in a major release.
+      options:
+        - label: This would change existing checksum values
+        - label: This would change the SQL API or the CLI flags
+        - label: This only adds something; existing values and calls stay the same

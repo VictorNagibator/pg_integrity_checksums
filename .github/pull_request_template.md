@@ -1,37 +1,34 @@
 ## Summary
 
-<!-- What does this PR change and why? -->
+<!-- What does this change and why? Link the issue it closes, if any. -->
 
-> PR title must follow Conventional Commits, for example:
-> `feat(cli): add baseline signing`.
+<!--
+The PR title becomes the squash commit, so it must follow Conventional
+Commits, for example `fix(extension): ...` or `feat(cli): ...`.
+See CONTRIBUTING.md.
+-->
 
-## Type of change
+Closes #
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation
-- [ ] Tests / CI
-- [ ] Breaking logical checksum change
-- [ ] Refactoring / cleanup
+## Checksum values
 
-## Testing
+- [ ] Checksum values do not change
+- [ ] Checksum values change (explain which, and why it cannot wait for a major release)
 
-- [ ] `make`
-- [ ] `make installcheck`
+## How it was tested
+
+<!-- Remove the lines that do not apply and add what is missing. -->
+
+- [ ] `make installcheck` (PostgreSQL version: )
 - [ ] `make installcheck enable_tap_tests=yes PROVE=prove`
-- [ ] Tested on PostgreSQL version(s): ...
+- [ ] `cd cli && go test ./... && go vet ./...`
+- [ ] `mkdocs build --strict`
+- [ ] `bench/run_bench.sh` before and after (for performance changes)
 
 ## Checklist
 
-- [ ] Regression tests added or updated
-- [ ] `expected/*.out` updated after reviewing the diff
-- [ ] `README.md` updated if user-visible behavior changed
-- [ ] `Changes` updated
-- [ ] SQL install/upgrade scripts added if the API changed
-- [ ] `pg_integrity_checksums.control` / `META.json` updated if needed
-- [ ] No build artifacts or secrets committed
-- [ ] No new compiler warnings
-
-## Related issue
-
-Closes #
+- [ ] Tests added or updated; `expected/*.out` reviewed before committing
+- [ ] Documentation in `docs/` updated for user-visible changes
+- [ ] `Changes` (extension) or `cli/Changes` (CLI) updated
+- [ ] New SQL objects: install script, upgrade script, `.control` and `META.json`
+- [ ] No new compiler warnings, build artifacts or secrets

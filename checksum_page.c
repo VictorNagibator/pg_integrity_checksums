@@ -41,7 +41,16 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
     Buffer      buffer;
     Page        page;
     BlockNumber nblocks;
-    char       *pagecopy;
+    /*
+     * smgrread() requires an I/O-aligned buffer on PostgreSQL 16 and later
+     * (direct I/O); a plain palloc() is only MAXALIGNed.
+     */
+#if PG_VERSION_NUM >= 160000
+    PGIOAlignedBlock pagebuf;
+#else
+    PGAlignedBlock pagebuf;
+#endif
+    char       *pagecopy = pagebuf.data;
 
     *calculated = 0;
     *stored = 0;
@@ -85,8 +94,6 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
                         blkno, relname, nblocks - 1)));
     }
 
-    pagecopy = (char *) palloc(BLCKSZ);
-
     /*
      * Verification must inspect the on-disk checksum, not a possibly dirty
      * buffer whose pd_checksum has not been updated yet.  Temporary relations
@@ -99,7 +106,6 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
 
         if (PageIsNew((Page) pagecopy))
         {
-            pfree(pagecopy);
             relation_close(rel, AccessShareLock);
             *is_new = true;
             return;
@@ -107,7 +113,6 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
 
         *stored = ((PageHeader) pagecopy)->pd_checksum;
         *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
-        pfree(pagecopy);
         relation_close(rel, AccessShareLock);
         return;
     }
@@ -119,7 +124,6 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
     if (PageIsNew(page))
     {
         UnlockReleaseBuffer(buffer);
-        pfree(pagecopy);
         relation_close(rel, AccessShareLock);
         *is_new = true;
         return;
@@ -138,7 +142,6 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
 
     *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
 
-    pfree(pagecopy);
     relation_close(rel, AccessShareLock);
 }
 

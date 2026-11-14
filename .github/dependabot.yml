@@ -1,7 +1,10 @@
 version: 2
 updates:
+  # Workflows in .github/workflows and the composite action in cli/action.yml.
   - package-ecosystem: github-actions
-    directory: /
+    directories:
+      - /
+      - /cli
     commit-message:
       prefix: "chore(deps)"
     schedule:
@@ -29,6 +32,8 @@ updates:
         patterns:
           - "*"
 
+  # Base images of the CLI image.  The extension image is parameterized by
+  # PG_MAJOR (postgres:${PG_MAJOR}), which Dependabot cannot update.
   - package-ecosystem: docker
     directory: /cli
     commit-message:
@@ -37,3 +42,12 @@ updates:
       interval: weekly
       day: monday
     open-pull-requests-limit: 3
+
+  # MkDocs for the documentation site.
+  - package-ecosystem: pip
+    directory: /
+    commit-message:
+      prefix: "chore(deps)"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 2

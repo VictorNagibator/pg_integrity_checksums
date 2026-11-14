@@ -109,13 +109,12 @@ selection guidance.
 
 ## 5. Capture and verify a CLI baseline
 
-The CLI captures the selected objects into a versioned JSON baseline.  The
-default capture uses the 32-bit v1 format:
+The CLI captures the selected objects into a versioned JSON baseline.  Install
+it from a release binary, the container image or with `go install`; see
+[CLI installation](cli.md#installation).  The default capture uses the 32-bit
+v1 format:
 
 ~~~bash
-cd cli
-go build ./cmd/pg_integrity_checksums
-
 pg_integrity_checksums capture \
   --db "$DATABASE_URL" \
   --schema public \

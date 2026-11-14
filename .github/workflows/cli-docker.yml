@@ -2,6 +2,7 @@ name: CLI Docker
 
 on:
   push:
+    branches: [ main ]
     paths:
       - "cli/**"
       - ".github/workflows/cli-docker.yml"

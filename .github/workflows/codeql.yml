@@ -2,7 +2,7 @@ name: CodeQL
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"
@@ -11,7 +11,7 @@ on:
       - "cli/**"
       - ".github/workflows/codeql.yml"
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
     paths:
       - "pg_integrity_checksums.c"
       - "pg_integrity_checksums.h"

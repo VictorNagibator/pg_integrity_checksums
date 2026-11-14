@@ -63,6 +63,7 @@ or 64-bit.
 | I want to... | Read |
 |---|---|
 | Install and run my first checksum | [Getting started](getting-started.md) |
+| Upgrade an existing installation | [Upgrading](upgrading.md) |
 | Understand logical vs physical and 32-bit vs 64-bit | [Concepts](concepts.md) |
 | Look up a function | [Function reference](functions.md) |
 | Use baselines in CI | [CLI reference](cli.md) |
@@ -82,6 +83,7 @@ or 64-bit.
 - [Getting started](getting-started.md)
 - [Concepts](concepts.md)
 - [Installation](installation.md)
+- [Upgrading](upgrading.md)
 - [Function reference](functions.md)
 - [CLI](cli.md)
 - [Operations](operations.md)

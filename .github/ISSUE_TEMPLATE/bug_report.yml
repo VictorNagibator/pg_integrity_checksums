@@ -1,0 +1,130 @@
+name: Bug report
+description: Something does not work, crashes or returns a wrong checksum.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a problem.
+
+        **Security issues do not belong here.** Report them privately through a
+        [security advisory](https://github.com/VictorNagibator/pg_integrity_checksums/security/advisories/new).
+
+        Please do not paste real data, connection strings or passwords.
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Extension (SQL functions)
+        - CLI (pg_integrity_checksums capture/verify/...)
+        - GitHub Action (cli/action.yml)
+        - Docker image
+        - Documentation
+        - Packaging / installation
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Which function or command, what result or error you got.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: The smallest SQL script or command line that shows the problem.
+      render: sql
+      placeholder: |
+        CREATE TABLE t (id integer PRIMARY KEY, v text);
+        INSERT INTO t VALUES (1, 'a');
+        SELECT pg_table_logical_checksum('t'::regclass);
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Is it a crash or a wrong value?
+      options:
+        - Wrong or unstable checksum value
+        - Error message
+        - Server crash
+        - CLI exit code or report problem
+        - Performance
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: extension-version
+    attributes:
+      label: Extension version
+      description: "`SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`"
+      placeholder: "2.6.0"
+
+  - type: input
+    id: cli-version
+    attributes:
+      label: CLI version (if the CLI is involved)
+      description: "`pg_integrity_checksums version`"
+      placeholder: "0.4.0"
+
+  - type: input
+    id: pg-version
+    attributes:
+      label: PostgreSQL version
+      description: "`SELECT version();`"
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: Operating system and architecture
+      placeholder: "Ubuntu 24.04, x86_64"
+
+  - type: input
+    id: install-method
+    attributes:
+      label: How was it installed?
+      placeholder: "PGXN, make install, PIGSTY package, Docker image, release binary, ..."
+
+  - type: textarea
+    id: settings
+    attributes:
+      label: Settings and scope
+      description: |
+        Output of `SHOW pg_integrity_checksums.workers;` and
+        `SHOW pg_integrity_checksums.strict;`, and what is involved: physical
+        or logical, table/index/database, partitioning, TOAST, expression or
+        partial indexes, a standby.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Already tried
+      options:
+        - label: It also happens with `SET pg_integrity_checksums.workers = 0`
+        - label: I checked the [troubleshooting guide](https://victornagibator.github.io/pg_integrity_checksums/troubleshooting/)
+        - label: I searched the existing issues
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Error output, server log lines or a backtrace.
+      render: text

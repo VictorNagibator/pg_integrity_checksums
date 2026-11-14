@@ -385,7 +385,9 @@ both 32-bit and 64-bit algorithms.
 Logical values use a canonical type-aware encoding:
 
 * **Scalar types** use their binary send function (network byte order), or the
-  output function when no send function exists.
+  output function when no send function exists.  Text types are converted to
+  the session's `client_encoding` by their send function; see
+  [Operations](operations.md#limitations-and-portability).
 * **Enums** are hashed by label, not by type OID.
 * **numeric** is normalized with `numeric_normalize()`, so `1.0` and `1.00`
   compare equal.
@@ -405,7 +407,7 @@ Logical values use a canonical type-aware encoding:
 | Function                 |       Complexity | Notes                           |
 | ------------------------ | ---------------: | ------------------------------- |
 | `pg_cell_checksum`     |             O(1) | Single cell, minimal overhead |
-| `pg_tuple_*_checksum`    |    O(tuple size) | Requires buffer lock            |
+| `pg_tuple_*_checksum`    |    O(tuple size) | Reads one heap page |
 | `pg_table_*_checksum`    |   O(rows × columns) | Order-independent aggregation |
 | `pg_index_physical_checksum` | O(index size) | Bulk read strategy |
 | `pg_index_logical_checksum` | O(table rows) | Scans heap rows, not index pages |
@@ -413,6 +415,9 @@ Logical values use a canonical type-aware encoding:
 
 Table, index, and database scans can be parallelized with
 `pg_integrity_checksums.workers`; the scan work is divided among the workers with
-linear speedup up to the point where the scan becomes I/O-bound.
+close to linear speedup up to the point where the scan becomes I/O-bound.  See
+[Operations](operations.md#parallel-computation) for how database checksums
+use workers, and `bench/` in the repository
+([Testing](testing.md#benchmark)) to measure a change.
 
 ---

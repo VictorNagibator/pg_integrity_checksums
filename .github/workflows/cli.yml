@@ -4,6 +4,7 @@ name: CLI
 
 on:
   push:
+    branches: [ main ]
     paths:
       - "cli/**"
       - ".github/workflows/cli.yml"
@@ -21,6 +22,7 @@ concurrency:
 
 jobs:
   test:
+    name: Unit tests, race, vet and build
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     defaults:

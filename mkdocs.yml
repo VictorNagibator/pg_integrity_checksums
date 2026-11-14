@@ -31,6 +31,7 @@ nav:
   - Home: index.md
   - Getting started: getting-started.md
   - Installation: installation.md
+  - Upgrading: upgrading.md
   - Concepts: concepts.md
   - Function reference: functions.md
   - CLI: cli.md
@@ -51,3 +52,11 @@ markdown_extensions:
 
 plugins:
   - search
+
+# Fail "mkdocs build --strict" on broken links and anchors, not only on
+# missing pages.
+validation:
+  omitted_files: warn
+  absolute_links: info
+  unrecognized_links: warn
+  anchors: warn

@@ -38,3 +38,6 @@ cli/coverage-integration.out
 
 # MkDocs output
 site/
+
+# Python virtualenv for the documentation site
+.venv/

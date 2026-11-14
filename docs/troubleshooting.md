@@ -5,6 +5,8 @@
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `function ... does not exist` | Extension not created, or older than the function | `CREATE EXTENSION`; check `extversion` |
+| New release installed, but nothing changed | The database still runs the old extension version | [`ALTER EXTENSION ... UPDATE`](upgrading.md#how-to-upgrade) |
+| Logical checksums differ, the data looks the same | Different `client_encoding`, type names or extension version | See [below](#logical-checksums-differ-for-the-same-data) |
 | `permission denied for table` | Missing `SELECT` | Grant table-level `SELECT` |
 | `row-level security` error | RLS cannot be applied to a direct heap scan | Use a non-RLS role or exclude the table |
 | `unknown checksum algorithm` | Typo or extension older than 2.2 | Use `fnv32`/`fnv64`; upgrade |
@@ -44,6 +46,31 @@ checksum aborts the call instead of being skipped.  The message and the
 
 To skip such relations anyway, `SET pg_integrity_checksums.strict = off`; the
 result then excludes them.  See [Strict mode](operations.md#strict-mode).
+
+## Logical checksums differ for the same data
+
+Logical checksums ignore OIDs, physical layout and dropped columns, but some
+differences between two sessions or servers still change them:
+
+- **`client_encoding`.**  Text values are hashed as their send function
+  returns them, converted to the client encoding.  Compare
+  `SHOW client_encoding;` in both sessions and use the same value (see
+  [Limitations](operations.md#limitations-and-portability)).
+- **Extension version.**  Some upgrades changed values; see
+  [Which upgrades change checksum values](upgrading.md#which-upgrades-change-checksum-values).
+  Compare `extversion` on both sides.
+- **Type and schema names.**  Values are tagged with their type name, so a
+  user-defined type with another name hashes differently.  So does a column
+  of a different type (`integer` vs `bigint`, `text` vs `varchar`).
+- **Visibility.**  Each call uses its own snapshot under `READ COMMITTED`.
+  Concurrent writes, or a replica that has not replayed them yet, are real
+  differences.
+- **Physical vs logical.**  Physical checksums are expected to differ between
+  servers; compare logical ones.
+
+To narrow it down, compare table checksums first, then
+`pg_tuple_logical_checksum` of matching rows, then `pg_cell_checksum` of each
+column.
 
 ## Unknown checksum algorithm
 
@@ -87,4 +114,4 @@ pg_integrity_checksums verify --workers 4 --timeout 30m --baseline baseline.json
 ~~~
 
 For repeated verification of a logical baseline, see `--changed-since` in the
-[CLI contract](cli.md#changed-since).
+[CLI contract](cli.md#-changed-since).

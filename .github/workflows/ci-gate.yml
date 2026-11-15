@@ -1,0 +1,38 @@
+# Single required status check for branch protection.  The other workflows
+# use path filters, so which checks run depends on the files a pull request
+# touches; requiring them directly would leave pull requests waiting forever
+# for checks that never start.  This job runs on every pull request, waits for
+# all other checks on the head commit and fails if any of them failed.
+name: CI Gate
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: CI Gate
+    runs-on: ubuntu-24.04
+    # Longer than the slowest job (60 minutes) plus queueing.
+    timeout-minutes: 120
+    permissions:
+      checks: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+
+      - name: Wait for the other checks
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+        run: bash .github/scripts/ci-gate.sh

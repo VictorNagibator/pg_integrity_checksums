@@ -23,7 +23,7 @@ has binaries for Linux (amd64, arm64), macOS (amd64, arm64), FreeBSD (amd64)
 and Windows (amd64):
 
 ~~~bash
-VERSION=cli-v0.4.0
+VERSION=cli-v0.5.0
 ASSET=pg_integrity_checksums-$VERSION-linux-amd64
 BASE=https://github.com/VictorNagibator/pg_integrity_checksums/releases/download/$VERSION
 
@@ -49,8 +49,8 @@ docker run --rm -e DATABASE_URL -v "$PWD:/work" -w /work \
   verify --baseline baseline.json
 ~~~
 
-Tags: `latest`, the release tag (for example `cli-v0.4.0`) and, from the next
-release on, the plain version (`0.4.1`).  The image runs as an unprivileged
+Tags: `latest`, the release tag (for example `cli-v0.5.0`) and the plain
+version (`0.5.0`).  The image runs as an unprivileged
 user, so the mounted directory must be writable by it if the command writes a
 baseline or a report.
 
@@ -59,7 +59,7 @@ baseline or a report.
 With Go 1.25 or newer:
 
 ~~~bash
-go install github.com/VictorNagibator/pg_integrity_checksums/cli/cmd/pg_integrity_checksums@cli-v0.4.0
+go install github.com/VictorNagibator/pg_integrity_checksums/cli/cmd/pg_integrity_checksums@cli-v0.5.0
 ~~~
 
 The binary works the same, but `version` reports a `-dev` suffix because
@@ -99,7 +99,7 @@ flag.
 
 ## Status
 
-The CLI is currently **0.4.0**.  It is versioned separately from the
+The CLI is currently **0.5.0**.  It is versioned separately from the
 extension.  It writes **v1** (FNV-1a 32-bit) by default and **v2** with
 `capture --hash fnv64`.
 
@@ -335,7 +335,7 @@ tag and runs `verify`.  The job needs a reachable database with the extension
 (for example a service container) and Go is set up by the action itself:
 
 ```yaml
-- uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.4.0
+- uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.5.0
   with:
     baseline: baselines/prod.json
     dsn: ${{ secrets.DATABASE_URL }}

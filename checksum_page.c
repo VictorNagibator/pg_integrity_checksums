@@ -26,6 +26,12 @@
  */
 
 /*
+ * Number of times pg_page_checksum_status() reads a block from disk before it
+ * reports a mismatch; see pg_page_checksum_read().
+ */
+#define PAGE_CHECKSUM_READ_ATTEMPTS 5
+
+/*
  * pg_page_checksum_read - shared page read and checksum calculation
  *
  * Returns the calculated 16-bit checksum and the checksum stored in the page
@@ -101,18 +107,43 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
      */
     if (from_disk && !RelationUsesLocalBuffers(rel))
     {
-        smgrread(RelationGetSmgr(rel), MAIN_FORKNUM, (BlockNumber) blkno,
-                 pagecopy);
+        int         attempt;
 
-        if (PageIsNew((Page) pagecopy))
+        /*
+         * The read takes no buffer lock, so it can overlap with the write of
+         * the same block by the checkpointer or a backend and return a torn
+         * page: part old, part new, with a checksum that matches neither.
+         * pg_basebackup handles this by reading the block again.  Do the
+         * same: report a mismatch only when every read disagrees.  A
+         * corrupt page fails each time, while a torn read does not repeat,
+         * because the write in progress completes within moments.
+         */
+        for (attempt = 1;; attempt++)
         {
-            relation_close(rel, AccessShareLock);
-            *is_new = true;
-            return;
+            smgrread(RelationGetSmgr(rel), MAIN_FORKNUM, (BlockNumber) blkno,
+                     pagecopy);
+
+            if (PageIsNew((Page) pagecopy))
+            {
+                relation_close(rel, AccessShareLock);
+                *stored = 0;
+                *calculated = 0;
+                *is_new = true;
+                return;
+            }
+
+            *stored = ((PageHeader) pagecopy)->pd_checksum;
+            *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
+
+            if (*calculated == *stored || !DataChecksumsEnabled() ||
+                attempt >= PAGE_CHECKSUM_READ_ATTEMPTS)
+                break;
+
+            /* Give a concurrent write time to finish. */
+            pg_usleep(10000L * attempt);
+            CHECK_FOR_INTERRUPTS();
         }
 
-        *stored = ((PageHeader) pagecopy)->pd_checksum;
-        *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
         relation_close(rel, AccessShareLock);
         return;
     }
@@ -228,9 +259,6 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
 {
     Relation    rel;
     Buffer      buffer;
-    Page        page;
-    HeapTupleHeader tuple;
-    ItemId      lp;
     Datum       value;
     bool        isnull;
     HeapTupleData heapTuple;
@@ -238,7 +266,6 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
     Form_pg_attribute attr;
     BlockNumber blkno;
     OffsetNumber offnum;
-    Size        tuple_len;
     int         ordinal = 0;
     int         i;
 
@@ -267,46 +294,15 @@ pg_cell_checksum_common(Oid reloid, ItemPointer tid, int32 attnum_arg,
 
     buffer = ReadBuffer(rel, blkno);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
-    page = BufferGetPage(buffer);
 
-    if (PageIsNew(page))
+    /* Missing and invisible tuples have no cell; see the helper. */
+    if (!pg_integrity_checksums_fetch_visible_tuple(rel, buffer, blkno, offnum,
+                                                    &heapTuple))
     {
         UnlockReleaseBuffer(buffer);
         relation_close(rel, AccessShareLock);
         return false;
     }
-
-    pg_integrity_checksums_check_page(rel, blkno, page);
-
-    if (offnum < FirstOffsetNumber || offnum > PageGetMaxOffsetNumber(page))
-    {
-        UnlockReleaseBuffer(buffer);
-        relation_close(rel, AccessShareLock);
-        return false;
-    }
-
-    lp = PageGetItemId(page, offnum);
-    if (!ItemIdIsNormal(lp))
-    {
-        UnlockReleaseBuffer(buffer);
-        relation_close(rel, AccessShareLock);
-        return false;
-    }
-
-    if (!pg_integrity_checksums_item_is_sane(page, lp))
-        ereport(ERROR,
-                (errcode(ERRCODE_DATA_CORRUPTED),
-                 errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
-                        RelationGetRelationName(rel), blkno, offnum)));
-
-    tuple = (HeapTupleHeader) PageGetItem(page, lp);
-    tuple_len = ItemIdGetLength(lp);
-    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, tuple, tuple_len);
-
-    heapTuple.t_len = tuple_len;
-    heapTuple.t_data = tuple;
-    heapTuple.t_tableOid = reloid;
-    heapTuple.t_self = *tid;
 
     attr = TupleDescAttr(tupdesc, attnum_arg - 1);
     if (attr->attisdropped)

@@ -58,7 +58,8 @@ REGRESS = \
 	checksum_fastpath \
 	checksum_dbgroup \
 	checksum_security \
-	checksum_robustness
+	checksum_robustness \
+	checksum_visibility
 
 REGRESS_OPTS = \
     --inputdir=./ \

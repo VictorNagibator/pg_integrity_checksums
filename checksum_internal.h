@@ -575,6 +575,16 @@ extern void scan_relation_raw_pages(Relation rel, BlockNumber start,
 extern void scan_relation_raw_pages64(Relation rel, BlockNumber start,
                                        BlockNumber end, ChecksumAccum64 *acc);
 
+/*
+ * Tuple lookup by TID for the tuple and cell functions.  The buffer must be
+ * share-locked; corrupt structures raise an error.
+ */
+extern bool pg_integrity_checksums_fetch_visible_tuple(Relation rel,
+                                                       Buffer buffer,
+                                                       BlockNumber blkno,
+                                                       OffsetNumber offnum,
+                                                       HeapTuple tuple);
+
 /* Tuple checksum cores, shared with the block scan and database modules. */
 extern uint64 pg_tuple_physical_checksum_internal(Relation rel, Page page,
                                                   OffsetNumber offnum,

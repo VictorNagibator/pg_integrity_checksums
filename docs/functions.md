@@ -68,6 +68,12 @@ block or a relation without storage raises an error rather than returning a
 status.  Use `pg_page_checksum` when you explicitly want the calculated value
 from the buffer.
 
+The read takes no buffer lock, so it can overlap with a concurrent write of the
+same block and see a torn page.  As `pg_basebackup` does, a block whose
+checksum does not match is read again (up to five times, with short pauses)
+and `mismatch` is returned only when every read disagrees; real corruption
+fails every read.
+
 ```sql
 -- Get checksum for page 5 of a table
 SELECT pg_page_checksum('my_table'::regclass, 5);
@@ -81,6 +87,13 @@ Computes logical checksum of a cell value. NULL values return `CHECKSUM_NULL` (-
 Requires `SELECT` on the relation; an out-of-range TID or attribute number
 returns NULL.  Relations protected by row-level security are rejected.
 
+All tuple and cell functions return NULL for a TID whose tuple is not visible
+to the query's snapshot: a deleted row, an old version of an updated row, or
+a row inserted by a transaction that has not committed.  Such a TID still
+points at the row's data, and a checksum of it would reveal data the caller
+cannot `SELECT`.  Pass `ctid` values from the same query (as in the examples)
+to checksum the rows you see.
+
 ```sql
 -- Get checksum for cell (column) 3 of a specific tuple
 SELECT pg_cell_checksum('employees'::regclass, '(5,2)'::tid, 3);
@@ -93,8 +106,9 @@ SELECT pg_cell_checksum('employees'::regclass, '(5,2)'::tid, 3);
 **`pg_tuple_physical_checksum(regclass, tid, boolean) -> integer`**
 
 Computes physical tuple checksum based on physical location (block, offset).
-Requires `SELECT` on the relation.  An invalid TID returns NULL; a corrupted
-line pointer or tuple header raises a clean `DATA_CORRUPTED` error.
+Requires `SELECT` on the relation.  An invalid TID, a TID without a tuple and
+a tuple that is not visible return NULL; a corrupted line pointer or tuple
+header raises a clean `DATA_CORRUPTED` error.
 
 ```sql
 -- Physical checksum without header

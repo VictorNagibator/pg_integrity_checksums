@@ -2,6 +2,24 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Security: pg_tuple_physical_checksum, pg_tuple_logical_checksum and
+      pg_cell_checksum (and their algorithm overloads) did not check tuple
+      visibility.  For the TID of a deleted row, an old version of an
+      updated row or a row inserted by an uncommitted transaction they
+      returned a checksum of data the caller cannot SELECT, and a checksum
+      of a short value is easily reversed by trying candidates.  They now
+      return NULL for a tuple that is not visible to the query's snapshot.
+      Checksums of visible tuples do not change.
+    - pg_tuple_physical_checksum returns NULL instead of 0 for a TID without
+      a tuple, like the logical tuple and cell functions.
+    - Fix: pg_page_checksum_status reads the block from disk without a
+      buffer lock, so a read overlapping a concurrent write could see a torn
+      page and report a false "mismatch".  A block whose checksum does not
+      match is now read again, up to five times, as pg_basebackup does;
+      "mismatch" is reported only when every read disagrees.
+    - The page checksum TAP test also checks that a corrupted page is
+      reported as "mismatch".
+
     - Fix: logical index checksums with pg_integrity_checksums.workers > 0
       evaluated index expressions and partial-index predicates in parallel
       mode even when they called functions that are not PARALLEL SAFE (the

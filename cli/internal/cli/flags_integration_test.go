@@ -299,3 +299,112 @@ func TestIntegrationFNV64Baseline(t *testing.T) {
 		t.Fatalf("physical v2 verify: code=%d err=%s", code, errOut)
 	}
 }
+
+// TestIntegrationSchemaHashPortable checks that schema_hash does not depend on
+// the order in which constraints were created (a restore creates them in
+// another order than the original DDL) or on the session's search_path and
+// quote_all_identifiers, which change how names are spelled.
+func TestIntegrationSchemaHashPortable(t *testing.T) {
+	db, schema := setupCLITestSchema(t)
+	ctx := context.Background()
+	statements := []string{
+		"CREATE TYPE " + schema + ".mood AS ENUM ('ok', 'meh')",
+		"CREATE TABLE " + schema + ".parent (id int PRIMARY KEY)",
+		"INSERT INTO " + schema + ".parent VALUES (1)",
+		// Constraint names deliberately not in creation order.
+		"CREATE TABLE " + schema + ".child (id int, pid int, m " + schema + ".mood DEFAULT 'ok', " +
+			"CONSTRAINT zz_pk PRIMARY KEY (id))",
+		"ALTER TABLE " + schema + ".child ADD CONSTRAINT mm_fk FOREIGN KEY (pid) REFERENCES " + schema + ".parent (id)",
+		"ALTER TABLE " + schema + ".child ADD CONSTRAINT aa_check CHECK (id > 0)",
+		"INSERT INTO " + schema + ".child VALUES (1, 1, 'meh')",
+		"CREATE INDEX child_expr_idx ON " + schema + ".child ((id * 2)) WHERE pid > 0",
+	}
+	for _, stmt := range statements {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Capture with the schema on the search_path and quote_all_identifiers
+	// on: both used to change how names were spelled in the hashed text.
+	dsn := os.Getenv("PGICS_TEST_DSN")
+	custom := withRuntimeParams(t, dsn, "search_path="+schema+",public", "quote_all_identifiers=on")
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	code, _, errOut := runCLI("capture", "--db", custom, "--schema", schema, "--output", path, "--quiet")
+	if code != 0 {
+		t.Fatalf("capture: code=%d err=%s", code, errOut)
+	}
+	if b := loadBaselineForTest(t, path); b.SchemaHashVersion != baseline.SchemaHashVersion {
+		t.Fatalf("schema_hash_version %d, want %d", b.SchemaHashVersion, baseline.SchemaHashVersion)
+	}
+
+	// Recreate the constraints in another order, as a restore would.
+	recreate := []string{
+		"ALTER TABLE " + schema + ".child DROP CONSTRAINT aa_check",
+		"ALTER TABLE " + schema + ".child DROP CONSTRAINT mm_fk",
+		"ALTER TABLE " + schema + ".child DROP CONSTRAINT zz_pk",
+		"ALTER TABLE " + schema + ".child ADD CONSTRAINT aa_check CHECK (id > 0)",
+		"ALTER TABLE " + schema + ".child ADD CONSTRAINT mm_fk FOREIGN KEY (pid) REFERENCES " + schema + ".parent (id)",
+		"ALTER TABLE " + schema + ".child ADD CONSTRAINT zz_pk PRIMARY KEY (id)",
+	}
+	for _, stmt := range recreate {
+		if _, err := db.ExecContext(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Verify with the default settings.
+	code, out, errOut := runCLI("verify", "--db", dsn, "--baseline", path, "--quiet")
+	if code != 0 {
+		t.Fatalf("verify: code=%d out=%s err=%s", code, out, errOut)
+	}
+
+	// A real schema change is still detected.
+	if _, err := db.ExecContext(ctx, "ALTER TABLE "+schema+".child DROP CONSTRAINT aa_check"); err != nil {
+		t.Fatal(err)
+	}
+	code, out, _ = runCLI("verify", "--db", dsn, "--baseline", path, "--quiet")
+	if code != 1 || !strings.Contains(out, "schema_changed") {
+		t.Fatalf("schema change not detected: code=%d out=%s", code, out)
+	}
+}
+
+// TestIntegrationOldSchemaHashVersion checks that a baseline whose schema
+// hashes were computed by an older CLI is verified without false schema
+// changes, with a warning.
+func TestIntegrationOldSchemaHashVersion(t *testing.T) {
+	_, schema := setupCLITestSchema(t)
+	dsn := os.Getenv("PGICS_TEST_DSN")
+	path := filepath.Join(t.TempDir(), "baseline.json")
+	capturePath(t, schema, path)
+
+	b := loadBaselineForTest(t, path)
+	b.SchemaHashVersion = 0
+	for i := range b.Objects {
+		b.Objects[i].SchemaHash = "sha256:" + strings.Repeat("0", 64)
+	}
+	if err := baseline.Save(path, b, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	code, out, errOut := runCLI("verify", "--db", dsn, "--baseline", path)
+	if code != 0 {
+		t.Fatalf("verify: code=%d out=%s err=%s", code, out, errOut)
+	}
+	if !strings.Contains(errOut, "schema_hash versions") {
+		t.Fatalf("missing schema_hash version warning: %s", errOut)
+	}
+}
+
+// withRuntimeParams appends server settings to a key/value or URL DSN.
+func withRuntimeParams(t *testing.T, dsn string, params ...string) string {
+	t.Helper()
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		return dsn + sep + strings.Join(params, "&")
+	}
+	return dsn + " " + strings.Join(params, " ")
+}

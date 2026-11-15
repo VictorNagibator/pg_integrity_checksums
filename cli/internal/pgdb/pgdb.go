@@ -128,6 +128,21 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 		return nil, fmt.Errorf("invalid hash %q", opts.Hash)
 	}
 
+	// Table statistics are read before the snapshot transaction starts, on
+	// purpose. --changed-since reuses a checksum when the counters have not
+	// moved since the baseline, so the counters stored with a checksum must
+	// never cover a change that the checksum's snapshot does not contain.
+	// Read first, they can only lag behind the snapshot: a change that
+	// commits in between is in the checksum but not yet in the counters, and
+	// merely forces a recomputation on the next run. Read inside the
+	// transaction (as before), a change committed after the snapshot was
+	// taken could be counted but not checksummed, and the stale checksum would
+	// then be reused forever.
+	statsByOID, err := readTableStats(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+
 	// READ ONLY is a safety net: capture must never touch application data.
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{
 		Isolation: sql.LevelRepeatableRead,
@@ -216,6 +231,10 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	// unchanged and index candidates are sorted before tables.
 	schemaHashes := make(map[string]string, len(candidates))
 	statsByKey := make(map[string]*baseline.TableStats)
+	restoreSettings, err := pinSchemaHashSettings(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	for _, c := range candidates {
 		key := candidateKey(c)
 		h, err := schemaHash(ctx, tx, c)
@@ -224,12 +243,13 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 		}
 		schemaHashes[key] = h
 		if c.Kind == baseline.ObjectTable {
-			st, err := tableStats(ctx, tx, c)
-			if err != nil {
-				return nil, fmt.Errorf("%s %s.%s stats: %w", c.Kind, c.Schema, c.Name, err)
-			}
-			statsByKey[key] = st
+			// nil (no statistics, or a table created after they were read)
+			// disables --changed-since for this table.
+			statsByKey[key] = statsByOID[c.OID]
 		}
+	}
+	if err := restoreSettings(); err != nil {
+		return nil, err
 	}
 
 	objects := make([]baseline.Object, 0, len(candidates))
@@ -292,6 +312,7 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	)
 	b.SystemIdentifier = systemIdentifier
 	b.DatabaseOID = databaseOID
+	b.SchemaHashVersion = baseline.SchemaHashVersion
 	b.Finalize()
 
 	// Commit only after every checksum succeeded; on any earlier error the
@@ -577,25 +598,76 @@ func candidateKey(c Candidate) string {
 	return c.Kind + ":" + c.Schema + "." + c.Name
 }
 
-// tableStats reads the cumulative tuple counters and relfilenode for a table.
-// A missing pg_stat_all_tables row (for example for a partitioned parent) is
-// represented as nil so --changed-since falls back to a full checksum.
-func tableStats(ctx context.Context, tx *sql.Tx, c Candidate) (*baseline.TableStats, error) {
-	query := "SELECT c.relfilenode::bigint, s.n_tup_ins, s.n_tup_upd, s.n_tup_del " +
-		"FROM pg_class c LEFT JOIN pg_stat_all_tables s ON s.relid = c.oid " +
-		"WHERE c.oid = $1"
-	var relfilenode, inserted, updated, deleted sql.NullInt64
-	if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&relfilenode, &inserted, &updated, &deleted); err != nil {
+// readTableStats reads the cumulative tuple counters and relfilenode of every
+// table, keyed by OID. It runs as its own statement before the snapshot
+// transaction; see Snapshot. A table without a pg_stat_all_tables row (for
+// example a partitioned parent) is left out, so --changed-since falls back to
+// a full checksum for it.
+func readTableStats(ctx context.Context, q Querier) (map[int64]*baseline.TableStats, error) {
+	query := "SELECT c.oid::bigint, c.relfilenode::bigint, s.n_tup_ins, s.n_tup_upd, s.n_tup_del " +
+		"FROM pg_catalog.pg_class c " +
+		"JOIN pg_catalog.pg_stat_all_tables s ON s.relid = c.oid " +
+		"WHERE c.relkind IN ('r', 'm', 'p')"
+	rows, err := q.QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("read table statistics: %w", err)
+	}
+	defer rows.Close()
+	out := make(map[int64]*baseline.TableStats)
+	for rows.Next() {
+		var oid int64
+		var relfilenode, inserted, updated, deleted sql.NullInt64
+		if err := rows.Scan(&oid, &relfilenode, &inserted, &updated, &deleted); err != nil {
+			return nil, err
+		}
+		if !relfilenode.Valid || !inserted.Valid || !updated.Valid || !deleted.Valid {
+			continue
+		}
+		out[oid] = &baseline.TableStats{
+			Relfilenode: relfilenode.Int64,
+			Inserted:    inserted.Int64,
+			Updated:     updated.Int64,
+			Deleted:     deleted.Int64,
+		}
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if !relfilenode.Valid || !inserted.Valid || !updated.Valid || !deleted.Valid {
-		return nil, nil
+	return out, nil
+}
+
+// pinSchemaHashSettings fixes the session settings that change how
+// format_type(), pg_get_expr(), pg_get_constraintdef() and pg_get_indexdef()
+// spell names: those functions schema-qualify every name that is not visible
+// in search_path, and quote every identifier when quote_all_identifiers is
+// on. With search_path = pg_catalog every user object is schema-qualified,
+// whatever the role or connection settings, so schema hashes are portable.
+//
+// The settings are transaction-local and the returned function restores
+// them: the checksum functions run with the session's own search_path, which
+// index expressions may depend on (before PostgreSQL 17 the server does not
+// restrict it during maintenance).
+func pinSchemaHashSettings(ctx context.Context, tx *sql.Tx) (func() error, error) {
+	var searchPath, quoteAll string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT pg_catalog.current_setting('search_path'), "+
+			"pg_catalog.current_setting('quote_all_identifiers')").
+		Scan(&searchPath, &quoteAll); err != nil {
+		return nil, fmt.Errorf("read session settings: %w", err)
 	}
-	return &baseline.TableStats{
-		Relfilenode: relfilenode.Int64,
-		Inserted:    inserted.Int64,
-		Updated:     updated.Int64,
-		Deleted:     deleted.Int64,
+	if _, err := tx.ExecContext(ctx,
+		"SELECT pg_catalog.set_config('search_path', 'pg_catalog', true), "+
+			"pg_catalog.set_config('quote_all_identifiers', 'off', true)"); err != nil {
+		return nil, fmt.Errorf("pin schema hash settings: %w", err)
+	}
+	return func() error {
+		if _, err := tx.ExecContext(ctx,
+			"SELECT pg_catalog.set_config('search_path', $1, true), "+
+				"pg_catalog.set_config('quote_all_identifiers', $2, true)",
+			searchPath, quoteAll); err != nil {
+			return fmt.Errorf("restore session settings: %w", err)
+		}
+		return nil
 	}, nil
 }
 
@@ -667,7 +739,10 @@ func reusableObject(c Candidate, current baseline.Object, prior map[string]basel
 
 // schemaHash returns a portable fingerprint of the object definition. It reads
 // only catalogs and never includes OIDs, so a dump/restore with different OIDs
-// still produces the same hash for the same schema.
+// still produces the same hash for the same schema: constraints are ordered by
+// name (a restore creates them in another order than the original DDL did),
+// and the caller pins the settings that change how names are spelled (see
+// pinSchemaHashSettings). The result is baseline.SchemaHashVersion 2.
 func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 	var spec string
 	switch c.Kind {
@@ -684,7 +759,7 @@ func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 			"FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
 			"LEFT JOIN pg_collation coll ON coll.oid = a.attcollation " +
 			"WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped), '') || '|' || " +
-			"COALESCE((SELECT string_agg(pg_get_constraintdef(con.oid, true), ' | ' ORDER BY con.oid) " +
+			"COALESCE((SELECT string_agg(pg_get_constraintdef(con.oid, true), ' | ' ORDER BY con.conname) " +
 			"FROM pg_constraint con WHERE con.conrelid = c.oid), '')" +
 			" FROM pg_class c WHERE c.oid = $1"
 		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&spec); err != nil {

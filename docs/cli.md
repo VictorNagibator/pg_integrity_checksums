@@ -460,7 +460,15 @@ Rules:
 - OIDs are never stored; identity is schema-qualified names.
 - `schema_hash` is a SHA-256 of the portable object definition (columns,
   constraints, partition key, reloptions and index definition). It lets
-  verify/diff report `schema_changed` separately from a data change.
+  verify/diff report `schema_changed` separately from a data change.  It is
+  computed with `search_path = pg_catalog` and `quote_all_identifiers = off`
+  and with constraints ordered by name, so it does not depend on the
+  connection's settings and survives a dump/restore.
+- `schema_hash_version` records how `schema_hash` was computed (absent means
+  1, the scheme of earlier CLI versions, which depended on `search_path` and on constraint
+  creation order).  Hashes of different versions are not compared: verify and
+  diff then report data changes only and print a warning; `update --yes`
+  re-captures the baseline with current hashes.
 - `stats` is table-only change-detection data from `pg_stat_all_tables` plus
   `relfilenode`; it is used only by `--changed-since`.
 - Objects are sorted by `kind`, `schema`, `name`.
@@ -539,6 +547,13 @@ baseline checksum when all of the following are true:
 The statistics counters are a heuristic: a reset, overflow or missing stats row
 forces a full checksum. Use a normal verify when exactness matters. Physical
 baselines do not support `--changed-since`.
+
+The counters are read just before the snapshot transaction starts, so the
+counters stored with a checksum never include a change that the checksum
+does not.  PostgreSQL publishes the counters with a short delay (about a
+second on PostgreSQL 15 and later), so a change committed in the last moments
+before a `--changed-since` verify may only be noticed by the next one; it is
+never missed for good.
 
 On a standby (`pg_is_in_recovery()`), `--changed-since` is ignored with a
 warning and every object is checksummed: WAL replay does not update the table

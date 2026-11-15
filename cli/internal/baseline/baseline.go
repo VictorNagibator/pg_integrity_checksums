@@ -44,6 +44,14 @@ const (
 	ObjectTable = "table"
 	// ObjectIndex covers indexes, including partitioned parent indexes.
 	ObjectIndex = "index"
+
+	// SchemaHashVersion identifies how schema_hash values are computed.
+	// Version 1 (recorded as an absent field) depended on the session's
+	// search_path and quote_all_identifiers and on constraint OID order, so
+	// it changed after a dump/restore. Version 2 is computed with fixed
+	// settings and constraints ordered by name. Hashes of different versions
+	// are not comparable.
+	SchemaHashVersion = 2
 )
 
 // checksumRE keeps checksums as strings in JSON (bigint values are not safe
@@ -115,6 +123,10 @@ type Baseline struct {
 	// baselines leave these fields empty.
 	SystemIdentifier string `json:"system_identifier,omitempty"`
 	DatabaseOID      int64  `json:"database_oid,omitempty"`
+
+	// SchemaHashVersion is the SchemaHashVersion the objects' schema_hash
+	// values were computed with; 0 (absent) means version 1.
+	SchemaHashVersion int `json:"schema_hash_version,omitempty"`
 
 	Scope   Scope    `json:"scope"`
 	Objects []Object `json:"objects"`
@@ -285,6 +297,10 @@ func (b *Baseline) Validate() error {
 	if b.Kind == KindPhysical && b.SystemIdentifier == "" {
 		return errors.New("physical baseline has no system_identifier")
 	}
+	if b.SchemaHashVersion < 0 || b.SchemaHashVersion > SchemaHashVersion {
+		return fmt.Errorf("unsupported schema_hash_version %d (this tool supports up to %d)",
+			b.SchemaHashVersion, SchemaHashVersion)
+	}
 	if b.Kind == KindPhysical && b.DatabaseOID <= 0 {
 		return errors.New("physical baseline has no database_oid")
 	}
@@ -428,4 +444,42 @@ func Save(path string, b *Baseline, stdout io.Writer) error {
 		return os.Rename(tmpName, path)
 	}
 	return nil
+}
+
+// EffectiveSchemaHashVersion maps the absent field of older baselines to 1.
+func (b *Baseline) EffectiveSchemaHashVersion() int {
+	if b.SchemaHashVersion == 0 {
+		return 1
+	}
+	return b.SchemaHashVersion
+}
+
+// SchemaHashesComparable reports whether the schema_hash values of two
+// baselines were computed the same way.
+func SchemaHashesComparable(a, b *Baseline) bool {
+	return a.EffectiveSchemaHashVersion() == b.EffectiveSchemaHashVersion()
+}
+
+// CompareBaselines is Compare for two whole baselines. When their schema
+// hashes were computed differently, the hashes are ignored (as Compare
+// already does for objects without one) and comparable is false, so the
+// caller can tell the user that schema changes were not checked.
+func CompareBaselines(oldB, newB *Baseline) (changes []Change, summary Summary, comparable bool) {
+	comparable = SchemaHashesComparable(oldB, newB)
+	if comparable {
+		changes, summary = Compare(oldB.Objects, newB.Objects)
+		return changes, summary, true
+	}
+	changes, summary = Compare(withoutSchemaHashes(oldB.Objects), withoutSchemaHashes(newB.Objects))
+	return changes, summary, false
+}
+
+// withoutSchemaHashes returns a copy of objects with SchemaHash cleared.
+func withoutSchemaHashes(objects []Object) []Object {
+	out := make([]Object, len(objects))
+	copy(out, objects)
+	for i := range out {
+		out[i].SchemaHash = ""
+	}
+	return out
 }

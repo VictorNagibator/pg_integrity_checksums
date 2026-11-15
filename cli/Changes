@@ -2,6 +2,23 @@ Revision history for pg_integrity_checksums CLI
 
 Unreleased
 
+    - Fix: schema_hash changed after a dump/restore, so verify reported
+      schema_changed for a correctly restored database.  Constraints were
+      hashed in OID order, which a restore does not reproduce; they are now
+      ordered by name.  The hash also depended on the connection's
+      search_path and quote_all_identifiers, which change how format_type(),
+      pg_get_expr() and pg_get_constraintdef() spell names; they are now
+      pinned to pg_catalog and off while the hashes are computed.  Baselines
+      record schema_hash_version 2.  Hashes of older baselines are not
+      comparable: verify and diff compare data only and print a warning until
+      the baseline is re-captured (update --yes).
+    - Fix: verify --changed-since could reuse a stale checksum forever.  The
+      table statistics were read inside the snapshot transaction, after its
+      snapshot, so a change committed in between was counted but not
+      checksummed, and later runs saw unchanged counters.  The statistics are
+      now read before the snapshot is taken: a change in between only forces
+      a recomputation on the next run.
+
     - verify --changed-since is ignored on a standby, with a warning, and
       every object is checksummed.  WAL replay does not update the table
       statistics the shortcut relies on.  They are normally zero on a

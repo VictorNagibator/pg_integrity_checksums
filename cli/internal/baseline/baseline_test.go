@@ -128,6 +128,8 @@ func TestValidateRejectsBadDocuments(t *testing.T) {
 		{"checksum", func(b *Baseline) { b.Objects[0].Checksum = "x" }},
 		{"index-table", func(b *Baseline) { b.Objects[0].TableName = "" }},
 		{"physical-system", func(b *Baseline) { b.Kind = KindPhysical }},
+		{"schema-hash-version-future", func(b *Baseline) { b.SchemaHashVersion = SchemaHashVersion + 1 }},
+		{"schema-hash-version-negative", func(b *Baseline) { b.SchemaHashVersion = -1 }},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -253,5 +255,50 @@ func TestValidateRejectsBadV2Hash(t *testing.T) {
 	b.Hash = "sha256"
 	if err := b.Validate(); err == nil {
 		t.Fatal("expected invalid hash error")
+	}
+}
+
+func TestCompareBaselinesSchemaHashVersions(t *testing.T) {
+	hashA := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	hashB := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	mk := func(version int, hash, checksum string) *Baseline {
+		b := New("0.1.0", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{{
+			Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK,
+			Checksum: checksum, SchemaHash: hash,
+		}})
+		b.SchemaHashVersion = version
+		return b
+	}
+
+	// Same version: a different hash is a schema change.
+	_, summary, comparable := CompareBaselines(mk(2, hashA, "1"), mk(2, hashB, "1"))
+	if !comparable || summary.SchemaChanged != 1 {
+		t.Fatalf("same version: comparable=%v summary=%#v", comparable, summary)
+	}
+
+	// An old baseline (absent field = version 1) against a version 2 one:
+	// the hashes are not comparable and must not be reported as a schema
+	// change, but data changes still are.
+	changes, summary, comparable := CompareBaselines(mk(0, hashA, "1"), mk(2, hashB, "1"))
+	if comparable || summary.SchemaChanged != 0 || summary.OK != 1 {
+		t.Fatalf("old vs new: comparable=%v summary=%#v", comparable, summary)
+	}
+	if changes[0].Status != "ok" {
+		t.Fatalf("bad status %q", changes[0].Status)
+	}
+	_, summary, _ = CompareBaselines(mk(0, hashA, "1"), mk(2, hashB, "2"))
+	if summary.Changed != 1 {
+		t.Fatalf("data change not reported across versions: %#v", summary)
+	}
+
+	// CompareBaselines must not modify the baselines it was given.
+	old := mk(0, hashA, "1")
+	CompareBaselines(old, mk(2, hashB, "1"))
+	if old.Objects[0].SchemaHash != hashA {
+		t.Fatal("CompareBaselines cleared the caller's schema hash")
+	}
+
+	if mk(0, hashA, "1").EffectiveSchemaHashVersion() != 1 {
+		t.Fatal("absent schema_hash_version must mean 1")
 	}
 }

@@ -36,7 +36,7 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
-| Next release | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); table and index logical checksums do not change | Recompute stored database logical checksums |
+| 2.7 | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); physical checksums of mapped catalogs (`pg_class`, `pg_type`, `pg_proc`, `pg_attribute`, shared catalogs) and of indexes with metapages or non-B-tree page layouts, and the database physical checksums that include them; table and index logical checksums do not change | Recompute stored database logical checksums; re-capture physical baselines |
 | 2.6 | Physical checksums of indexes and TOAST relations | Re-capture physical baselines (`capture --kind physical`) |
 | 2.4 | Logical checksums of tables with dropped columns or composite types with dropped attributes; user types when the baseline was taken with a non-default `search_path`; physical tuple and table checksums with `include_header = true` | Recompute the affected values and compare; recreate baselines that differ |
 | 2.1 | Logical checksums on big-endian systems only (now equal to little-endian) | Recreate logical baselines taken on big-endian servers |
@@ -47,6 +47,46 @@ contains do not change.  Releases not listed here kept every value.
 The complete history is in
 [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 These notes cover what to check when upgrading.
+
+### 2.7
+
+2.7 is a fix and security release; it also makes logical checksums 2-5x
+faster without changing their values.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.7.0';
+```
+
+The upgrade script changes no SQL objects; everything is in the C library, so
+reconnect clients after installing the package.
+
+What changes:
+
+- **`pg_database_logical_checksum` values change for every database.**  The
+  per-relation checksums are now combined with each relation's qualified name,
+  so moving rows between two tables of the same structure changes the result.
+  Renaming a relation or moving it to another schema now changes it as well.
+  Table and index logical checksums, and therefore logical CLI baselines, do
+  not change.
+- **Some physical checksums change.**  Mapped catalogs are read through their
+  actual file number, and the LP_DEAD masking of index pages is limited to
+  pages that hold index tuples.  Re-capture physical baselines
+  (`pg_integrity_checksums capture --kind physical`) after the upgrade.
+- **Security.**  Tuple and cell checksums return `NULL` for a tuple the query
+  cannot see (deleted, old or uncommitted versions) instead of a checksum of
+  its data, and `pg_tuple_physical_checksum` returns `NULL` instead of `0` for
+  a TID without a tuple.  Index expressions and partial-index predicates are
+  evaluated as the table owner in a security-restricted operation, as
+  `REINDEX` does, so a user who can create an index can no longer run SQL as
+  the role computing a checksum.
+- In `SERIALIZABLE` transactions the checksum functions now take predicate
+  locks like a sequential scan, so write skew through a checksum is detected.
+- A relation dropped while a database checksum runs is left out with a
+  `NOTICE` instead of failing the whole check, in strict mode too.
+
+The CLI 0.5 that ships alongside records `schema_hash_version 2` in new
+baselines: re-capture baselines (`update --yes`) to compare the schema again;
+until then `verify` compares data only and warns.
 
 ### 2.6
 

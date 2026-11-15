@@ -124,6 +124,9 @@ jobs:
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
         with:
           files: coverage.info
+          # Upload only the filtered report: without this the action also
+          # runs gcov itself and picks up PostgreSQL headers.
+          disable_search: true
           flags: extension
           name: extension-pg${{ matrix.pg }}
           fail_ci_if_error: false

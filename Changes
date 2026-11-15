@@ -2,6 +2,22 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: logical index checksums with pg_integrity_checksums.workers > 0
+      evaluated index expressions and partial-index predicates in parallel
+      mode even when they called functions that are not PARALLEL SAFE (the
+      default for user-defined functions), which fails or misbehaves (for
+      example "cannot be set during a parallel operation").  Such indexes
+      are now computed without workers; a parallel database checksum
+      computes them in the leader after the parallel part.  Values do not
+      change.
+    - Fix: a relation dropped while a database checksum was running made the
+      checksum fail with "could not open relation with OID", and in strict
+      mode (the default) aborted it, so a routine DROP TABLE in a busy
+      database made scheduled checks fail at random.  Each relation is now
+      locked and looked up before it is read; one that no longer exists is
+      left out with a NOTICE, in strict mode too, since it is no longer part
+      of the database.
+
     - Security: logical index checksums (pg_index_logical_checksum and
       pg_database_logical_checksum with include_indexes, the default)
       evaluated index expressions and partial-index predicates with the

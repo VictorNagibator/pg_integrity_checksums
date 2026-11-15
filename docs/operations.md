@@ -79,6 +79,14 @@ self-balancing atomic counter, and the partial results are combined by the
 leader.  Logical index checksums parallelize the heap scan and evaluate the
 index definition in each worker.
 
+An index whose expressions or partial-index predicate call a function that is
+not `PARALLEL SAFE` (a user-defined function is `PARALLEL UNSAFE` unless
+declared otherwise) cannot be evaluated in parallel mode.  Its logical
+checksum is then computed without workers, and a parallel database checksum
+computes such indexes in the leader after the parallel part.  The values are
+the same either way; mark the functions `PARALLEL SAFE` where that is true to
+let them use workers.
+
 ### Configuration
 
 The degree of parallelism is controlled by the `pg_integrity_checksums.workers` GUC:
@@ -126,7 +134,7 @@ otherwise look like "nothing changed".
 | Invalid index, **physical** checksum | included (its pages can still be read) | included |
 | Index with an access method that has no physical checksum (for example a third-party AM) | error: `relation "..." cannot be checksummed` | skipped, counted in the summary `WARNING` |
 | Corrupt page, unreadable file | the original error, with a `CONTEXT` line naming the relation | skipped, `WARNING` per relation plus the summary `WARNING` |
-| Relation dropped while the scan runs | error | skipped with a `WARNING` |
+| Relation dropped while the scan runs | left out with a `NOTICE` (it is no longer part of the database) | left out with a `NOTICE` |
 | Unlogged table on a standby (it has no data there) | error naming the table | skipped with a `WARNING` |
 | Query cancellation, `statement_timeout`, out of memory, shutdown | always propagated | always propagated |
 

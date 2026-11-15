@@ -110,12 +110,20 @@ Requires `SELECT` on the relation.  An invalid TID, a TID without a tuple and
 a tuple that is not visible return NULL; a corrupted line pointer or tuple
 header raises a clean `DATA_CORRUPTED` error.
 
+The checksum includes the tuple's `xmin`, `xmax` and command id even when the
+header is not requested, so a row lock (`SELECT ... FOR UPDATE`/`FOR SHARE`,
+or the `FOR KEY SHARE` lock a foreign key check takes on the referenced row)
+and a rolled-back `UPDATE` or `DELETE` change it although the row's data did
+not change.  The boolean argument adds the whole tuple header (`t_ctid`, the
+infomask bits other than hint bits, `t_hoff`, the null bitmap).  Use
+`pg_tuple_logical_checksum` to detect changes of the data itself.
+
 ```sql
 -- Physical checksum without header
 SELECT pg_tuple_physical_checksum('orders'::regclass, ctid, false) 
 FROM orders WHERE order_id = 123;
 
--- Physical checksum with header (includes MVCC info)
+-- Physical checksum with the rest of the tuple header
 SELECT pg_tuple_physical_checksum('orders'::regclass, ctid, true) 
 FROM orders WHERE order_id = 123;
 ```
@@ -137,7 +145,9 @@ FROM customers WHERE customer_id = 456;
 
 **`pg_table_physical_checksum(regclass, boolean) -> bigint`**
 
-Aggregates physical tuple checksums for entire table (order-independent).
+Aggregates physical tuple checksums for entire table (order-independent).  Like
+the tuple checksums, it changes when rows are locked (see
+[Physical checksums](concepts.md#physical-checksums)).
 Requires `SELECT` on the table.  The function accepts ordinary tables,
 materialized views, partitioned tables and (for physical checksums) TOAST
 relations.  A TOAST relation is checksummed page by page, with hint bits,

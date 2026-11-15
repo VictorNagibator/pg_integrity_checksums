@@ -62,7 +62,25 @@ storage identity.  It changes after:
 - `VACUUM FULL`, `CLUSTER` or a table rewrite;
 - `REINDEX`;
 - moving a tuple to another block or offset;
-- changing the relation’s relfilenode or tablespace.
+- changing the relation’s relfilenode or tablespace;
+- locking a row, although its data did not change (see below).
+
+Table and tuple physical checksums include each tuple's `xmin`, `xmax` and
+command id, whether or not the tuple header is requested.  A row lock is
+stored in `xmax`, so these statements change the physical checksum of the
+rows they touch without changing any data:
+
+- `SELECT ... FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and
+  `FOR KEY SHARE`;
+- foreign key checks: inserting or updating a referencing row takes
+  `FOR KEY SHARE` on the referenced row, so writes to a child table change
+  the physical checksum of the parent;
+- an `UPDATE` or `DELETE` that was rolled back: its `xmax` stays on the row
+  until the row is updated again or frozen.
+
+`VACUUM` clears such an `xmax` when it freezes the row, which can change the
+physical checksum back.  Logical checksums are not affected by any of this.
+Index physical checksums are not either: index pages do not store `xmax`.
 
 Use physical checksums to detect on-disk corruption or to confirm that a
 maintenance operation changed exactly what you expected.  Do **not** compare

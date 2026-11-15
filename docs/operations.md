@@ -25,8 +25,10 @@ These limitations are documented rather than silently ignored.
   checksums depend on tuple locations, MVCC fields, tuple bytes and the
   relation's relfilenode/reltablespace; index physical checksums hash the
   index pages (with the page LSN, the stored page checksum and hint bits
-  masked out).  Use physical checksums for on-disk corruption within one
-  cluster, not for comparing replicas.
+  masked out).  Tuple and table physical checksums also change when a row is
+  locked (`SELECT ... FOR UPDATE`/`FOR SHARE`, foreign key checks), because
+  the lock is stored in the tuple's `xmax`.  Use physical checksums for
+  on-disk corruption within one cluster, not for comparing replicas.
 * **Text values depend on the client encoding.** The text types (`text`,
   `varchar`, `char(n)`, `name`) are hashed in the form their send function
   returns, which is converted to the session's `client_encoding`.  When it

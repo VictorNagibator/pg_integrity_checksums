@@ -45,4 +45,21 @@ SELECT pg_tuple_logical_checksum('vis_t', '(0,3)') IS NOT NULL AS rolled_back_de
        pg_tuple_logical_checksum('vis_t', '(0,4)') IS NULL AS aborted_insert_null,
        pg_tuple_physical_checksum('vis_t', '(0,4)') IS NULL AS aborted_insert_physical_null;
 
+-- A row lock is stored in xmax: it changes the physical checksums of the row
+-- and the table (documented) but not the logical ones.
+CREATE TEMP TABLE vis_before AS
+SELECT pg_tuple_physical_checksum('vis_t', '(0,3)', false) AS tuple_physical,
+       pg_table_physical_checksum('vis_t', false) AS table_physical,
+       pg_tuple_logical_checksum('vis_t', '(0,3)') AS tuple_logical,
+       pg_table_logical_checksum('vis_t') AS table_logical;
+BEGIN;
+SELECT id FROM vis_t WHERE id = 2 FOR KEY SHARE;
+COMMIT;
+SELECT b.tuple_physical <> pg_tuple_physical_checksum('vis_t', '(0,3)', false) AS lock_changes_tuple_physical,
+       b.table_physical <> pg_table_physical_checksum('vis_t', false) AS lock_changes_table_physical,
+       b.tuple_logical = pg_tuple_logical_checksum('vis_t', '(0,3)') AS lock_keeps_tuple_logical,
+       b.table_logical = pg_table_logical_checksum('vis_t') AS lock_keeps_table_logical
+FROM vis_before b;
+DROP TABLE vis_before;
+
 DROP TABLE vis_t;

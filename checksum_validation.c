@@ -248,6 +248,80 @@ pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
 }
 
 /*
+ * mask_line_pointer_hints - clear LP_DEAD hints on an index page with items
+ *
+ * In an index, LP_DEAD only says "known dead to everyone"; the tuple stays
+ * in place until a cleanup removes it.  (In a heap, LP_DEAD is a pruning
+ * result and is real state.)
+ */
+static void
+mask_line_pointer_hints(Page page)
+{
+    OffsetNumber maxoff = PageGetMaxOffsetNumber(page);
+    OffsetNumber offnum;
+
+    for (offnum = FirstOffsetNumber; offnum <= maxoff;
+         offnum = OffsetNumberNext(offnum))
+    {
+        ItemId      lp = PageGetItemId(page, offnum);
+
+        if (ItemIdIsDead(lp) && ItemIdHasStorage(lp))
+            lp->lp_flags = LP_NORMAL;
+    }
+}
+
+/*
+ * mask_index_hints - clear the hints index scans set on an index page
+ *
+ * Only B-tree, hash and GiST indexes set hints under a share lock: LP_DEAD
+ * on line pointers and a "page has garbage" flag in the special space.  The
+ * line pointers are only touched on pages that hold index tuples.  Other
+ * pages (metapages, B-tree deleted pages, hash bitmap pages, GiST deleted
+ * pages) keep their content between the page header and pd_lower, and every
+ * page of other access methods is left as is (GIN posting tree pages, BRIN
+ * revmap pages and others are not arrays of line pointers): reading that
+ * content as line pointers and clearing bits in it hid real changes from the
+ * checksum.
+ */
+static void
+mask_index_hints(Page page, Oid relam)
+{
+    Size        special_size = PageGetSpecialSize(page);
+
+    if (relam == BTREE_AM_OID &&
+        special_size == MAXALIGN(sizeof(BTPageOpaqueData)))
+    {
+        BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer(page);
+
+        if ((opaque->btpo_flags & (BTP_META | BTP_DELETED)) != 0)
+            return;
+        mask_line_pointer_hints(page);
+        opaque->btpo_flags &= ~BTP_HAS_GARBAGE;
+    }
+    else if (relam == HASH_AM_OID &&
+             special_size == MAXALIGN(sizeof(HashPageOpaqueData)))
+    {
+        HashPageOpaque opaque = (HashPageOpaque) PageGetSpecialPointer(page);
+        uint16      page_type = opaque->hasho_flag & LH_PAGE_TYPE;
+
+        if (page_type != LH_BUCKET_PAGE && page_type != LH_OVERFLOW_PAGE)
+            return;
+        mask_line_pointer_hints(page);
+        opaque->hasho_flag &= ~LH_PAGE_HAS_DEAD_TUPLES;
+    }
+    else if (relam == GIST_AM_OID &&
+             special_size == MAXALIGN(sizeof(GISTPageOpaqueData)))
+    {
+        GISTPageOpaque opaque = (GISTPageOpaque) PageGetSpecialPointer(page);
+
+        if ((opaque->flags & F_DELETED) != 0)
+            return;
+        mask_line_pointer_hints(page);
+        opaque->flags &= ~F_HAS_GARBAGE;
+    }
+}
+
+/*
  * pg_integrity_checksums_mask_page - copy a page without its unstable state
  *
  * A page in shared buffers carries state that changes although nothing about
@@ -260,8 +334,8 @@ pg_integrity_checksums_check_heap_tuple(Relation rel, BlockNumber blkno,
  * - pd_lsn moves when setting a hint bit emits a full-page image;
  * - pd_prune_xid and the pd_flags hint bits are set and cleared
  *   opportunistically;
- * - index scans mark line pointers LP_DEAD and set "page has garbage" flags
- *   (B-tree, hash, GiST) under a share lock, as hints;
+ * - B-tree, hash and GiST index scans mark line pointers LP_DEAD and set
+ *   "page has garbage" flags under a share lock, as hints;
  * - heap (TOAST) tuples get their infomask hint bits set by readers.
  *
  * Copy BLCKSZ bytes of "page" into "dst" and clear that state in the copy.
@@ -290,6 +364,12 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
     if (!pg_integrity_checksums_page_header_sane(page))
         return;
 
+    if (kind == CHECKSUM_PAGE_INDEX)
+    {
+        mask_index_hints((Page) dst, relam);
+        return;
+    }
+
     maxoff = PageGetMaxOffsetNumber((Page) dst);
 
     for (offnum = FirstOffsetNumber; offnum <= maxoff;
@@ -297,50 +377,14 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
     {
         ItemId      lp = PageGetItemId((Page) dst, offnum);
 
-        if (kind == CHECKSUM_PAGE_INDEX)
-        {
-            /*
-             * In an index, LP_DEAD only says "known dead to everyone"; the
-             * tuple stays in place until a cleanup removes it.  (In a heap,
-             * LP_DEAD is a pruning result and is real state.)
-             */
-            if (ItemIdIsDead(lp) && ItemIdHasStorage(lp))
-                lp->lp_flags = LP_NORMAL;
-        }
-        else if (ItemIdIsNormal(lp) &&
-                 pg_integrity_checksums_item_is_sane((Page) dst, lp) &&
-                 ItemIdGetLength(lp) >= SizeofHeapTupleHeader)
+        if (ItemIdIsNormal(lp) &&
+            pg_integrity_checksums_item_is_sane((Page) dst, lp) &&
+            ItemIdGetLength(lp) >= SizeofHeapTupleHeader)
         {
             HeapTupleHeader htup = (HeapTupleHeader) PageGetItem((Page) dst, lp);
 
             htup->t_infomask &= ~HEAP_HINT_BITS;
         }
-    }
-
-    if (kind != CHECKSUM_PAGE_INDEX)
-        return;
-
-    /* Access-method "page has garbage" hints live in the special space. */
-    if (relam == BTREE_AM_OID &&
-        PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(BTPageOpaqueData)))
-    {
-        BTPageOpaque opaque = (BTPageOpaque) PageGetSpecialPointer((Page) dst);
-
-        opaque->btpo_flags &= ~BTP_HAS_GARBAGE;
-    }
-    else if (relam == HASH_AM_OID &&
-             PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(HashPageOpaqueData)))
-    {
-        HashPageOpaque opaque = (HashPageOpaque) PageGetSpecialPointer((Page) dst);
-
-        opaque->hasho_flag &= ~LH_PAGE_HAS_DEAD_TUPLES;
-    }
-    else if (relam == GIST_AM_OID &&
-             PageGetSpecialSize((Page) dst) == MAXALIGN(sizeof(GISTPageOpaqueData)))
-    {
-        GISTPageOpaque opaque = (GISTPageOpaque) PageGetSpecialPointer((Page) dst);
-
-        opaque->flags &= ~F_HAS_GARBAGE;
     }
 }
 

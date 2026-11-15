@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.7.0   2026-11-15
 
     - Fix: the logical database checksum summed the per-relation checksums
       without the identity of the relations, so moving rows between two

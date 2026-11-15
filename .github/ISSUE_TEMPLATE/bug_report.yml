@@ -74,7 +74,7 @@ body:
     attributes:
       label: Extension version
       description: "`SELECT extversion FROM pg_extension WHERE extname = 'pg_integrity_checksums';`"
-      placeholder: "2.6.0"
+      placeholder: "2.7.0"
 
   - type: input
     id: cli-version

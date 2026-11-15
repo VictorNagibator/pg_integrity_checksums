@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums CLI
 
-Unreleased
+0.5.0   2026-11-15
 
     - verify and update check that the baseline matches the server
       (PostgreSQL major version, and for physical baselines the cluster and

@@ -54,6 +54,18 @@ $node_on->start;
 check_status($node_on, 'mismatch');
 $node_on->stop;
 
+# A corrupt header with pd_upper = 0 is not a new page: only an all-zero
+# block is.  PageIsNew() alone looks at pd_upper and reported "new".
+open($fh, '+<', $file) or die "open $file: $!";
+binmode $fh;
+sysseek($fh, 14, 0) or die "seek: $!";
+syswrite($fh, "\0\0") == 2 or die "write: $!";
+close($fh);
+
+$node_on->start;
+check_status($node_on, 'mismatch');
+$node_on->stop;
+
 my $node_off = PostgreSQL::Test::Cluster->new('page_checksum_off');
 my $pg_config_version = qx{pg_config --version};
 my ($pg_major) = $pg_config_version =~ /(\d+)/;

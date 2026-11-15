@@ -45,7 +45,24 @@ type Options struct {
 	ChangedOnly bool
 	Prior       map[string]baseline.Object
 	Reused      *int
+
+	// Precheck, when set, is called before any relation is checksummed with
+	// a baseline that has only the identity fields filled in (kind, hash,
+	// extension and PostgreSQL versions, database, cluster identity and
+	// database OID).  An error stops the snapshot and is returned wrapped in
+	// an IncompatibleError, so a baseline from the wrong server is refused
+	// without scanning the whole database first.
+	Precheck func(header *baseline.Baseline) error
 }
+
+// IncompatibleError is returned by Snapshot when Options.Precheck rejects
+// the server.
+type IncompatibleError struct {
+	Err error
+}
+
+func (e *IncompatibleError) Error() string { return e.Err.Error() }
+func (e *IncompatibleError) Unwrap() error { return e.Err }
 
 // Candidate is a relation discovered in pg_class before its checksum is
 // computed. OID is used only inside the transaction and never serialized.
@@ -196,6 +213,16 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 			"SELECT oid::bigint FROM pg_database WHERE datname = current_database()").
 			Scan(&databaseOID); err != nil {
 			return nil, fmt.Errorf("read database oid: %w", err)
+		}
+	}
+
+	if opts.Precheck != nil {
+		header := baseline.NewWithHash(opts.ToolVersion, opts.Kind, opts.Hash,
+			extVersion, postgresVersion, database, opts.Scope, nil)
+		header.SystemIdentifier = systemIdentifier
+		header.DatabaseOID = databaseOID
+		if err := opts.Precheck(header); err != nil {
+			return nil, &IncompatibleError{Err: err}
 		}
 	}
 

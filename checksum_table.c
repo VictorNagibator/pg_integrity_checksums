@@ -242,7 +242,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
             aggregate = 0x7FFFFFFF;
 
         aggregate = combine_checksums(aggregate,
-                                      (uint32) rel->rd_rel->relfilenode);
+                                      (uint32) pg_integrity_checksums_relfilenumber(rel));
         aggregate = combine_checksums(aggregate,
                                       (uint32) rel->rd_rel->reltablespace);
 
@@ -260,7 +260,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
      */
     relation_hash = fnv1a_32_hash(&reloid, sizeof(reloid), FNV_BASIS_32);
     relation_hash = combine_checksums(relation_hash,
-                                      (uint32) rel->rd_rel->relfilenode);
+                                      (uint32) pg_integrity_checksums_relfilenumber(rel));
     relation_hash = combine_checksums(relation_hash,
                                       (uint32) rel->rd_rel->reltablespace);
 
@@ -362,7 +362,7 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
         aggregate = checksum_accum64_finalize(&acc);
         aggregate = combine_checksums_64(aggregate, (uint64) reloid);
         aggregate = combine_checksums_64(aggregate,
-                                         (uint64) rel->rd_rel->relfilenode);
+                                         (uint64) pg_integrity_checksums_relfilenumber(rel));
         aggregate = combine_checksums_64(aggregate,
                                          (uint64) rel->rd_rel->reltablespace);
         relation_close(rel, AccessShareLock);
@@ -371,12 +371,14 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
 
     relation_hash = fnv1a_64_hash(&reloid, sizeof(reloid), FNV_BASIS_64);
     relation_hash = combine_checksums_64(relation_hash,
-                                         (uint64) rel->rd_rel->relfilenode);
+                                         (uint64) pg_integrity_checksums_relfilenumber(rel));
     relation_hash = combine_checksums_64(relation_hash,
                                          (uint64) rel->rd_rel->reltablespace);
 
     nblocks = RelationGetNumberOfBlocks(rel);
     workers = pg_integrity_checksums_worker_count();
+    if (nblocks < (BlockNumber) workers)
+        workers = (int) nblocks;
     if (workers < 1)
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
@@ -635,6 +637,8 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
 
         workers = pg_integrity_checksums_worker_count();
+        if (nblocks < (BlockNumber) workers)
+            workers = (int) nblocks;
         if (workers < 1)
         {
             Snapshot    snapshot = pg_integrity_checksums_get_snapshot();

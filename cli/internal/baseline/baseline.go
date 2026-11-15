@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -397,9 +398,6 @@ func Save(path string, b *Baseline, stdout io.Writer) error {
 	}
 
 	dir := filepath.Dir(path)
-	if dir == "." {
-		dir = "."
-	}
 	tmp, err := os.CreateTemp(dir, ".pgics-baseline-*")
 	if err != nil {
 		return err
@@ -443,7 +441,27 @@ func Save(path string, b *Baseline, stdout io.Writer) error {
 		}
 		return os.Rename(tmpName, path)
 	}
-	return nil
+	return syncDir(dir)
+}
+
+// syncDir makes a completed rename durable: until the directory entry is on
+// disk, a crash can leave the old baseline (or none) in place although Save
+// returned.  Directories cannot be fsynced on Windows; there it is a no-op.
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	syncErr := d.Sync()
+	closeErr := d.Close()
+	// Some file systems do not support fsync on a directory.
+	if syncErr != nil && !errors.Is(syncErr, syscall.EINVAL) {
+		return syncErr
+	}
+	return closeErr
 }
 
 // EffectiveSchemaHashVersion maps the absent field of older baselines to 1.

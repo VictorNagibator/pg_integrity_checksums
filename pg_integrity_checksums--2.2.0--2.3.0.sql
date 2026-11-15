@@ -2,7 +2,7 @@
 -- calculator for compatibility; the new function compares the calculated
 -- value with the checksum stored in the page header.
 
-CREATE OR REPLACE FUNCTION pg_page_checksum_status(relname regclass, blkno integer)
+CREATE FUNCTION pg_page_checksum_status(relname regclass, blkno integer)
 RETURNS text
 AS 'MODULE_PATHNAME', 'pg_page_checksum_status'
 LANGUAGE C STRICT;

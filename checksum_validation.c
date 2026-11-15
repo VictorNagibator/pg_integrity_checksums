@@ -187,6 +187,29 @@ pg_integrity_checksums_page_header_sane(Page page)
 }
 
 /*
+ * pg_integrity_checksums_page_is_zero - is the whole block zero?
+ *
+ * PageIsNew() only tests pd_upper == 0.  A page read through shared buffers
+ * that has pd_upper == 0 is all zeroes (PageIsVerified() rejects it
+ * otherwise), but a page read directly from disk may be a corrupt page whose
+ * header happens to have pd_upper == 0.  Such a page must not be reported
+ * as new, as PageIsVerified() and pg_basebackup do.
+ */
+bool
+pg_integrity_checksums_page_is_zero(const char *page)
+{
+    const size_t *words = (const size_t *) page;
+    Size        i;
+
+    for (i = 0; i < BLCKSZ / sizeof(size_t); i++)
+    {
+        if (words[i] != 0)
+            return false;
+    }
+    return true;
+}
+
+/*
  * pg_integrity_checksums_check_page - raise a clean error for an insane page header
  */
 void

@@ -392,14 +392,12 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		Warning: func(msg string) {
 			fmt.Fprintln(stderr, "warning: "+msg)
 		},
+		Precheck: func(header *baseline.Baseline) error {
+			return checkCompatibility(oldB, header, *allowVersion)
+		},
 	})
 	if err != nil {
-		return commandError(stderr, err)
-	}
-
-	if err := checkCompatibility(oldB, curB, *allowVersion); err != nil {
-		fmt.Fprintf(stderr, "error: incompatible baseline: %v\n", err)
-		return 3
+		return snapshotError(stderr, err)
 	}
 	if *changedSince && !*quiet {
 		fmt.Fprintf(stderr, "changed-since: reused %d objects, checksummed %d\n", reused, len(curB.Objects)-reused)
@@ -444,9 +442,23 @@ func warnSchemaHashVersion(stderr io.Writer, remedy string) {
 		"Refresh with %s.\n", remedy)
 }
 
+// snapshotError reports a failed snapshot.  A baseline that does not match
+// the server (see checkCompatibility) exits with 3, like an invalid baseline;
+// other errors exit with the usual command error code.
+func snapshotError(stderr io.Writer, err error) int {
+	var incompatible *pgdb.IncompatibleError
+	if errors.As(err, &incompatible) {
+		fmt.Fprintf(stderr, "error: incompatible baseline: %v\n", incompatible.Err)
+		return 3
+	}
+	return commandError(stderr, err)
+}
+
 // checkCompatibility refuses comparisons that cannot be meaningful:
 // different checksum kinds, a different PostgreSQL major by default, and a
-// physical baseline from another cluster or database.
+// physical baseline from another cluster or database.  It runs as the
+// snapshot's Precheck, before any relation is checksummed, so curB carries
+// only the identity fields.
 func checkCompatibility(oldB, curB *baseline.Baseline, allowVersion bool) error {
 	if oldB.Kind != curB.Kind {
 		return fmt.Errorf("baseline kind %q, current kind %q", oldB.Kind, curB.Kind)
@@ -804,13 +816,12 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		Workers:     *workers,
 		Timeout:     *timeout,
 		Progress:    progress(*quiet, stderr),
+		Precheck: func(header *baseline.Baseline) error {
+			return checkCompatibility(oldB, header, false)
+		},
 	})
 	if err != nil {
-		return commandError(stderr, err)
-	}
-	if err := checkCompatibility(oldB, newB, false); err != nil {
-		fmt.Fprintf(stderr, "error: incompatible baseline: %v\n", err)
-		return 3
+		return snapshotError(stderr, err)
 	}
 	// The baseline is about to be replaced by one with current schema
 	// hashes, so a version difference needs no warning here.

@@ -2,6 +2,13 @@ Revision history for pg_integrity_checksums CLI
 
 Unreleased
 
+    - verify and update check that the baseline matches the server
+      (PostgreSQL major version, and for physical baselines the cluster and
+      database) before checksumming anything, instead of after scanning the
+      whole database.  The exit code (3) is unchanged.
+    - Saving a baseline fsyncs the directory after the rename, so a crash
+      right after a successful save cannot bring back the old file.
+
     - Fix: schema_hash changed after a dump/restore, so verify reported
       schema_changed for a correctly restored database.  Constraints were
       hashed in OID order, which a restore does not reproduce; they are now

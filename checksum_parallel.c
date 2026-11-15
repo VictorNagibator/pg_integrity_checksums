@@ -419,10 +419,6 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
     if (needs_snapshot)
     {
         snapshot = pg_integrity_checksums_get_snapshot();
-        if (snapshot == NULL)
-            ereport(ERROR,
-                    (errcode(ERRCODE_INTERNAL_ERROR),
-                     errmsg("no active snapshot while starting a parallel checksum scan")));
         snapshot_size = (uint32) EstimateSnapshotSpace(snapshot);
     }
 
@@ -548,10 +544,6 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
      * path.
      */
     snapshot = pg_integrity_checksums_get_snapshot();
-    if (snapshot == NULL)
-        ereport(ERROR,
-                (errcode(ERRCODE_INTERNAL_ERROR),
-                 errmsg("no active snapshot while starting a parallel database checksum")));
     snapshot_size = (uint32) EstimateSnapshotSpace(snapshot);
 
     EnterParallelMode();

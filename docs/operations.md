@@ -255,6 +255,14 @@ The CLI already does this for capture and verify.  A long repeatable-read
 transaction keeps an `xmin` horizon and can delay `VACUUM`; keep checksum
 transactions as short as the workload allows and monitor long-running sessions.
 
+In a `SERIALIZABLE` transaction a checksum is a read like any other: a table,
+index or database checksum takes a relation-level SIREAD lock on every table
+it reads (as a sequential scan does), and a tuple or cell checksum takes a
+page-level one.  A concurrent write to what the checksum read can therefore
+make one of the transactions fail with a serialization error, which the
+application retries as usual.  A `READ ONLY DEFERRABLE` transaction avoids
+this.
+
 ---
 
 ## Practical Applications

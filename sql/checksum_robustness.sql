@@ -77,3 +77,13 @@ RESET pg_integrity_checksums.workers;
 
 DROP TABLE rob_trap;
 DROP FUNCTION rob_dropper(int);
+
+-- Mapped catalogs have pg_class.relfilenode = 0; their file number lives in
+-- the relation map.  Physical checksums must still change when such a
+-- catalog is rewritten.  The first VACUUM FULL removes dead tuples, so the
+-- second one keeps every tuple in place and only changes the file.
+VACUUM FULL pg_type;
+-- (\gset rather than a temp table: creating one would add rows to pg_type.)
+SELECT pg_table_physical_checksum('pg_type', false) AS mapped_before \gset
+VACUUM FULL pg_type;
+SELECT :mapped_before <> pg_table_physical_checksum('pg_type', false) AS mapped_rewrite_changes_physical;

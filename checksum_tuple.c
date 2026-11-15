@@ -12,6 +12,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
+#include "storage/predicate.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
@@ -155,7 +156,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     location_hash = combine_hash(location_hash,
                                      (uint64) RelationGetRelid(rel), algo);
     location_hash = combine_hash(location_hash,
-                                     (uint64) rel->rd_rel->relfilenode, algo);
+                                     (uint64) pg_integrity_checksums_relfilenumber(rel), algo);
     location_hash = combine_hash(location_hash,
                                      (uint64) rel->rd_rel->reltablespace, algo);
 
@@ -237,6 +238,8 @@ pg_integrity_checksums_fetch_visible_tuple(Relation rel, Buffer buffer,
     ItemId      lp;
     HeapTupleHeader htup;
     Size        len;
+    Snapshot    snapshot;
+    bool        valid;
 
     if (PageIsNew(page))
         return false;
@@ -265,9 +268,20 @@ pg_integrity_checksums_fetch_visible_tuple(Relation rel, Buffer buffer,
     tuple->t_tableOid = RelationGetRelid(rel);
     ItemPointerSet(&tuple->t_self, blkno, offnum);
 
-    return HeapTupleSatisfiesVisibility(tuple,
-                                        pg_integrity_checksums_get_snapshot(),
-                                        buffer);
+    snapshot = pg_integrity_checksums_get_snapshot();
+    valid = HeapTupleSatisfiesVisibility(tuple, snapshot, buffer);
+
+    /*
+     * In a SERIALIZABLE transaction, take a SIREAD lock and check for a
+     * conflict as heap_fetch() does.  The lock is page-level rather than on
+     * the TID: PredicateLockTID()'s signature differs between releases, and
+     * a coarser lock only adds false positives, never misses a conflict.
+     */
+    if (valid)
+        PredicateLockPage(rel, blkno, snapshot);
+    pg_integrity_checksums_serializable_conflict_out(valid, rel, tuple,
+                                                     buffer, snapshot);
+    return valid;
 }
 
 /*

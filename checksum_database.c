@@ -797,10 +797,6 @@ compute_database_checksum_internal(bool physical, bool include_system,
 
     /* Use a consistent snapshot */
     snapshot = pg_integrity_checksums_get_snapshot();
-    if (snapshot == NULL)
-        ereport(ERROR,
-                (errcode(ERRCODE_INTERNAL_ERROR),
-                 errmsg("no active snapshot while computing database checksum")));
 
     /* Collect the matching relations first. */
     items = (ChecksumRelationItem *) palloc(capacity * sizeof(ChecksumRelationItem));

@@ -123,7 +123,12 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
             smgrread(RelationGetSmgr(rel), MAIN_FORKNUM, (BlockNumber) blkno,
                      pagecopy);
 
-            if (PageIsNew((Page) pagecopy))
+            /*
+             * A new page is all zeroes.  pd_upper == 0 alone is a corrupt
+             * header and falls through to the checksum comparison.
+             */
+            if (PageIsNew((Page) pagecopy) &&
+                pg_integrity_checksums_page_is_zero(pagecopy))
             {
                 relation_close(rel, AccessShareLock);
                 *stored = 0;

@@ -130,12 +130,13 @@ files it tests change.
 | Workflow | When | What |
 |---|---|---|
 | CI | PRs, `main` | Regression and TAP tests on Linux x86_64 and arm64, macOS arm64, Windows x64 (MinGW), FreeBSD amd64 and arm64 |
-| Quality | PRs, `main` | Coverage (regression tests) and an ASAN/UBSAN build running every regression test except `checksum_parallel` |
+| Quality | PRs, `main` | Coverage (regression tests, uploaded to Codecov) and an ASAN/UBSAN build running every regression test except `checksum_parallel` |
 | CodeQL | PRs, `main`, weekly | Static analysis of the C and Go sources |
 | Big-endian | weekly, manual | Fixed logical baselines (arrays, ranges, multiranges, composites, enums, numeric, text) on s390x (QEMU, PostgreSQL 16) |
 | Release Metadata | PRs, `main` | Version in the control file, `META.json`, `Changes` and upgrade scripts agree |
 | Docs | PRs, `main` | `mkdocs build --strict`; deploys the site from `main` |
 | Workflow Lint | PRs, `main` | `actionlint` on the workflows |
+| Scorecard | `main`, weekly | OpenSSF Scorecard supply-chain checks, results in code scanning |
 | CLI | PRs, `main` | Go unit tests, `-race`, `go vet`, build, Codecov upload |
 | CLI Integration | PRs, `main` | CLI against a real server for each PostgreSQL version, plus the composite action |
 | CLI Docker | PRs, `main` | Builds and smoke-tests the CLI image |

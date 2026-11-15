@@ -1,13 +1,19 @@
 # pg_integrity_checksums - Multi-Level Data Integrity Extension for PostgreSQL
 
 [![CI](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/ci.yml)
-[![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
 [![Quality](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/quality.yml)
-[![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
-[![PostgreSQL 12-19](https://img.shields.io/badge/postgres-12--19-336791)](https://www.postgresql.org/)
+[![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
+[![codecov](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/VictorNagibator/pg_integrity_checksums/badge)](https://scorecard.dev/viewer/?uri=github.com/VictorNagibator/pg_integrity_checksums)
+
+[![Release](https://img.shields.io/github/v/release/VictorNagibator/pg_integrity_checksums?filter=v*&label=extension)](https://github.com/VictorNagibator/pg_integrity_checksums/releases/latest)
+[![CLI release](https://img.shields.io/github/v/release/VictorNagibator/pg_integrity_checksums?filter=cli-v*&label=cli)](https://github.com/VictorNagibator/pg_integrity_checksums/releases?q=cli-v)
+[![PGXN](https://img.shields.io/badge/PGXN-pg__integrity__checksums-0f5d8f)](https://pgxn.org/dist/pg_integrity_checksums/)
 [![PGEXT.CLOUD](https://img.shields.io/badge/PGEXT.CLOUD-packaged-6f42c1)](https://pgext.cloud/ext/pg_integrity_checksums)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
+[![PostgreSQL 12-19](https://img.shields.io/badge/PostgreSQL-12--19-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docs](https://img.shields.io/badge/docs-online-blue)](https://victornagibator.github.io/pg_integrity_checksums/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ## Overview
 

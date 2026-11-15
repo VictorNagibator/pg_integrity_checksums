@@ -1,0 +1,35 @@
+# https://editorconfig.org
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+# PostgreSQL C style: tabs, 4 columns wide.
+[*.{c,h}]
+indent_style = tab
+indent_size = 4
+
+[{Makefile,*.mk}]
+indent_style = tab
+
+[*.go]
+indent_style = tab
+
+[*.{yml,yaml,json,toml}]
+indent_style = space
+indent_size = 2
+
+[*.{md,sql,sh,pl,py}]
+indent_style = space
+indent_size = 4
+
+# Expected regression output must match byte for byte.
+[expected/*.out]
+trim_trailing_whitespace = false
+insert_final_newline = unset
+
+[*.md]
+trim_trailing_whitespace = false

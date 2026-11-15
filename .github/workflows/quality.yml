@@ -111,9 +111,25 @@ jobs:
       - name: Generate coverage report
         if: always()
         run: |
-          lcov --capture --directory . --output-file coverage.info || true
+          # Keep only the extension's own sources: drop PostgreSQL headers
+          # from the coverage build tree and system headers.
+          lcov --capture --directory . --output-file coverage-raw.info || true
+          lcov --remove coverage-raw.info '*/pgcov/*' '/usr/*' \
+            --ignore-errors unused --output-file coverage.info || true
           lcov --list coverage.info || true
           genhtml coverage.info --output-directory coverage-html || true
+
+      - name: Upload to Codecov
+        if: success()
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: coverage.info
+          # Upload only the filtered report: without this the action also
+          # runs gcov itself and picks up PostgreSQL headers.
+          disable_search: true
+          flags: extension
+          name: extension-pg${{ matrix.pg }}
+          fail_ci_if_error: false
 
       - name: Upload coverage HTML
         if: always()

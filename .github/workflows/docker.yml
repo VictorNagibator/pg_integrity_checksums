@@ -16,7 +16,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   group: docker-${{ github.ref }}
@@ -25,6 +24,9 @@ concurrency:
 jobs:
   build:
     name: Build PostgreSQL ${{ matrix.pg }} image
+    permissions:
+      contents: read
+      packages: write
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 45

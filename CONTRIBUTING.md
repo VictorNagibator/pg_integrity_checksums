@@ -67,7 +67,7 @@ Preview the documentation site at http://127.0.0.1:8000:
 
 ```bash
 python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements-docs.txt
+pip install --require-hashes -r requirements-docs.txt
 mkdocs serve        # CI runs: mkdocs build --strict
 ```
 

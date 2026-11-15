@@ -20,7 +20,7 @@ on:
       - 'v*'
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -29,6 +29,8 @@ concurrency:
 jobs:
   release:
     name: Package and publish
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
 

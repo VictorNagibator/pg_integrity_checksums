@@ -9,8 +9,6 @@ on:
 
 permissions:
   contents: read
-  packages: write
-  id-token: write
 
 concurrency:
   group: cli-container-${{ github.ref }}
@@ -19,6 +17,10 @@ concurrency:
 jobs:
   image:
     name: Build CLI image
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:

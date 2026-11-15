@@ -131,10 +131,11 @@ files it tests change.
 |---|---|---|
 | CI | PRs, `main` | Regression and TAP tests on Linux x86_64 and arm64, macOS arm64, Windows x64 (MinGW), FreeBSD amd64 and arm64 |
 | Quality | PRs, `main` | Coverage (regression tests, uploaded to Codecov) and an ASAN/UBSAN build running every regression test except `checksum_parallel` |
-| CodeQL | PRs, `main`, weekly | Static analysis of the C and Go sources |
+| CodeQL | every PR and `main` push, weekly | Static analysis of the C and Go sources |
 | Big-endian | weekly, manual | Fixed logical baselines (arrays, ranges, multiranges, composites, enums, numeric, text) on s390x (QEMU, PostgreSQL 16) |
 | Release Metadata | PRs, `main` | Version in the control file, `META.json`, `Changes` and upgrade scripts agree |
 | Docs | PRs, `main` | `mkdocs build --strict`; deploys the site from `main` |
+| CI Gate | every PR | Waits for all other checks on the PR and fails if any failed; the single required check |
 | Workflow Lint | PRs, `main` | `actionlint` on the workflows |
 | Scorecard | `main`, weekly | OpenSSF Scorecard supply-chain checks, results in code scanning |
 | CLI | PRs, `main` | Go unit tests, `-race`, `go vet`, build, Codecov upload |
@@ -145,9 +146,17 @@ files it tests change.
 | CLI Release | `cli-v*` tags | CLI binaries, `SHA256SUMS`, Sigstore bundle and SBOM |
 | CLI Container | `cli-v*` tags | Signed multi-arch CLI image on GHCR |
 
-Actions are pinned to commit SHAs.  Dependabot updates them (including the
-composite action in `cli/action.yml`), the Go modules, the CLI base image and
-the documentation dependencies.
+Most workflows only run when the files they test change, so a branch ruleset
+cannot require them by name: a pull request that does not start a required
+check waits for it forever.  Require only **CI Gate**, which runs on every pull
+request, waits for the checks that did start and fails if any of them failed.
+
+Actions are pinned to commit SHAs, the CLI image's base images to digests and
+the documentation dependencies to hashes (`requirements-docs.txt` is generated
+from `requirements-docs.in` with `pip-compile --generate-hashes`).  Workflows
+get a read-only token; write permissions are granted per job.  Dependabot
+updates the actions (including the composite action in `cli/action.yml`), the
+Go modules, the CLI base images and the documentation dependencies.
 
 ## Releasing
 

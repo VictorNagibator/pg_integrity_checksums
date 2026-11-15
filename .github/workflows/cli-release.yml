@@ -8,7 +8,7 @@ on:
       - "cli-v*"
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: cli-release-${{ github.ref }}

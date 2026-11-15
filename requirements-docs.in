@@ -1,0 +1,4 @@
+# Top-level documentation dependencies.  requirements-docs.txt is generated
+# from this file with hashes:
+#   pip-compile --generate-hashes --allow-unsafe requirements-docs.in
+mkdocs-material==9.8.1

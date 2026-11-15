@@ -49,9 +49,12 @@ Since 2.4 the value also does not depend on dropped columns (columns are
 identified by their position among the live columns) or on the session's
 `search_path` (user-defined types are identified by their unqualified name).
 It does not depend on `quote_all_identifiers` either.
-Two caveats remain: renaming a type or a column-bearing relation changes the
-checksum, because type names are part of the hash, and values of types that
-store OIDs (`oid`, `regclass`, ...) are hashed as stored.
+Renaming a table or one of its columns does not change the table's logical
+checksum.  Two caveats remain: type names are part of the hash, so renaming a
+type changes the checksum of every table with a column of that type
+(including a table whose row type is used as a column type elsewhere: renaming
+that table changes the checksum of the tables that use it), and values of
+types that store OIDs (`oid`, `regclass`, ...) are hashed as stored.
 
 ### Physical checksums
 

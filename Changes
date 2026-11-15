@@ -2,6 +2,32 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: in a SERIALIZABLE transaction the checksum functions took no
+      SIREAD locks and did not check for conflicts with the transactions
+      whose tuples they read, so a write skew through a checksum was not
+      detected.  Table, index and database scans now lock each table they
+      read, like a sequential scan; tuple and cell checksums lock the page.
+      New TAP test t/011_serializable.pl (PostgreSQL 16 and later).
+    - Fix: physical checksums used pg_class.relfilenode, which is 0 for
+      mapped catalogs (pg_class, pg_type, pg_proc, pg_attribute, shared
+      catalogs), so a rewrite of such a catalog (VACUUM FULL) did not change
+      them.  The relation's actual file number is used now.  Values do not
+      change for other relations.
+    - Fix: pg_page_checksum_status took a block read from disk with
+      pd_upper = 0 for a new page.  Only an all-zero block is new; a
+      corrupt header with pd_upper = 0 is now compared like any other page
+      and reported as "mismatch".
+    - The install and upgrade scripts use CREATE FUNCTION instead of
+      CREATE OR REPLACE FUNCTION, as the PostgreSQL documentation
+      recommends for extension scripts: an existing function of the same
+      signature is not silently taken over.
+    - Documentation: renaming a table or a column does not change its
+      logical checksum (the old text said it did); renaming a type does.
+    - Code cleanup: 64-bit table and index checksums limit the number of
+      workers by the number of blocks like the 32-bit ones; removed
+      unreachable NULL-snapshot checks; pg_checksum_bigint no longer
+      initialises its result with an enum constant.
+
     - Fix: the LP_DEAD masking of physical index checksums treated the
       content of every index page between the page header and pd_lower as
       line pointers.  On B-tree and hash metapages, B-tree and GiST deleted

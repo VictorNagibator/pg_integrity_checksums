@@ -244,8 +244,18 @@ func TestIntegrationSchemaGzipVersionAndPhysical(t *testing.T) {
 	if err := baseline.Save(physicalPath, physical, os.Stdout); err != nil {
 		t.Fatal(err)
 	}
-	if code, _, _ := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--quiet"); code != 3 {
-		t.Fatalf("wrong physical cluster should be 3, got %d", code)
+	// The wrong cluster is refused before any relation is checksummed: no
+	// "checking ..." progress line may appear.
+	code, _, errOut = runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath)
+	if code != 3 {
+		t.Fatalf("wrong physical cluster should be 3, got %d: %s", code, errOut)
+	}
+	if !strings.Contains(errOut, "incompatible baseline") || strings.Contains(errOut, "checking ") {
+		t.Fatalf("wrong physical cluster should be refused before the scan: %s", errOut)
+	}
+	if code, _, errOut := runCLI("update", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--yes"); code != 3 ||
+		strings.Contains(errOut, "checking ") {
+		t.Fatalf("update with wrong physical cluster should be 3 before the scan, got %d: %s", code, errOut)
 	}
 	if code, _, _ := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--changed-since", "--quiet"); code != 2 {
 		t.Fatalf("physical changed-since should be 2, got %d", code)

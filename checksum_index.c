@@ -220,7 +220,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
      * checksum even when its pages happen to be byte-identical.
      */
     index_checksum = combine_checksums(index_checksum,
-                                       (uint32) idxRel->rd_rel->relfilenode);
+                                       (uint32) pg_integrity_checksums_relfilenumber(idxRel));
     index_checksum = combine_checksums(index_checksum,
                                        (uint32) idxRel->rd_rel->reltablespace);
 
@@ -816,8 +816,8 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
 
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
     workers = pg_integrity_checksums_worker_count();
-    if (IsInParallelMode())
-        workers = 0;
+    if (nblocks < (BlockNumber) workers)
+        workers = (int) nblocks;
     if (workers > 0 && !pg_index_definition_parallel_safe(scanstate.idxRel))
         workers = 0;
     if (workers < 1)
@@ -923,8 +923,8 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
     is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
     nblocks = RelationGetNumberOfBlocks(idxRel);
     workers = pg_integrity_checksums_worker_count();
-    if (IsInParallelMode())
-        workers = 0;
+    if (nblocks < (BlockNumber) workers)
+        workers = (int) nblocks;
     if (workers < 1)
     {
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
@@ -951,7 +951,7 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
     }
 
     index_checksum = combine_checksums_64(index_checksum,
-                                          (uint64) idxRel->rd_rel->relfilenode);
+                                          (uint64) pg_integrity_checksums_relfilenumber(idxRel));
     index_checksum = combine_checksums_64(index_checksum,
                                           (uint64) idxRel->rd_rel->reltablespace);
 

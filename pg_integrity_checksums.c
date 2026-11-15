@@ -133,7 +133,8 @@ pg_integrity_checksums_worker_count(void)
  *
  * Uses the active snapshot when one is available and falls back to the
  * transaction snapshot otherwise. Both the serial and parallel code
- * paths use this so that they observe identical tuple sets.
+ * paths use this so that they observe identical tuple sets.  Never NULL:
+ * GetTransactionSnapshot() always returns a snapshot or raises an error.
  */
 Snapshot
 pg_integrity_checksums_get_snapshot(void)

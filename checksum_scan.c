@@ -17,6 +17,7 @@
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
+#include "storage/predicate.h"
 #include "utils/rel.h"
 
 #include "checksum_internal.h"
@@ -65,6 +66,14 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
     if (!needs_lock)
         visible = palloc(sizeof(VisibleTuple) * MaxHeapTuplesPerPage);
 
+    /*
+     * Like a sequential scan, a checksum reads the whole relation: in a
+     * SERIALIZABLE transaction take a relation-level SIREAD lock, so a
+     * concurrent write to the relation is detected as a read-write conflict.
+     * A no-op at other isolation levels.
+     */
+    PredicateLockRelation(rel, snapshot);
+
     for (blkno = start; blkno < end; blkno++)
     {
         Buffer      buffer;
@@ -108,6 +117,7 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
             HeapTupleHeader htup;
             HeapTupleData tuple;
             Size        tuple_len;
+            bool        valid;
 
             if (!ItemIdIsNormal(lp))
                 continue;
@@ -129,8 +139,12 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
             tuple.t_tableOid = RelationGetRelid(rel);
             ItemPointerSet(&tuple.t_self, blkno, offnum);
 
-            if (!all_visible &&
-                !HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer))
+            valid = all_visible ||
+                HeapTupleSatisfiesVisibility(&tuple, snapshot, buffer);
+            pg_integrity_checksums_serializable_conflict_out(valid, rel,
+                                                             &tuple, buffer,
+                                                             snapshot);
+            if (!valid)
                 continue;
 
             if (needs_lock)

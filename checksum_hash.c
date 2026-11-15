@@ -148,7 +148,7 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
     bytea      *value;
     unsigned char *bytes;
     int         len;
-    uint64      result = CHECKSUM_ALGO_FNV32;
+    uint64      result = 0;
     int         i;
     bool        unsigned_value = false;
 

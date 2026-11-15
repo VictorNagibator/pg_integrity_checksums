@@ -544,6 +544,37 @@ extern void pg_integrity_checksums_check_relation_kind(Relation rel,
                                                        bool allow_partitioned);
 extern bool pg_integrity_checksums_relation_has_storage(Relation rel);
 extern bool pg_integrity_checksums_page_header_sane(Page page);
+extern bool pg_integrity_checksums_page_is_zero(const char *page);
+
+/*
+ * Report a read-write conflict with the transaction that inserted or deleted
+ * a tuple this SERIALIZABLE transaction read (or skipped as invisible), as
+ * heap scans do.  Call with the buffer share-locked.  A no-op at other
+ * isolation levels.  The function moved to heapam in PostgreSQL 13.
+ */
+#if PG_VERSION_NUM >= 130000
+#define pg_integrity_checksums_serializable_conflict_out(valid, rel, tuple, buffer, snapshot) \
+    HeapCheckForSerializableConflictOut((valid), (rel), (tuple), (buffer), (snapshot))
+#else
+#define pg_integrity_checksums_serializable_conflict_out(valid, rel, tuple, buffer, snapshot) \
+    CheckForSerializableConflictOut((valid), (rel), (tuple), (buffer), (snapshot))
+#endif
+
+/*
+ * The relation's current file number.  pg_class.relfilenode is 0 for mapped
+ * catalogs (pg_class, pg_attribute, shared catalogs ...), whose file number
+ * lives in the relation map, so physical checksums take it from the
+ * relcache's physical address instead.  For other relations both are equal.
+ */
+static inline Oid
+pg_integrity_checksums_relfilenumber(Relation rel)
+{
+#if PG_VERSION_NUM >= 160000
+    return (Oid) rel->rd_locator.relNumber;
+#else
+    return rel->rd_node.relNode;
+#endif
+}
 extern void pg_integrity_checksums_check_page(Relation rel, BlockNumber blkno,
                                                Page page);
 extern bool pg_integrity_checksums_item_is_sane(Page page, ItemId lp);

@@ -12,9 +12,11 @@
 #include "access/htup_details.h"
 #include "access/nbtree.h"
 #include "access/brin.h"
+#include "access/relation.h"
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_index.h"
+#include "catalog/pg_proc.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"
 #include "miscadmin.h"
@@ -25,6 +27,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/relcache.h"
 #include "utils/typcache.h"
 
 #include "checksum_internal.h"
@@ -294,6 +297,76 @@ pg_index_logical_checksum_algo(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     PG_RETURN_BYTEA_P(checksum_bytea(result, 8));
+}
+
+/*
+ * Parallel safety of an index definition
+ *
+ * A logical index checksum evaluates the index expressions and the partial
+ * index predicate.  In a parallel scan they run in the workers, and in the
+ * leader while it is in parallel mode, so every function they call must be
+ * PARALLEL SAFE, as for a parallel CREATE INDEX.  A user-defined function is
+ * PARALLEL UNSAFE unless declared otherwise, and running one in parallel mode
+ * fails (SET, sequence access, writes) or misbehaves.
+ */
+static bool
+parallel_unsafe_function(Oid func_id, void *context)
+{
+    (void) context;
+    return func_parallel(func_id) != PROPARALLEL_SAFE;
+}
+
+static bool
+parallel_unsafe_walker(Node *node, void *context)
+{
+    if (node == NULL)
+        return false;
+
+    if (check_functions_in_node(node, parallel_unsafe_function, context))
+        return true;
+
+    return expression_tree_walker(node, parallel_unsafe_walker, context);
+}
+
+/*
+ * pg_index_definition_parallel_safe - can a parallel scan evaluate this index?
+ */
+bool
+pg_index_definition_parallel_safe(Relation idxRel)
+{
+    List       *exprs = RelationGetIndexExpressions(idxRel);
+    List       *pred = RelationGetIndexPredicate(idxRel);
+    bool        unsafe;
+
+    unsafe = parallel_unsafe_walker((Node *) exprs, NULL) ||
+        parallel_unsafe_walker((Node *) pred, NULL);
+
+    list_free_deep(exprs);
+    list_free_deep(pred);
+
+    return !unsafe;
+}
+
+/*
+ * pg_index_oid_definition_parallel_safe - the same, by OID
+ *
+ * A relation that is not an index, or that no longer exists, counts as safe:
+ * its checksum does not evaluate an index definition, or fails on its own.
+ */
+bool
+pg_index_oid_definition_parallel_safe(Oid indexoid)
+{
+    Relation    rel = try_relation_open(indexoid, AccessShareLock);
+    bool        safe = true;
+
+    if (rel == NULL)
+        return true;
+
+    if (rel->rd_rel->relkind == RELKIND_INDEX)
+        safe = pg_index_definition_parallel_safe(rel);
+
+    relation_close(rel, AccessShareLock);
+    return safe;
 }
 
 /*
@@ -637,6 +710,8 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     workers = pg_integrity_checksums_worker_count();
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
+    if (workers > 0 && !pg_index_definition_parallel_safe(scanstate.idxRel))
+        workers = 0;
 
     if (workers < 1)
     {
@@ -742,6 +817,8 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
     workers = pg_integrity_checksums_worker_count();
     if (IsInParallelMode())
+        workers = 0;
+    if (workers > 0 && !pg_index_definition_parallel_safe(scanstate.idxRel))
         workers = 0;
     if (workers < 1)
     {

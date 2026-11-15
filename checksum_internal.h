@@ -497,6 +497,8 @@ extern uint32 pg_index_logical_checksum_calc(Oid indexoid,
 extern uint64 pg_index_logical_checksum_calc64(Oid indexoid,
                                                bool check_privileges,
                                                bool *is_null);
+extern bool pg_index_definition_parallel_safe(Relation idxRel);
+extern bool pg_index_oid_definition_parallel_safe(Oid indexoid);
 extern bool pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
                                        IndexLogicalScanState *scanstate);
 extern void pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,

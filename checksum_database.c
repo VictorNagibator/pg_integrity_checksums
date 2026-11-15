@@ -16,6 +16,7 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
 #include "miscadmin.h"
+#include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -205,6 +206,38 @@ is_fatal_scan_error(int sqlerrcode)
 }
 
 /*
+ * lock_relation_if_exists - lock a relation of the scan, unless it is gone
+ *
+ * The relations of a database scan are enumerated from pg_class with the
+ * statement snapshot, without locks.  One that is dropped before the scan
+ * reaches it can no longer be read, and opening it used to fail with "could
+ * not open relation", which in strict mode (the default) aborted the whole
+ * database checksum: a routine DROP TABLE in a busy database made nightly
+ * checks fail at random.  Lock the relation first, then look it up: once the
+ * lock is held it cannot be dropped any more, and acquiring the lock has
+ * processed the invalidations of a drop that committed before.
+ *
+ * A dropped relation is not an error even in strict mode, because nothing is
+ * hidden: it is not part of the database any more, and the checksum describes
+ * the database without it.  A NOTICE says so.
+ */
+static bool
+lock_relation_if_exists(Oid relid)
+{
+    LockRelationOid(relid, AccessShareLock);
+
+    if (SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+        return true;
+
+    UnlockRelationOid(relid, AccessShareLock);
+
+    ereport(NOTICE,
+            (errmsg("relation with OID %u was dropped during the database checksum and is not included",
+                    relid)));
+    return false;
+}
+
+/*
  * compute_database_relation - checksum one relation of a database scan
  */
 static void
@@ -218,6 +251,9 @@ compute_database_relation(Oid relid, char relkind, bool physical,
     bool        skip = false;
     MemoryContext oldcontext;
     ResourceOwner oldowner;
+
+    if (!lock_relation_if_exists(relid))
+        return;
 
 #if PG_VERSION_NUM < 170000
     /*
@@ -529,6 +565,17 @@ compute_database_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     bool        failed = false;
     int         i;
 
+    /*
+     * Dropping the table drops its indexes too.  An index dropped on its own
+     * makes the group fail, and the per-relation retry below skips it.
+     */
+    if (!lock_relation_if_exists(items[0].reloid))
+    {
+        pfree(results);
+        pfree(skip);
+        return;
+    }
+
 #if PG_VERSION_NUM < 170000
     /* No subtransactions in parallel mode; see compute_database_relation(). */
     if (IsInParallelMode())
@@ -739,6 +786,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     HeapTuple   classTuple;
     Snapshot    snapshot;
     ChecksumRelationItem *items;
+    ChecksumRelationItem *serial_items;
     uint32      nitems = 0;
     uint32      capacity = 64;
     ChecksumAccum64 acc = {0, 0};
@@ -833,6 +881,10 @@ compute_database_checksum_internal(bool physical, bool include_system,
     systable_endscan(scan);
     table_close(pg_class_rel, AccessShareLock);
 
+    /* Indexes that a parallel scan must leave to the leader; see below. */
+    serial_items = (ChecksumRelationItem *)
+        palloc(Max(nitems, 1) * sizeof(ChecksumRelationItem));
+
     workers = pg_integrity_checksums_worker_count();
     if (nitems < (uint32) workers)
         workers = (int) nitems;
@@ -853,13 +905,48 @@ compute_database_checksum_internal(bool physical, bool include_system,
                                (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
                                &skipped);
     else
-        pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
-                                            workers, algo, &acc,
-                                            physical ? NULL : &lacc,
-                                            (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
-                                            &skipped);
+    {
+        uint32      nserial = 0;
+
+        /*
+         * Indexes whose expressions or predicate call functions that are not
+         * PARALLEL SAFE cannot be evaluated in parallel mode, by the workers
+         * or by the leader.  Take them out of the parallel scan and compute
+         * them afterwards, outside parallel mode.  The aggregate does not
+         * depend on the order in which relations are folded in.
+         */
+        if (!physical && include_indexes)
+        {
+            uint32      nparallel = 0;
+            uint32      i;
+
+            for (i = 0; i < nitems; i++)
+            {
+                if (items[i].relkind == RELKIND_INDEX &&
+                    !pg_index_oid_definition_parallel_safe(items[i].reloid))
+                    serial_items[nserial++] = items[i];
+                else
+                    items[nparallel++] = items[i];
+            }
+            nitems = nparallel;
+        }
+
+        if (nitems > 0)
+            pg_integrity_checksums_parallel_scan_database(physical, items, nitems,
+                                                Min(workers, (int) nitems),
+                                                algo, &acc,
+                                                physical ? NULL : &lacc,
+                                                (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                                                &skipped);
+
+        compute_database_items(serial_items, 0, nserial, physical, algo, &acc,
+                               physical ? NULL : &lacc,
+                               (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                               &skipped);
+    }
 
     pfree(items);
+    pfree(serial_items);
 
     if (skipped > 0)
         ereport(WARNING,

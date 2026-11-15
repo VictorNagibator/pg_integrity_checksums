@@ -278,6 +278,13 @@ covered when the parent table detoasts the values.  `include_indexes`
 they are derived from table data, they do not change when dead index entries
 are vacuumed.
 
+Each relation's checksum is combined with its qualified name
+(`schema.relname`) before it is aggregated, so moving rows from one table to
+another table of the same structure changes the result.  The name, not the
+OID, is used so that the value survives a dump and restore; renaming a
+relation or moving it to another schema therefore changes the database
+checksum, although the relation's own logical checksum does not change.
+
 Superuser-only (enforced in C).
 
 ```sql

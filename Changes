@@ -2,6 +2,15 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: the logical database checksum summed the per-relation checksums
+      without the identity of the relations, so moving rows between two
+      tables (or indexes) of the same structure, or swapping their
+      contents, did not change it.  Each relation's checksum is now combined
+      with a hash of its qualified name (schema.relname); the name, unlike
+      the OID, is the same after a dump and restore.  Values of
+      pg_database_logical_checksum change for every database, and renaming
+      a relation or moving it to another schema now changes them.  Table
+      and index logical checksums are not affected.
     - Fix: in a SERIALIZABLE transaction the checksum functions took no
       SIREAD locks and did not check for conflicts with the transactions
       whose tuples they read, so a write skew through a checksum was not

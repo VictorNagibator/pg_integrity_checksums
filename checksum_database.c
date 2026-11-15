@@ -170,11 +170,51 @@ handle_skipped_relation(Oid relid, uint32 *skipped)
 }
 
 /*
+ * relation_identity_hash - portable identity of a relation
+ *
+ * A 64-bit FNV-1a hash of the schema name and the relation name.  A logical
+ * database checksum must tell its relations apart: without an identity, the
+ * per-relation checksums are summed anonymously, and moving rows between two
+ * tables with the same row structure (or swapping their contents) does not
+ * change the database checksum.  The OID would identify the relation too, but
+ * it differs after a dump and restore, and the logical checksum must not; the
+ * qualified name survives a restore.
+ *
+ * The caller holds a lock on the relation, so it cannot be dropped and its
+ * pg_class row is visible.
+ */
+static uint64
+relation_identity_hash(Oid relid)
+{
+    char       *relname = get_rel_name(relid);
+    char       *nspname;
+    uint64      hash;
+
+    if (relname == NULL)
+        elog(ERROR, "cache lookup failed for relation %u", relid);
+
+    nspname = get_namespace_name(get_rel_namespace(relid));
+    if (nspname == NULL)
+        elog(ERROR, "cache lookup failed for namespace of relation %u", relid);
+
+    /* The terminating NUL separates the two names unambiguously. */
+    hash = fnv1a_64_hash(nspname, strlen(nspname) + 1, 0);
+    hash = fnv1a_64_buf((const unsigned char *) relname, strlen(relname) + 1,
+                        hash);
+
+    pfree(nspname);
+    pfree(relname);
+
+    return hash;
+}
+
+/*
  * add_relation_result - fold one relation's checksum into the aggregate
  *
  * The accumulator is chosen by which pointer is set: logical_acc64 for
  * 64-bit logical scans, logical_acc for 32-bit logical scans, otherwise the
- * physical accumulator (which also mixes in the relation OID).
+ * physical accumulator (which mixes in the relation OID).  Logical scans mix
+ * in the qualified relation name instead; see relation_identity_hash().
  */
 static void
 add_relation_result(Oid relid, uint64 rel_checksum, ChecksumAccum64 *acc,
@@ -182,9 +222,21 @@ add_relation_result(Oid relid, uint64 rel_checksum, ChecksumAccum64 *acc,
                     ChecksumLogicalAccum64 *logical_acc64)
 {
     if (logical_acc64 != NULL)
-        logical_accum_add64(logical_acc64, rel_checksum);
+        logical_accum_add64(logical_acc64,
+                            combine_checksums_64(relation_identity_hash(relid),
+                                                 rel_checksum));
     else if (logical_acc != NULL)
-        logical_accum_add(logical_acc, (uint32) rel_checksum);
+    {
+        /*
+         * The 32-bit accumulator takes a 32-bit item; fold the identity into
+         * it the same way, so a 32-bit database checksum also changes when
+         * rows move between tables.
+         */
+        uint64      item = combine_checksums_64(relation_identity_hash(relid),
+                                                (uint64) (uint32) rel_checksum);
+
+        logical_accum_add(logical_acc, (uint32) (item ^ (item >> 32)));
+    }
     else
         checksum_accum64_add(acc, combine_checksums_64(rel_checksum,
                                                        (uint64) relid));

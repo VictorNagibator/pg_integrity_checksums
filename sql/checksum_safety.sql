@@ -97,7 +97,7 @@ SELECT pg_page_checksum('test_safety_page'::regclass, 0) IS NOT NULL AS valid_pa
 SELECT
     pg_cell_checksum('test_safety_page'::regclass, '(0,20000)'::tid, 1) IS NULL AS cell_bad_offset_null,
     pg_tuple_logical_checksum('test_safety_page'::regclass, '(0,20000)'::tid) IS NULL AS tuple_logical_bad_offset_null,
-    pg_tuple_physical_checksum('test_safety_page'::regclass, '(0,20000)'::tid, false) = 0 AS tuple_physical_bad_offset_zero,
+    pg_tuple_physical_checksum('test_safety_page'::regclass, '(0,20000)'::tid, false) IS NULL AS tuple_physical_bad_offset_null,
     pg_tuple_physical_checksum('test_safety_page'::regclass, '(1000000,1)'::tid, false) IS NULL AS tuple_physical_bad_block_null;
 
 -- Test E: table/page/cell functions reject relations without heap storage.

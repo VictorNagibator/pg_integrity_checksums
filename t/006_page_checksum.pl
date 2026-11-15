@@ -34,6 +34,24 @@ my $value = $node_on->safe_psql('postgres',
 cmp_ok($value, '>=', 0, 'page checksum is non-negative');
 cmp_ok($value, '<=', 65535, 'page checksum is 16-bit');
 
+# A corrupt page must still be reported as a mismatch.  The status function
+# reads the block again when the checksum does not match (a read can overlap
+# with a concurrent write); real corruption fails every read.
+my $relpath = $node_on->safe_psql('postgres',
+    "SELECT pg_relation_filepath('page_status')");
+$node_on->stop;
+
+my $file = $node_on->data_dir . '/' . $relpath;
+open(my $fh, '+<', $file) or die "open $file: $!";
+binmode $fh;
+# Overwrite bytes in the middle of block 0, away from the page header and the
+# line pointers; the page stays structurally valid.
+sysseek($fh, 4000, 0) or die "seek: $!";
+syswrite($fh, "\xde\xad\xbe\xef" x 4) == 16 or die "write: $!";
+close($fh);
+
+$node_on->start;
+check_status($node_on, 'mismatch');
 $node_on->stop;
 
 my $node_off = PostgreSQL::Test::Cluster->new('page_checksum_off');

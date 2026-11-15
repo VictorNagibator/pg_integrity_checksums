@@ -211,6 +211,66 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
 }
 
 /*
+ * pg_integrity_checksums_fetch_visible_tuple - find a tuple by TID, if visible
+ *
+ * Used by the functions that checksum one tuple or cell.  Returns false when
+ * the page is new, the offset is out of range, the line pointer is not a
+ * normal one, or the tuple is not visible to the statement's snapshot.  On
+ * success *tuple describes the tuple in the buffer.  The buffer must be
+ * share-locked; a corrupt page header, line pointer or tuple header raises a
+ * clean DATA_CORRUPTED error.
+ *
+ * The visibility check matters: the TID of a deleted row, of an old version
+ * of an updated row or of a row inserted by a transaction that has not
+ * committed still points at its data.  Without the check these functions
+ * returned checksums of data the caller cannot read with SELECT, and a
+ * checksum of a short value (a 32-bit FNV-1a of an integer, say) is easily
+ * reversed by trying every candidate.
+ */
+bool
+pg_integrity_checksums_fetch_visible_tuple(Relation rel, Buffer buffer,
+                                           BlockNumber blkno,
+                                           OffsetNumber offnum,
+                                           HeapTuple tuple)
+{
+    Page        page = BufferGetPage(buffer);
+    ItemId      lp;
+    HeapTupleHeader htup;
+    Size        len;
+
+    if (PageIsNew(page))
+        return false;
+
+    pg_integrity_checksums_check_page(rel, blkno, page);
+
+    if (offnum < FirstOffsetNumber || offnum > PageGetMaxOffsetNumber(page))
+        return false;
+
+    lp = PageGetItemId(page, offnum);
+    if (!ItemIdIsNormal(lp))
+        return false;
+
+    if (!pg_integrity_checksums_item_is_sane(page, lp))
+        ereport(ERROR,
+                (errcode(ERRCODE_DATA_CORRUPTED),
+                 errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
+                        RelationGetRelationName(rel), blkno, offnum)));
+
+    htup = (HeapTupleHeader) PageGetItem(page, lp);
+    len = ItemIdGetLength(lp);
+    pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum, htup, len);
+
+    tuple->t_len = len;
+    tuple->t_data = htup;
+    tuple->t_tableOid = RelationGetRelid(rel);
+    ItemPointerSet(&tuple->t_self, blkno, offnum);
+
+    return HeapTupleSatisfiesVisibility(tuple,
+                                        pg_integrity_checksums_get_snapshot(),
+                                        buffer);
+}
+
+/*
  * pg_tuple_physical_checksum_common - shared physical tuple implementation
  */
 static bool
@@ -219,8 +279,8 @@ pg_tuple_physical_checksum_common(Oid reloid, ItemPointer tid,
 {
     Relation    rel;
     Buffer      buffer;
-    Page        page;
-    uint64      checksum;
+    HeapTupleData tuple;
+    uint64      checksum = 0;
     BlockNumber blkno;
     OffsetNumber offnum;
 
@@ -246,13 +306,30 @@ pg_tuple_physical_checksum_common(Oid reloid, ItemPointer tid,
      */
     buffer = ReadBuffer(rel, blkno);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
-    page = BufferGetPage(buffer);
 
-    checksum = pg_tuple_physical_checksum_internal(rel, page, offnum, blkno,
-                                                   include_header, true, algo);
+    /*
+     * The physical checksum reads header fields that concurrent backends
+     * change, so it is computed under the share lock, which is fine: it runs
+     * no user code.
+     */
+    if (pg_integrity_checksums_fetch_visible_tuple(rel, buffer, blkno, offnum,
+                                                   &tuple))
+        checksum = pg_tuple_physical_checksum_internal(rel,
+                                                       BufferGetPage(buffer),
+                                                       offnum, blkno,
+                                                       include_header, false,
+                                                       algo);
 
     UnlockReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
+
+    /*
+     * A tuple checksum is never zero, so zero means there is no visible tuple
+     * at this TID: NULL, as for the logical tuple and cell checksums.  (This
+     * used to return 0 for an offset without a tuple.)
+     */
+    if (checksum == 0)
+        return false;
 
     *out = checksum;
     return true;
@@ -437,16 +514,10 @@ pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, ChecksumAlgo algo,
 {
     Relation    rel;
     Buffer      buffer;
-    Page        page;
-    ItemId      lp;
     HeapTupleData heapTuple;
-    HeapTupleHeader tuple;
     uint64      checksum = 0;
-    bool        missing = false;
-    bool        locked = true;
     BlockNumber blkno;
     OffsetNumber offnum;
-    Size        tuple_len;
 
     if (!ItemPointerIsValid(tid))
         return false;
@@ -476,63 +547,26 @@ pg_tuple_logical_checksum_common(Oid reloid, ItemPointer tid, ChecksumAlgo algo,
      */
     buffer = ReadBuffer(rel, blkno);
     LockBuffer(buffer, BUFFER_LOCK_SHARE);
-    page = BufferGetPage(buffer);
 
-    if (PageIsNew(page))
-        missing = true;
-    else
+    if (!pg_integrity_checksums_fetch_visible_tuple(rel, buffer, blkno, offnum,
+                                                    &heapTuple))
     {
-        pg_integrity_checksums_check_page(rel, blkno, page);
-
-        if (offnum < FirstOffsetNumber ||
-            offnum > PageGetMaxOffsetNumber(page))
-            missing = true;
-        else
-        {
-            lp = PageGetItemId(page, offnum);
-
-            if (!ItemIdIsNormal(lp))
-                missing = true;
-            else
-            {
-                if (!pg_integrity_checksums_item_is_sane(page, lp))
-                    ereport(ERROR,
-                            (errcode(ERRCODE_DATA_CORRUPTED),
-                             errmsg("corrupt line pointer in relation \"%s\" at block %u, offset %u",
-                                    RelationGetRelationName(rel), blkno, offnum)));
-
-                tuple = (HeapTupleHeader) PageGetItem(page, lp);
-                tuple_len = ItemIdGetLength(lp);
-                pg_integrity_checksums_check_heap_tuple(rel, blkno, offnum,
-                                                        tuple, tuple_len);
-
-                heapTuple.t_len = tuple_len;
-                heapTuple.t_data = tuple;
-                heapTuple.t_tableOid = reloid;
-                heapTuple.t_self = *tid;
-
-                /*
-                 * Hash with the buffer pinned but not locked: the logical
-                 * encoding detoasts values and calls type send functions,
-                 * which must not run under a buffer content lock.  The pin
-                 * keeps the tuple in place.
-                 */
-                LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
-                locked = false;
-
-                checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple,
-                                                              algo);
-            }
-        }
+        UnlockReleaseBuffer(buffer);
+        relation_close(rel, AccessShareLock);
+        return false;
     }
 
-    if (locked)
-        UnlockReleaseBuffer(buffer);
-    else
-        ReleaseBuffer(buffer);
+    /*
+     * Hash with the buffer pinned but not locked: the logical encoding
+     * detoasts values and calls type send functions, which must not run under
+     * a buffer content lock.  The pin keeps the tuple in place.
+     */
+    LockBuffer(buffer, BUFFER_LOCK_UNLOCK);
+    checksum = pg_tuple_logical_checksum_internal(rel, &heapTuple, algo);
+    ReleaseBuffer(buffer);
     relation_close(rel, AccessShareLock);
 
-    if (missing || checksum == 0)
+    if (checksum == 0)
         return false;
 
     *out = checksum;

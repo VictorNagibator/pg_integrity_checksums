@@ -54,6 +54,14 @@ These limitations are documented rather than silently ignored.
   probability about `2^-32` (`2.3e-10`) by a 32-bit checksum and `2^-64`
   (`5.4e-20`) by a 64-bit checksum.  These are rough estimates, not a
   cryptographic security claim.
+* **Index expressions run as the table owner.** Logical index checksums
+  (and the database logical checksum, which includes indexes by default)
+  evaluate index expressions and partial-index predicates.  Like `REINDEX`
+  and `ANALYZE`, they do so as the owner of the table in a
+  security-restricted operation, so a function in an index definition never
+  runs with the privileges of the role computing the checksum.  A function
+  that the owner itself cannot execute, or one that does something a
+  security-restricted operation forbids, makes the checksum fail.
 * **RLS and column privileges.** Relations protected by row-level security are
   rejected because a direct heap scan cannot apply policies.  Table-level
   `SELECT` is required; column-only privileges are not sufficient.

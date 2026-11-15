@@ -212,6 +212,25 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 /* Parallel execution and shared scan configuration. */
 extern int pg_integrity_checksums_worker_count(void);
 extern Snapshot pg_integrity_checksums_get_snapshot(void);
+
+/*
+ * ChecksumOwnerContext - saved security state while running as a table owner
+ *
+ * Index expressions and partial-index predicates are user code.  They are
+ * evaluated as the owner of the table, in a security-restricted operation,
+ * exactly as REINDEX, ANALYZE and amcheck do; see
+ * pg_integrity_checksums_switch_to_owner().
+ */
+typedef struct ChecksumOwnerContext
+{
+    Oid         save_userid;
+    int         save_sec_context;
+    int         save_nestlevel;
+} ChecksumOwnerContext;
+
+extern void pg_integrity_checksums_switch_to_owner(Oid relid,
+                                                   ChecksumOwnerContext *ctx);
+extern void pg_integrity_checksums_restore_user(ChecksumOwnerContext *ctx);
 extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type,
                                                         Oid reloid,
                                                         bool include_header,

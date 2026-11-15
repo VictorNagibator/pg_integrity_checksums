@@ -16,6 +16,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
+#include "utils/guc.h"
 #include "utils/hsearch.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
@@ -196,7 +197,8 @@ logical_type_cache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
  * time zone", ...); pg_catalog is always searched first, so that name is
  * stable.  Every other type is identified by its unqualified, quoted name,
  * which is also what format_type_be() returns for a visible type; arrays use
- * the tag of their element type plus "[]".
+ * the tag of their element type plus "[]".  Identifiers are quoted as with
+ * the default quote_all_identifiers = off, whatever the session's setting.
  *
  * The result is palloc'd.
  */
@@ -207,6 +209,8 @@ logical_type_tag(Oid typid)
     HeapTuple   type_tuple;
     Form_pg_type type_form;
     char       *tag;
+    const char *quote_all;
+    int         nestlevel = 0;
 
     if (OidIsValid(elemtype))
     {
@@ -223,10 +227,34 @@ logical_type_tag(Oid typid)
 
     type_form = (Form_pg_type) GETSTRUCT(type_tuple);
 
+    /*
+     * quote_identifier() and format_type_be() quote every identifier when
+     * quote_all_identifiers is on (pg_dump sets it, and any session can).
+     * The tag must not depend on that setting, so compute it as with the
+     * default, which is what every stored checksum was computed with.
+     *
+     * The setting is changed through the GUC machinery rather than by
+     * assigning the C variable: before PostgreSQL 15 the variable is not
+     * exported to extensions on Windows.  GUC_ACTION_SAVE is allowed in
+     * parallel mode, and an error unwinds the nest level with the
+     * transaction.
+     */
+    quote_all = GetConfigOption("quote_all_identifiers", false, false);
+    if (quote_all != NULL && strcmp(quote_all, "off") != 0)
+    {
+        nestlevel = NewGUCNestLevel();
+        (void) set_config_option("quote_all_identifiers", "off",
+                                 PGC_USERSET, PGC_S_SESSION,
+                                 GUC_ACTION_SAVE, true, 0, false);
+    }
+
     if (type_form->typnamespace == PG_CATALOG_NAMESPACE)
         tag = format_type_be(typid);
     else
         tag = pstrdup(quote_identifier(NameStr(type_form->typname)));
+
+    if (nestlevel > 0)
+        AtEOXact_GUC(true, nestlevel);
 
     ReleaseSysCache(type_tuple);
 

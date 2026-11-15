@@ -433,10 +433,18 @@ compute_logical_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
     BufferAccessStrategy bstrategy;
     BlockNumber nblocks;
+    ChecksumOwnerContext owner_ctx;
     int         i;
 
     rel = relation_open(items[0].reloid, AccessShareLock);
     pg_integrity_checksums_check_relation_kind(rel, true, true);
+
+    /*
+     * The indexes of the group evaluate their expressions and predicates,
+     * which are user code: run the whole pass as the owner of the table, as
+     * pg_index_logical_checksum_calc() does for a single index.
+     */
+    pg_integrity_checksums_switch_to_owner(items[0].reloid, &owner_ctx);
 
     state.algo = algo;
     state.nindexes = n - 1;
@@ -472,6 +480,8 @@ compute_logical_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     pfree(state.indexes);
     pfree(state.index_valid);
     pfree(state.accs);
+
+    pg_integrity_checksums_restore_user(&owner_ctx);
 
     relation_close(rel, AccessShareLock);
 }

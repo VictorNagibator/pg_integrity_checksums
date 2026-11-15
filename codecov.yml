@@ -11,10 +11,30 @@ coverage:
         informational: true
 
 flags:
+  # C extension, regression tests on every PostgreSQL version (Quality).
+  extension:
+    carryforward: true
+  # Go CLI: unit tests (CLI) and tests against a live server (CLI Integration).
   unit:
+    paths:
+      - cli/
     carryforward: true
   integration:
+    paths:
+      - cli/
     carryforward: true
+
+component_management:
+  individual_components:
+    - component_id: extension
+      name: Extension (C)
+      paths:
+        - "*.c"
+        - "*.h"
+    - component_id: cli
+      name: CLI (Go)
+      paths:
+        - cli/**
 
 ignore:
   - "cli/cmd/**"

@@ -20,6 +20,11 @@
     "format": {
       "const": "pg_integrity_checksums.baseline/v2"
     },
+    "schema_hash_version": {
+      "description": "How the objects' schema_hash values were computed. Absent means 1; hashes of different versions are not comparable.",
+      "type": "integer",
+      "minimum": 1
+    },
     "baseline_id": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"

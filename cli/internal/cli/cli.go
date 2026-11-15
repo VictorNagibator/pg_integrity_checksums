@@ -413,7 +413,10 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			oldB.Database, curB.Database)
 	}
 
-	changes, summary := baseline.Compare(oldB.Objects, curB.Objects)
+	changes, summary, comparable := baseline.CompareBaselines(oldB, curB)
+	if !comparable {
+		warnSchemaHashVersion(stderr, "pg_integrity_checksums update --yes")
+	}
 	if format == "json" {
 		if err := writeVerifyJSON(out, oldB, changes, summary, *showOK); err != nil {
 			return commandError(stderr, err)
@@ -431,6 +434,14 @@ func runVerify(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 1
 	}
 	return 0
+}
+
+// warnSchemaHashVersion explains why schema changes were not compared:
+// schema_hash values computed by different CLI versions cannot be matched.
+func warnSchemaHashVersion(stderr io.Writer, remedy string) {
+	fmt.Fprintf(stderr, "warning: the baselines use different schema_hash versions; "+
+		"schema changes are not reported (data checksums are still compared). "+
+		"Refresh with %s.\n", remedy)
 }
 
 // checkCompatibility refuses comparisons that cannot be meaningful:
@@ -542,7 +553,10 @@ func runDiff(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "error: baseline hashes differ: %q and %q\n", oldB.Hash, newB.Hash)
 		return 3
 	}
-	changes, summary := baseline.Compare(oldB.Objects, newB.Objects)
+	changes, summary, comparable := baseline.CompareBaselines(oldB, newB)
+	if !comparable {
+		warnSchemaHashVersion(stderr, "re-capturing the older baseline")
+	}
 	if format == "json" {
 		if err := writeDiffJSON(out, oldB, newB, changes, summary, showOK); err != nil {
 			return commandError(stderr, err)
@@ -798,7 +812,9 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		fmt.Fprintf(stderr, "error: incompatible baseline: %v\n", err)
 		return 3
 	}
-	changes, summary := baseline.Compare(oldB.Objects, newB.Objects)
+	// The baseline is about to be replaced by one with current schema
+	// hashes, so a version difference needs no warning here.
+	changes, summary, _ := baseline.CompareBaselines(oldB, newB)
 	if format == "json" {
 		if err := writeDiffJSON(out, oldB, newB, changes, summary, *showOK); err != nil {
 			return commandError(stderr, err)

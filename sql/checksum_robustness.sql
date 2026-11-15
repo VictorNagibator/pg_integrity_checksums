@@ -57,7 +57,9 @@ CREATE INDEX rob_victim_idx ON rob_victim (a);
 CREATE OR REPLACE FUNCTION rob_dropper(int) RETURNS int
 LANGUAGE plpgsql VOLATILE AS $$
 BEGIN
-    EXECUTE 'DROP TABLE IF EXISTS rob_victim';
+    -- Schema-qualified: on PostgreSQL 17+ index expressions run with a
+    -- restricted search_path (pg_catalog, pg_temp).
+    EXECUTE 'DROP TABLE IF EXISTS public.rob_victim';
     RETURN $1;
 END
 $$;

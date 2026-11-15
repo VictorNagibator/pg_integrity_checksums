@@ -196,7 +196,8 @@ logical_type_cache_invalidate(Datum arg, int cacheid, uint32 hashvalue)
  * time zone", ...); pg_catalog is always searched first, so that name is
  * stable.  Every other type is identified by its unqualified, quoted name,
  * which is also what format_type_be() returns for a visible type; arrays use
- * the tag of their element type plus "[]".
+ * the tag of their element type plus "[]".  Identifiers are quoted as with
+ * the default quote_all_identifiers = off, whatever the session's setting.
  *
  * The result is palloc'd.
  */
@@ -206,7 +207,8 @@ logical_type_tag(Oid typid)
     Oid         elemtype = get_element_type(typid);
     HeapTuple   type_tuple;
     Form_pg_type type_form;
-    char       *tag;
+    char       *tag = NULL;
+    bool        save_quote_all;
 
     if (OidIsValid(elemtype))
     {
@@ -223,10 +225,31 @@ logical_type_tag(Oid typid)
 
     type_form = (Form_pg_type) GETSTRUCT(type_tuple);
 
-    if (type_form->typnamespace == PG_CATALOG_NAMESPACE)
-        tag = format_type_be(typid);
-    else
-        tag = pstrdup(quote_identifier(NameStr(type_form->typname)));
+    /*
+     * quote_identifier() and format_type_be() quote every identifier when
+     * quote_all_identifiers is on (pg_dump sets it, and any session can).
+     * The tag must not depend on that setting, so compute it as with the
+     * default, which is what every stored checksum was computed with.
+     */
+    save_quote_all = quote_all_identifiers;
+    quote_all_identifiers = false;
+
+    PG_TRY();
+    {
+        if (type_form->typnamespace == PG_CATALOG_NAMESPACE)
+            tag = format_type_be(typid);
+        else
+            tag = pstrdup(quote_identifier(NameStr(type_form->typname)));
+    }
+    PG_CATCH();
+    {
+        /* PG_FINALLY() does not exist on PostgreSQL 12. */
+        quote_all_identifiers = save_quote_all;
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    quote_all_identifiers = save_quote_all;
 
     ReleaseSysCache(type_tuple);
 

@@ -61,6 +61,25 @@ SELECT (SELECT sum FROM port_hint_sums WHERE label = 'before') =
        (SELECT sum FROM port_hint_sums WHERE label = 'after')
        AS header_checksum_ignores_hints;
 
+-- quote_all_identifiers (set by pg_dump, settable by any session) does not
+-- matter either.  Type tags are built with quote_identifier() and
+-- format_type_be(), which quote every identifier when it is on.  CREATE TYPE
+-- invalidates the type cache, so the tags are rebuilt under the setting.
+CREATE TYPE public.port_quote_mood AS ENUM ('ok', 'meh');
+CREATE TABLE port_quote (j jsonb, i inet, m public.port_quote_mood,
+                         ma public.port_quote_mood[], p public.port_pair);
+INSERT INTO port_quote VALUES ('{"a": 1}', '10.0.0.1', 'meh', '{ok,meh}', ROW(1, 2));
+SELECT pg_table_logical_checksum('port_quote') AS quote_default \gset
+SELECT pg_table_logical_checksum('port_quote', 'fnv64') AS quote_default64 \gset
+SET quote_all_identifiers = on;
+CREATE TYPE public.port_quote_flush AS (x int);
+SELECT pg_table_logical_checksum('port_quote') = :quote_default AS quote_all_same,
+       pg_table_logical_checksum('port_quote', 'fnv64') = :'quote_default64' AS quote_all_same64,
+       pg_cell_checksum('port_quote', '(0,1)', 1) IS NOT NULL AS cell_ok;
+RESET quote_all_identifiers;
+DROP TABLE port_quote;
+DROP TYPE public.port_quote_mood, public.port_quote_flush;
+
 DROP TABLE port_plain, port_dropped, port_comp1, port_comp2, port_m_public,
            port_m_s1, port_hint;
 DROP TYPE public.port_pair;

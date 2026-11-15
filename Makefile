@@ -56,7 +56,8 @@ REGRESS = \
 	checksum_buffer_locks \
 	checksum_upgrade \
 	checksum_fastpath \
-	checksum_dbgroup
+	checksum_dbgroup \
+	checksum_security
 
 REGRESS_OPTS = \
     --inputdir=./ \

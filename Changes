@@ -2,6 +2,17 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Security: logical index checksums (pg_index_logical_checksum and
+      pg_database_logical_checksum with include_indexes, the default)
+      evaluated index expressions and partial-index predicates with the
+      privileges of the caller.  A role that could create a table and an
+      index could therefore run arbitrary SQL as the superuser computing a
+      database checksum, or as any role computing an index checksum (for
+      example through the CLI).  The index definition is now evaluated as
+      the owner of the table in a security-restricted operation, with a GUC
+      nest level that undoes SET commands, and on PostgreSQL 17 and later
+      with a restricted search_path, as REINDEX, ANALYZE and amcheck do.
+      Checksum values do not change.
     - Fix: parallel table and index checksums used the snapshot restored in
       a worker without making it active.  PostgreSQL builds with assertions
       (--enable-cassert) aborted the worker; release builds were not

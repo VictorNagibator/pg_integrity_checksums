@@ -578,6 +578,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     IndexLogicalScanState scanstate;
     BlockNumber nblocks;
     int         workers;
+    ChecksumOwnerContext owner_ctx;
 
     *is_null = false;
 
@@ -618,8 +619,16 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
 
     snapshot = pg_integrity_checksums_get_snapshot();
 
+    /*
+     * The index definition is user code: evaluate it as the table owner.
+     * Parallel workers inherit the switched identity.
+     */
+    pg_integrity_checksums_switch_to_owner(IndexGetRelation(indexoid, false),
+                                           &owner_ctx);
+
     if (!pg_index_logical_scan_init(indexoid, snapshot, &scanstate))
     {
+        pg_integrity_checksums_restore_user(&owner_ctx);
         *is_null = true;
         return;
     }
@@ -641,6 +650,8 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
                                           indexoid, false, nblocks, workers,
                                           0, NULL, acc, NULL, NULL);
     }
+
+    pg_integrity_checksums_restore_user(&owner_ctx);
 }
 
 /*
@@ -673,6 +684,7 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
     IndexLogicalScanState scanstate;
     BlockNumber nblocks;
     int         workers;
+    ChecksumOwnerContext owner_ctx;
 
     *is_null = false;
 
@@ -713,8 +725,16 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
 
     snapshot = pg_integrity_checksums_get_snapshot();
 
+    /*
+     * The index definition is user code: evaluate it as the table owner.
+     * Parallel workers inherit the switched identity.
+     */
+    pg_integrity_checksums_switch_to_owner(IndexGetRelation(indexoid, false),
+                                           &owner_ctx);
+
     if (!pg_index_logical_scan_init(indexoid, snapshot, &scanstate))
     {
+        pg_integrity_checksums_restore_user(&owner_ctx);
         *is_null = true;
         return;
     }
@@ -736,6 +756,8 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
                                                     workers, CHECKSUM_ALGO_FNV64, NULL, NULL,
                                                     NULL, acc);
     }
+
+    pg_integrity_checksums_restore_user(&owner_ctx);
 }
 
 /*

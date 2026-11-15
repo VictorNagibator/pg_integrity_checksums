@@ -281,3 +281,30 @@ $$;
 
 -- Clean up
 DROP SCHEMA test_checksum_schema CASCADE;
+-- Test L: moving rows between tables of the same structure changes the
+-- logical database checksum (relations are identified by schema.relname)
+CREATE TABLE db_move_ta (id integer PRIMARY KEY, v text);
+CREATE TABLE db_move_tb (id integer PRIMARY KEY, v text);
+INSERT INTO db_move_ta SELECT g, 'row ' || g FROM generate_series(1, 10) g;
+INSERT INTO db_move_tb SELECT g, 'row ' || g FROM generate_series(11, 20) g;
+SELECT pg_database_logical_checksum(false, true) AS move_db32,
+       pg_database_logical_checksum(false, false) AS move_db32_noidx,
+       pg_database_logical_checksum(false, true, 'fnv64') AS move_db64 \gset
+WITH moved AS (DELETE FROM db_move_ta WHERE id <= 5 RETURNING *)
+INSERT INTO db_move_tb SELECT * FROM moved;
+SELECT pg_database_logical_checksum(false, true) <> :move_db32 AS move_detected32,
+       pg_database_logical_checksum(false, false) <> :move_db32_noidx AS move_detected32_noidx,
+       pg_database_logical_checksum(false, true, 'fnv64') <> :'move_db64' AS move_detected64;
+-- Moving the rows back restores the value
+WITH moved AS (DELETE FROM db_move_tb WHERE id <= 5 RETURNING *)
+INSERT INTO db_move_ta SELECT * FROM moved;
+SELECT pg_database_logical_checksum(false, true) = :move_db32 AS move_back32,
+       pg_database_logical_checksum(false, true, 'fnv64') = :'move_db64' AS move_back64;
+-- Swapping the whole contents of the two tables is detected too
+BEGIN;
+ALTER TABLE db_move_ta RENAME TO db_move_tmp;
+ALTER TABLE db_move_tb RENAME TO db_move_ta;
+ALTER TABLE db_move_tmp RENAME TO db_move_tb;
+SELECT pg_database_logical_checksum(false, false) <> :move_db32_noidx AS swap_detected;
+ROLLBACK;
+DROP TABLE db_move_ta, db_move_tb;

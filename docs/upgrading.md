@@ -36,6 +36,7 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
+| Next release | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); table and index logical checksums do not change | Recompute stored database logical checksums |
 | 2.6 | Physical checksums of indexes and TOAST relations | Re-capture physical baselines (`capture --kind physical`) |
 | 2.4 | Logical checksums of tables with dropped columns or composite types with dropped attributes; user types when the baseline was taken with a non-default `search_path`; physical tuple and table checksums with `include_header = true` | Recompute the affected values and compare; recreate baselines that differ |
 | 2.1 | Logical checksums on big-endian systems only (now equal to little-endian) | Recreate logical baselines taken on big-endian servers |

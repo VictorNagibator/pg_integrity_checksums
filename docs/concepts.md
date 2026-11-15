@@ -50,7 +50,10 @@ identified by their position among the live columns) or on the session's
 `search_path` (user-defined types are identified by their unqualified name).
 It does not depend on `quote_all_identifiers` either.
 Renaming a table or one of its columns does not change the table's logical
-checksum.  Two caveats remain: type names are part of the hash, so renaming a
+checksum.  The logical *database* checksum does change when a table or index is
+renamed or moved to another schema: it identifies each relation by its
+qualified name (`schema.relname`, not the OID, which differs after a dump and
+restore), so moving rows between two tables of the same structure is detected.  Two caveats remain: type names are part of the hash, so renaming a
 type changes the checksum of every table with a column of that type
 (including a table whose row type is used as a column type elsewhere: renaming
 that table changes the checksum of the tables that use it), and values of

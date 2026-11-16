@@ -279,6 +279,12 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 		return nil, err
 	}
 
+	// The extension is relocatable, so its schema may not be in search_path.
+	extSchema, err := extensionSchema(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+
 	objects := make([]baseline.Object, 0, len(candidates))
 	for _, c := range candidates {
 		key := candidateKey(c)
@@ -304,7 +310,7 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 			}
 		}
 
-		checksum, reason, err := checksumObject(ctx, tx, c, opts.Kind, opts.Hash)
+		checksum, reason, err := checksumObject(ctx, tx, extSchema, c, opts.Kind, opts.Hash)
 		if err != nil {
 			return nil, fmt.Errorf("%s %s.%s: %w", c.Kind, c.Schema, c.Name, err)
 		}
@@ -769,7 +775,9 @@ func reusableObject(c Candidate, current baseline.Object, prior map[string]basel
 // still produces the same hash for the same schema: constraints are ordered by
 // name (a restore creates them in another order than the original DDL did),
 // and the caller pins the settings that change how names are spelled (see
-// pinSchemaHashSettings). The result is baseline.SchemaHashVersion 2.
+// pinSchemaHashSettings). The result is baseline.SchemaHashVersion 3: columns are numbered by
+// position among live columns, because attnum (which counts dropped columns)
+// changes after a dump/restore.
 func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 	var spec string
 	switch c.Kind {
@@ -778,14 +786,15 @@ func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 			"COALESCE(array_to_string(c.reloptions, ','), '') || '|' || " +
 			"COALESCE(pg_get_partkeydef(c.oid), '') || '|' || " +
 			"CASE WHEN c.relkind = 'm' THEN pg_get_viewdef(c.oid, true) ELSE '' END || '|' || " +
-			"COALESCE((SELECT string_agg(a.attnum::text || ':' || quote_ident(a.attname) || ':' || " +
+			"COALESCE((SELECT string_agg(a.ord::text || ':' || quote_ident(a.attname) || ':' || " +
 			"format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull::text || ':' || " +
 			"a.attidentity::text || ':' || a.attgenerated::text || ':' || " +
 			"COALESCE(coll.collname, '') || ':' || " +
-			"COALESCE(pg_get_expr(d.adbin, d.adrelid), ''), ' | ' ORDER BY a.attnum) " +
-			"FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
+			"COALESCE(pg_get_expr(d.adbin, d.adrelid), ''), ' | ' ORDER BY a.ord) " +
+			"FROM (SELECT x.*, row_number() OVER (ORDER BY x.attnum) AS ord FROM pg_attribute x " +
+			"WHERE x.attrelid = c.oid AND x.attnum > 0 AND NOT x.attisdropped) a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum " +
 			"LEFT JOIN pg_collation coll ON coll.oid = a.attcollation " +
-			"WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped), '') || '|' || " +
+			"), '') || '|' || " +
 			"COALESCE((SELECT string_agg(pg_get_constraintdef(con.oid, true), ' | ' ORDER BY con.conname) " +
 			"FROM pg_constraint con WHERE con.conrelid = c.oid), '')" +
 			" FROM pg_class c WHERE c.oid = $1"
@@ -807,10 +816,29 @@ func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// extensionSchema returns the schema the extension is installed in.
+func extensionSchema(ctx context.Context, tx *sql.Tx) (string, error) {
+	var schema string
+	if err := tx.QueryRowContext(ctx,
+		"SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace WHERE e.extname = $1",
+		extensionName).Scan(&schema); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", fmt.Errorf("extension %q is not installed", extensionName)
+		}
+		return "", fmt.Errorf("read extension schema: %w", err)
+	}
+	return schema, nil
+}
+
+// quoteIdent quotes an SQL identifier.
+func quoteIdent(s string) string {
+	return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+}
+
 // checksumObject calls the extension function for one relation. A NULL result
 // becomes a non-empty reason and is later recorded as skipped; SQL errors are
 // returned to the caller and abort the snapshot.
-func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind, hash string) (string, string, error) {
+func checksumObject(ctx context.Context, tx *sql.Tx, extSchema string, c Candidate, kind, hash string) (string, string, error) {
 	var function string
 	// The function accepts regclass; passing the OID avoids identifier quoting
 	// issues for unusual schema/table names.
@@ -835,8 +863,11 @@ func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind, hash str
 		return "", "", fmt.Errorf("unknown object kind %q", c.Kind)
 	}
 
+	// Qualify with the extension's schema: it may not be in search_path.
+	prefix := quoteIdent(extSchema) + "."
+
 	if hash == "" {
-		query := "SELECT " + function + "(" + args + ")::text"
+		query := "SELECT " + prefix + function + "(" + args + ")::text"
 		var checksum sql.NullString
 		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&checksum); err != nil {
 			return "", "", err
@@ -875,7 +906,7 @@ func checksumObject(ctx context.Context, tx *sql.Tx, c Candidate, kind, hash str
 	if unsigned {
 		unsignedSQL = "true"
 	}
-	query := "SELECT pg_checksum_bigint(" + function + "(" + args + "), " + unsignedSQL + ")::text"
+	query := "SELECT " + prefix + "pg_checksum_bigint(" + prefix + function + "(" + args + "), " + unsignedSQL + ")::text"
 	var checksum sql.NullString
 	if err := tx.QueryRowContext(ctx, query, c.OID, hash).Scan(&checksum); err != nil {
 		return "", "", err

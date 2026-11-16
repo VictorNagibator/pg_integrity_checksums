@@ -84,7 +84,7 @@ What changes:
 - A relation dropped while a database checksum runs is left out with a
   `NOTICE` instead of failing the whole check, in strict mode too.
 
-The CLI 0.5 that ships alongside records `schema_hash_version 2` in new
+The CLI 0.5 that ships alongside records `schema_hash_version 3` in new
 baselines: re-capture baselines (`update --yes`) to compare the schema again;
 until then `verify` compares data only and warns.
 

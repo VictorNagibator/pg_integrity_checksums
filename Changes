@@ -1,5 +1,20 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Fix: logical checksums of text values depended on client_encoding, and
+      with parallel workers also on which process read which block: workers
+      hashed the text in the server encoding while the leader hashed it in
+      the client encoding, so with a client_encoding different from the
+      server encoding the same table could give a different checksum on
+      every run.  Text types (text, varchar, char(n), name) and the send
+      functions of other text-like types (json, xml, ...) are now always
+      hashed in the server encoding.  Checksums computed with a
+      client_encoding equal to the server encoding (the default) or
+      SQL_ASCII do not change; those computed with another client_encoding
+      now match them, and no longer fail on characters the client encoding
+      cannot represent.
+
 2.7.0   2026-11-15
 
     - Fix: the logical database checksum summed the per-relation checksums

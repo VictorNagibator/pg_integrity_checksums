@@ -209,23 +209,26 @@ FROM fastpath_domain;
  t
 (1 row)
 
--- textsend() converts to the client encoding; with a client encoding that
--- differs from the server encoding the text types must still hash what the
--- send function returns.  LATIN1 for a UTF8 server, otherwise UTF8 (every
--- server encoding converts to it; LATIN1 does not, for example, to WIN1252).
--- Only ASCII is sent from here on.
+-- textsend() converts to the client encoding, but the logical checksum must
+-- not: the text types are always hashed in the server encoding.  Capture the
+-- expected cells with the server-encoding send bytes first, then compare them
+-- with a client encoding that differs from the server encoding.  LATIN1 for a
+-- UTF8 server, otherwise UTF8 (every server encoding converts to it; LATIN1
+-- does not, for example, to WIN1252).
+CREATE TEMP TABLE fastpath_expected AS
+SELECT c.tid, c.ordinal, c.tag,
+       pg_temp.expected_cell(c.tag, c.ordinal, c.payload, 'fnv64') AS cell
+FROM pg_temp.fastpath_cells() AS c
+WHERE c.tag IN ('text', 'character varying', 'character', 'name');
 SELECT CASE WHEN current_setting('server_encoding') = 'UTF8'
             THEN 'LATIN1' ELSE 'UTF8' END AS other_encoding \gset
 SET client_encoding = :'other_encoding';
-SELECT c.tag,
-       bool_and(pg_cell_checksum('fastpath'::regclass, c.tid, c.ordinal + 1,
-                                 'fnv64')
-                = pg_temp.expected_cell(c.tag, c.ordinal, c.payload, 'fnv64'))
-       AS all_match
-FROM pg_temp.fastpath_cells() AS c
-WHERE c.tag IN ('text', 'character varying', 'character', 'name')
-GROUP BY c.ordinal, c.tag
-ORDER BY c.ordinal;
+SELECT e.tag,
+       bool_and(pg_cell_checksum('fastpath'::regclass, e.tid, e.ordinal + 1,
+                                 'fnv64') = e.cell) AS all_match
+FROM fastpath_expected AS e
+GROUP BY e.ordinal, e.tag
+ORDER BY e.ordinal;
         tag        | all_match 
 -------------------+-----------
  text              | t
@@ -235,5 +238,25 @@ ORDER BY c.ordinal;
 (4 rows)
 
 RESET client_encoding;
+-- The logical checksum must not depend on client_encoding: the text types are
+-- always hashed in the server encoding.  With a UTF8 server the data holds
+-- U+00E9, which LATIN1 can represent, so the client conversion would change
+-- the bytes; other servers get ASCII only, which still exercises the path.
+CREATE TABLE fastpath_enc AS
+SELECT i, c || i::text AS t, (c || i::text)::name AS n,
+       ('{"k":"' || c || i::text || '"}')::json AS j
+FROM generate_series(1, 50) AS i,
+     (SELECT CASE WHEN current_setting('server_encoding') = 'UTF8'
+                  THEN chr(233) ELSE 'e' END AS c) AS enc;
+SELECT pg_table_logical_checksum('fastpath_enc') AS enc_default \gset
+SET client_encoding = :'other_encoding';
+SELECT pg_table_logical_checksum('fastpath_enc') = :enc_default AS enc_independent;
+ enc_independent 
+-----------------
+ t
+(1 row)
+
+RESET client_encoding;
+DROP TABLE fastpath_enc;
 DROP TABLE fastpath, fastpath_domain;
 DROP DOMAIN fastpath_dom;

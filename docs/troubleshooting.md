@@ -6,7 +6,7 @@
 |---|---|---|
 | `function ... does not exist` | Extension not created, or older than the function | `CREATE EXTENSION`; check `extversion` |
 | New release installed, but nothing changed | The database still runs the old extension version | [`ALTER EXTENSION ... UPDATE`](upgrading.md#how-to-upgrade) |
-| Logical checksums differ, the data looks the same | Different `client_encoding`, type names or extension version | See [below](#logical-checksums-differ-for-the-same-data) |
+| Logical checksums differ, the data looks the same | Different server encoding, type names or extension version | See [below](#logical-checksums-differ-for-the-same-data) |
 | `permission denied for table` | Missing `SELECT` | Grant table-level `SELECT` |
 | `row-level security` error | RLS cannot be applied to a direct heap scan | Use a non-RLS role or exclude the table |
 | `unknown checksum algorithm` | Typo or extension older than 2.2 | Use `fnv32`/`fnv64`; upgrade |
@@ -52,9 +52,9 @@ result then excludes them.  See [Strict mode](operations.md#strict-mode).
 Logical checksums ignore OIDs, physical layout and dropped columns, but some
 differences between two sessions or servers still change them:
 
-- **`client_encoding`.**  Text values are hashed as their send function
-  returns them, converted to the client encoding.  Compare
-  `SHOW client_encoding;` in both sessions and use the same value (see
+- **Server encoding.**  Text values are hashed in the database's encoding,
+  independently of `client_encoding`.  Compare `SHOW server_encoding;` on
+  both sides (see
   [Limitations](operations.md#limitations-and-portability)).
 - **Extension version.**  Some upgrades changed values; see
   [Which upgrades change checksum values](upgrading.md#which-upgrades-change-checksum-values).

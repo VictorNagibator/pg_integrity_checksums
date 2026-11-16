@@ -43,7 +43,9 @@ pages directly.
 ## Canonical logical encoding
 
 The goal is a value that is independent of relation OIDs, heap TIDs, tuple
-headers and physical layout.  The encoder:
+headers and physical layout.  The `reg*` types are encoded as the
+qualified name of the referenced object; only a plain `oid` column is hashed as
+its number, since it has no other meaning.  The encoder:
 
 - uses a type tag derived from the type name, not the type OID;
 - uses the type's binary send function, or its output function when no send

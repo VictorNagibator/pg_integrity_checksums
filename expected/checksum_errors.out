@@ -152,6 +152,22 @@ SELECT pg_cell_checksum('test_errors_dropped'::regclass, '(0,1)'::tid, 1) IS NUL
  t
 (1 row)
 
+-- A table of another table access method is refused rather than parsed as
+-- a heap.  heap2 reuses the heap handler, so only its pg_class.relam differs.
+CREATE ACCESS METHOD test_errors_heap2 TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE test_errors_am (a int) USING test_errors_heap2;
+INSERT INTO test_errors_am VALUES (1);
+SELECT pg_table_logical_checksum('test_errors_am'::regclass);
+ERROR:  relation "test_errors_am" does not use the heap table access method
+DETAIL:  Only heap tables are supported.
+SELECT pg_table_physical_checksum('test_errors_am'::regclass);
+ERROR:  relation "test_errors_am" does not use the heap table access method
+DETAIL:  Only heap tables are supported.
+SELECT pg_tuple_physical_checksum('test_errors_am'::regclass, '(0,1)'::tid);
+ERROR:  relation "test_errors_am" does not use the heap table access method
+DETAIL:  Only heap tables are supported.
+DROP TABLE test_errors_am;
+DROP ACCESS METHOD test_errors_heap2;
 -- Cleanup.
 DROP TABLE test_errors_zero;
 DROP TABLE test_errors_dropped;

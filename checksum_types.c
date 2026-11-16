@@ -9,10 +9,16 @@
 #include <math.h>
 #include "fmgr.h"
 #include "access/htup_details.h"
+#include "catalog/pg_collation.h"
 #include "catalog/pg_namespace.h"
+#include "catalog/pg_operator.h"
+#include "catalog/pg_proc.h"
+#include "catalog/pg_ts_config.h"
+#include "catalog/pg_ts_dict.h"
 #include "catalog/pg_type.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "utils/acl.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
@@ -65,7 +71,9 @@ typedef enum LogicalFastPath
     LFP_UUID,                   /* uuid_send: 16 raw bytes */
     LFP_TEXT,                   /* textsend, varcharsend, bpcharsend */
     LFP_NAME,                   /* namesend */
-    LFP_BYTEA                   /* byteasend: the raw bytes */
+    LFP_BYTEA,                  /* byteasend: the raw bytes */
+    LFP_REGNAME                 /* reg* types: the object's qualified name,
+                                 * not its OID */
 } LogicalFastPath;
 
 /*
@@ -299,6 +307,20 @@ logical_type_fastpath(Oid base_typid)
         case VARCHAROID:
         case BPCHAROID:
             return LFP_TEXT;
+        case REGPROCOID:
+        case REGPROCEDUREOID:
+        case REGOPEROID:
+        case REGOPERATOROID:
+        case REGCLASSOID:
+        case REGTYPEOID:
+        case REGCONFIGOID:
+        case REGDICTIONARYOID:
+        case REGNAMESPACEOID:
+        case REGROLEOID:
+#ifdef REGCOLLATIONOID
+        case REGCOLLATIONOID:
+#endif
+            return LFP_REGNAME;
         case NAMEOID:
             return LFP_NAME;
         case BYTEAOID:
@@ -520,6 +542,194 @@ logical_hash_send(uint64 h, Datum value, LogicalTypeInfo *info,
 }
 
 /*
+ * Canonical names of reg* values
+ *
+ * regclass, regproc, regtype, ... are stored as the OID of the object they
+ * name.  An OID differs after a dump and restore, so hashing it would make
+ * the checksum of such a column depend on catalog state instead of data.
+ * The value is therefore encoded as the qualified name of the object.  The
+ * names are built from the catalogs directly rather than with the output
+ * functions, which depend on search_path and quote_all_identifiers.  A zero
+ * OID is encoded as "-" (as the output functions print it) and an OID that
+ * names no object as "#<oid>", the only information left.
+ */
+static void
+append_reg_qualified(StringInfo buf, Oid nspid, const char *name)
+{
+    char       *nspname = get_namespace_name(nspid);
+
+    appendStringInfo(buf, "%s.%s", nspname ? nspname : "?", name);
+    if (nspname)
+        pfree(nspname);
+}
+
+static void
+append_reg_type(StringInfo buf, Oid typid)
+{
+    HeapTuple   tuple;
+
+    if (!OidIsValid(typid))
+    {
+        appendStringInfoChar(buf, '-');
+        return;
+    }
+
+    tuple = SearchSysCache1(TYPEOID, ObjectIdGetDatum(typid));
+    if (!HeapTupleIsValid(tuple))
+    {
+        appendStringInfo(buf, "#%u", typid);
+        return;
+    }
+    append_reg_qualified(buf, ((Form_pg_type) GETSTRUCT(tuple))->typnamespace,
+                         NameStr(((Form_pg_type) GETSTRUCT(tuple))->typname));
+    ReleaseSysCache(tuple);
+}
+
+static void
+append_reg_name(StringInfo buf, Oid typid, Oid oid)
+{
+    HeapTuple   tuple;
+    char       *name;
+
+    if (!OidIsValid(oid))
+    {
+        appendStringInfoChar(buf, '-');
+        return;
+    }
+
+    switch (typid)
+    {
+        case REGCLASSOID:
+            name = get_rel_name(oid);
+            if (name != NULL)
+            {
+                append_reg_qualified(buf, get_rel_namespace(oid), name);
+                pfree(name);
+                return;
+            }
+            break;
+        case REGTYPEOID:
+            if (SearchSysCacheExists1(TYPEOID, ObjectIdGetDatum(oid)))
+            {
+                append_reg_type(buf, oid);
+                return;
+            }
+            break;
+        case REGPROCOID:
+        case REGPROCEDUREOID:
+            tuple = SearchSysCache1(PROCOID, ObjectIdGetDatum(oid));
+            if (HeapTupleIsValid(tuple))
+            {
+                Form_pg_proc proc = (Form_pg_proc) GETSTRUCT(tuple);
+                int         i;
+
+                /* The signature is part of the identity of a function. */
+                append_reg_qualified(buf, proc->pronamespace,
+                                     NameStr(proc->proname));
+                appendStringInfoChar(buf, '(');
+                for (i = 0; i < proc->pronargs; i++)
+                {
+                    if (i > 0)
+                        appendStringInfoChar(buf, ',');
+                    append_reg_type(buf, proc->proargtypes.values[i]);
+                }
+                appendStringInfoChar(buf, ')');
+                ReleaseSysCache(tuple);
+                return;
+            }
+            break;
+        case REGOPEROID:
+        case REGOPERATOROID:
+            tuple = SearchSysCache1(OPEROID, ObjectIdGetDatum(oid));
+            if (HeapTupleIsValid(tuple))
+            {
+                Form_pg_operator op = (Form_pg_operator) GETSTRUCT(tuple);
+
+                append_reg_qualified(buf, op->oprnamespace,
+                                     NameStr(op->oprname));
+                appendStringInfoChar(buf, '(');
+                append_reg_type(buf, op->oprleft);
+                appendStringInfoChar(buf, ',');
+                append_reg_type(buf, op->oprright);
+                appendStringInfoChar(buf, ')');
+                ReleaseSysCache(tuple);
+                return;
+            }
+            break;
+        case REGCONFIGOID:
+            tuple = SearchSysCache1(TSCONFIGOID, ObjectIdGetDatum(oid));
+            if (HeapTupleIsValid(tuple))
+            {
+                Form_pg_ts_config cfg = (Form_pg_ts_config) GETSTRUCT(tuple);
+
+                append_reg_qualified(buf, cfg->cfgnamespace,
+                                     NameStr(cfg->cfgname));
+                ReleaseSysCache(tuple);
+                return;
+            }
+            break;
+        case REGDICTIONARYOID:
+            tuple = SearchSysCache1(TSDICTOID, ObjectIdGetDatum(oid));
+            if (HeapTupleIsValid(tuple))
+            {
+                Form_pg_ts_dict dict = (Form_pg_ts_dict) GETSTRUCT(tuple);
+
+                append_reg_qualified(buf, dict->dictnamespace,
+                                     NameStr(dict->dictname));
+                ReleaseSysCache(tuple);
+                return;
+            }
+            break;
+        case REGNAMESPACEOID:
+            name = get_namespace_name(oid);
+            if (name != NULL)
+            {
+                appendStringInfoString(buf, name);
+                pfree(name);
+                return;
+            }
+            break;
+        case REGROLEOID:
+            name = GetUserNameFromId(oid, true);
+            if (name != NULL)
+            {
+                appendStringInfoString(buf, name);
+                pfree(name);
+                return;
+            }
+            break;
+#ifdef REGCOLLATIONOID
+        case REGCOLLATIONOID:
+            tuple = SearchSysCache1(COLLOID, ObjectIdGetDatum(oid));
+            if (HeapTupleIsValid(tuple))
+            {
+                Form_pg_collation coll = (Form_pg_collation) GETSTRUCT(tuple);
+
+                append_reg_qualified(buf, coll->collnamespace,
+                                     NameStr(coll->collname));
+                ReleaseSysCache(tuple);
+                return;
+            }
+            break;
+#endif
+    }
+
+    appendStringInfo(buf, "#%u", oid);
+}
+
+static uint64
+logical_hash_regname(uint64 h, Datum value, Oid typid, ChecksumAlgo algo)
+{
+    StringInfoData buf;
+
+    initStringInfo(&buf);
+    append_reg_name(&buf, typid, DatumGetObjectId(value));
+    h = hash_bytes_algo(h, buf.data, buf.len, algo);
+    pfree(buf.data);
+    return h;
+}
+
+/*
  * logical_hash_scalar - hash the canonical encoding of a scalar value
  *
  * "info" describes the value's type; its base type selects the encoding.
@@ -616,6 +826,8 @@ logical_hash_scalar(uint64 h, Datum value, LogicalTypeInfo *info,
 
                 return hash_bytes_algo(h, str, strlen(str), algo);
             }
+        case LFP_REGNAME:
+            return logical_hash_regname(h, value, info->base_typid, algo);
         case LFP_NONE:
             break;
     }

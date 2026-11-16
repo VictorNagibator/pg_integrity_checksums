@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -177,5 +178,46 @@ func TestCaptureRejectsInvalidHashBeforeConnecting(t *testing.T) {
 	code, _, errOut := runCLI("capture", "--hash", "sha256")
 	if code != 2 || !strings.Contains(errOut, "invalid --hash") {
 		t.Fatalf("capture invalid hash: code=%d err=%q", code, errOut)
+	}
+}
+
+func TestOutputWriterKeepsReportUntilFirstWrite(t *testing.T) {
+	dir := t.TempDir()
+
+	// A new report file that is never written does not stay behind.
+	fresh := filepath.Join(dir, "fresh.txt")
+	_, closeFresh, err := outputWriter(io.Discard, fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(fresh); err != nil {
+		t.Fatalf("path should be validated up front: %v", err)
+	}
+	closeFresh()
+	if _, err := os.Stat(fresh); !os.IsNotExist(err) {
+		t.Fatalf("unwritten new report should be removed, stat err = %v", err)
+	}
+
+	// An existing report survives a failed command and is replaced on write.
+	old := filepath.Join(dir, "old.txt")
+	if err := os.WriteFile(old, []byte("previous report, longer than the new one"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, closeOld, err := outputWriter(io.Discard, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closeOld()
+	if got, _ := os.ReadFile(old); !strings.HasPrefix(string(got), "previous") {
+		t.Fatalf("unwritten run must keep the old report, got %q", got)
+	}
+	w, closeW, err := outputWriter(io.Discard, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(w, "new")
+	closeW()
+	if got, _ := os.ReadFile(old); string(got) != "new" {
+		t.Fatalf("written run must replace the report, got %q", got)
 	}
 }

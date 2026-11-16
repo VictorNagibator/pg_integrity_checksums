@@ -223,3 +223,51 @@ SELECT (SELECT sum FROM test_types_cache_sums WHERE label = 'before') <>
        AS rename_back_restores_checksum;
 DROP TABLE test_types_cache_t;
 DROP TYPE test_types_cache_mood;
+
+-- reg* columns are hashed by the qualified name of the object, not its OID,
+-- so recreating the objects (new OIDs, as after a dump and restore) does not
+-- change the checksum.  Plain oid columns stay numeric.
+CREATE SCHEMA test_types_reg;
+CREATE TABLE test_types_reg.target (a int);
+CREATE TYPE test_types_reg.ty AS ENUM ('x');
+CREATE FUNCTION test_types_reg.fn(int, text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+CREATE ROLE test_types_reg_role;
+CREATE TABLE test_types_reg_t (
+    c regclass, t regtype, p regprocedure, pn regproc, o regoperator,
+    n regnamespace, r regrole, cfg regconfig, d regdictionary, ta regtype[]);
+INSERT INTO test_types_reg_t VALUES (
+    'test_types_reg.target', 'test_types_reg.ty', 'test_types_reg.fn(int,text)',
+    'test_types_reg.fn', '+(int4,int4)', 'test_types_reg', 'test_types_reg_role',
+    'simple', 'simple', ARRAY['test_types_reg.ty'::regtype]);
+CREATE TEMP TABLE test_types_reg_before AS
+SELECT pg_table_logical_checksum('test_types_reg_t'::regclass, 'fnv32') AS c32,
+       pg_table_logical_checksum('test_types_reg_t'::regclass, 'fnv64') AS c64;
+
+DROP TABLE test_types_reg.target;
+DROP FUNCTION test_types_reg.fn(int, text);
+DROP TYPE test_types_reg.ty;
+DROP ROLE test_types_reg_role;
+CREATE TABLE test_types_reg.target (a int);
+CREATE TYPE test_types_reg.ty AS ENUM ('x');
+CREATE FUNCTION test_types_reg.fn(int, text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+CREATE ROLE test_types_reg_role;
+UPDATE test_types_reg_t SET
+    c = 'test_types_reg.target', t = 'test_types_reg.ty',
+    p = 'test_types_reg.fn(int,text)', pn = 'test_types_reg.fn',
+    r = 'test_types_reg_role', ta = ARRAY['test_types_reg.ty'::regtype];
+
+SELECT pg_table_logical_checksum('test_types_reg_t'::regclass, 'fnv32') = b.c32 AS fnv32_oid_independent,
+       pg_table_logical_checksum('test_types_reg_t'::regclass, 'fnv64') = b.c64 AS fnv64_oid_independent
+FROM test_types_reg_before b;
+
+-- Different objects give different checksums.
+CREATE TABLE test_types_reg_a (c regclass);
+CREATE TABLE test_types_reg_b (c regclass);
+INSERT INTO test_types_reg_a VALUES ('pg_class');
+INSERT INTO test_types_reg_b VALUES ('pg_type');
+SELECT pg_table_logical_checksum('test_types_reg_a'::regclass) <>
+       pg_table_logical_checksum('test_types_reg_b'::regclass) AS different_names_differ;
+
+DROP TABLE test_types_reg_t, test_types_reg_a, test_types_reg_b;
+DROP SCHEMA test_types_reg CASCADE;
+DROP ROLE test_types_reg_role;

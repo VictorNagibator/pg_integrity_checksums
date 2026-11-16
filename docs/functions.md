@@ -416,8 +416,8 @@ both 32-bit and 64-bit algorithms.
 Logical values use a canonical type-aware encoding:
 
 * **Scalar types** use their binary send function (network byte order), or the
-  output function when no send function exists.  Text types are converted to
-  the session's `client_encoding` by their send function; see
+  output function when no send function exists.  Text types are hashed in the
+  server encoding, independently of `client_encoding`; see
   [Operations](operations.md#limitations-and-portability).
 * **Enums** are hashed by label, not by type OID.
 * **numeric** is normalized with `numeric_normalize()`, so `1.0` and `1.00`

@@ -453,24 +453,39 @@ logical_value_prefix(LogicalTypeInfo *info, int attnum, ChecksumAlgo algo)
 }
 
 /*
- * text_needs_conversion - does pq_sendtext() convert text of this length?
- *
- * textsend() and namesend() convert to the client encoding.  Mirror the
- * cases in which pg_server_to_any() returns its input unchanged and without
- * validation; everything else goes through the real send function.
+ * Send functions of text-like types (textsend, json_send, xml_send, ...) call
+ * pq_sendtext(), which converts to the client encoding.  Logical checksums
+ * must not depend on that setting: parallel workers and the leader would
+ * otherwise hash different bytes for the same value, and sessions with
+ * different client_encoding would disagree.  The values are therefore always
+ * hashed in the server encoding, which is what the send functions return
+ * while the client encoding is SQL_ASCII (pg_server_to_any() leaves the
+ * string alone then).  Setting SQL_ASCII does not need any catalog access.
  */
-static inline bool
-text_needs_conversion(int len)
+static bytea *
+send_in_server_encoding(FmgrInfo *finfo, Datum value)
 {
-    int         client_encoding;
+    int         saved_encoding = pg_get_client_encoding();
+    bytea      *bytes;
 
-    if (len <= 0)
-        return false;
+    if (saved_encoding == GetDatabaseEncoding() ||
+        saved_encoding == PG_SQL_ASCII)
+        return SendFunctionCall(finfo, value);
 
-    client_encoding = pg_get_client_encoding();
+    SetClientEncoding(PG_SQL_ASCII);
+    PG_TRY();
+    {
+        bytes = SendFunctionCall(finfo, value);
+    }
+    PG_CATCH();
+    {
+        SetClientEncoding(saved_encoding);
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+    SetClientEncoding(saved_encoding);
 
-    return !(client_encoding == GetDatabaseEncoding() ||
-             client_encoding == PG_SQL_ASCII);
+    return bytes;
 }
 
 /*
@@ -482,7 +497,7 @@ logical_hash_send(uint64 h, Datum value, LogicalTypeInfo *info,
 {
     if (info->has_send)
     {
-        bytea      *bytes = SendFunctionCall(&info->send_finfo, value);
+        bytea      *bytes = send_in_server_encoding(&info->send_finfo, value);
 
         h = hash_bytes_algo(h, VARDATA(bytes), VARSIZE(bytes) - VARHDRSZ,
                             algo);
@@ -588,10 +603,8 @@ logical_hash_scalar(uint64 h, Datum value, LogicalTypeInfo *info,
                 struct varlena *v = PG_DETOAST_DATUM_PACKED(value);
                 int         len = VARSIZE_ANY_EXHDR(v);
 
-                if (info->fastpath == LFP_TEXT && text_needs_conversion(len))
-                    h = logical_hash_send(h, PointerGetDatum(v), info, algo);
-                else
-                    h = hash_bytes_algo(h, VARDATA_ANY(v), len, algo);
+                /* Always the server encoding, whatever client_encoding is. */
+                h = hash_bytes_algo(h, VARDATA_ANY(v), len, algo);
 
                 if ((Pointer) v != DatumGetPointer(value))
                     pfree(v);
@@ -600,11 +613,8 @@ logical_hash_scalar(uint64 h, Datum value, LogicalTypeInfo *info,
         case LFP_NAME:
             {
                 const char *str = NameStr(*DatumGetName(value));
-                int         len = (int) strlen(str);
 
-                if (text_needs_conversion(len))
-                    return logical_hash_send(h, value, info, algo);
-                return hash_bytes_algo(h, str, len, algo);
+                return hash_bytes_algo(h, str, strlen(str), algo);
             }
         case LFP_NONE:
             break;

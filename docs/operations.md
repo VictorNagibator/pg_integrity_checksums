@@ -29,16 +29,12 @@ These limitations are documented rather than silently ignored.
   locked (`SELECT ... FOR UPDATE`/`FOR SHARE`, foreign key checks), because
   the lock is stored in the tuple's `xmax`.  Use physical checksums for
   on-disk corruption within one cluster, not for comparing replicas.
-* **Text values depend on the client encoding.** The text types (`text`,
-  `varchar`, `char(n)`, `name`) are hashed in the form their send function
-  returns, which is converted to the session's `client_encoding`.  When it
-  differs from the server encoding, logical checksums of non-ASCII text
-  differ from those of a session with the same encoding as the server, and
-  characters the client encoding cannot represent raise an error.  Compute
-  checksums that will be compared with each other with the same
-  `client_encoding`, preferably equal to the server encoding (the default
-  unless the connection or the role sets another one).  This is planned to
-  change in a future major release.
+* **Text values are hashed in the server encoding.** The text types (`text`,
+  `varchar`, `char(n)`, `name`, and the other types whose send function
+  converts text, such as `json`) are hashed as stored, whatever the session's
+  `client_encoding` is, so logical checksums do not depend on it.  They do
+  depend on the server (database) encoding: the same text in databases with
+  different encodings hashes differently.
 * **Logical index checksums describe expected content, not stored pages.**
   They are derived from visible table rows and the index definition, so a
   missing or corrupt index entry is not detected by this value.  Use

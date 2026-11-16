@@ -66,3 +66,4 @@ CLI (`cli/internal/`): `cli` (command dispatch, flags, output/JUnit; stdout is d
 - Branches: `feat/`, `fix/`, `docs/`, `test/`, `refactor/`, `ci/`, `chore/`, `release/`. Conventional Commits for commits and PR titles (`fix(extension): ...`, `feat(cli): ...`); squash merge; no direct commits to `main`.
 - Every behavior change gets a regression test. Don't commit `*.o`, `*.so` or test output.
 - CI on PRs runs PG 12, 16 and 19; **CI Gate** is the single required check.
+- Follow PR template (`.github/pull_request_template.md`) when creating PR

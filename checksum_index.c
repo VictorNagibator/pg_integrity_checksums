@@ -186,7 +186,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
 
     is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
     nblocks = RelationGetNumberOfBlocks(idxRel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(idxRel);
     if (nblocks < (uint32) workers)
         workers = (int) nblocks;
 
@@ -707,7 +707,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     }
 
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(scanstate.heapRel);
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
     if (workers > 0 && !pg_index_definition_parallel_safe(scanstate.idxRel))
@@ -815,7 +815,7 @@ pg_index_logical_checksum_accum64(Oid indexoid, bool check_privileges,
     }
 
     nblocks = RelationGetNumberOfBlocks(scanstate.heapRel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(scanstate.heapRel);
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
     if (workers > 0 && !pg_index_definition_parallel_safe(scanstate.idxRel))
@@ -922,7 +922,7 @@ pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
 
     is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
     nblocks = RelationGetNumberOfBlocks(idxRel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(idxRel);
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
     if (workers < 1)

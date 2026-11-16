@@ -236,6 +236,38 @@ BEGIN
     END IF;
 END;
 $$;
+-- A partition may declare its columns in another order than its parent: the
+-- logical checksum is that of a plain table holding the same rows.
+CREATE TABLE test_colorder_plain (a int, b text);
+CREATE TABLE test_colorder (a int, b text) PARTITION BY RANGE (a);
+CREATE TABLE test_colorder_p1 (b text, a int);
+ALTER TABLE test_colorder ATTACH PARTITION test_colorder_p1 FOR VALUES FROM (0) TO (100);
+CREATE TABLE test_colorder_p2 (a int, b text);
+ALTER TABLE test_colorder ATTACH PARTITION test_colorder_p2 FOR VALUES FROM (100) TO (200);
+INSERT INTO test_colorder_plain SELECT i, 'row' || i FROM generate_series(1, 150) i;
+INSERT INTO test_colorder SELECT i, 'row' || i FROM generate_series(1, 150) i;
+SELECT pg_table_logical_checksum('test_colorder') = pg_table_logical_checksum('test_colorder_plain') AS same_logical;
+ same_logical 
+--------------
+ t
+(1 row)
+
+SELECT pg_table_logical_checksum('test_colorder', 'fnv64') = pg_table_logical_checksum('test_colorder_plain', 'fnv64') AS same_logical_fnv64;
+ same_logical_fnv64 
+--------------------
+ t
+(1 row)
+
+SET pg_integrity_checksums.workers = 2;
+SELECT pg_table_logical_checksum('test_colorder') = pg_table_logical_checksum('test_colorder_plain') AS same_logical_parallel;
+ same_logical_parallel 
+-----------------------
+ t
+(1 row)
+
+RESET pg_integrity_checksums.workers;
+DROP TABLE test_colorder;
+DROP TABLE test_colorder_plain;
 -- Clean up
 DROP TABLE test_partitioned;
 DROP TABLE test_partitioned_nopk;

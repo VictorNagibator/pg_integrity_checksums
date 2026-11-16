@@ -20,7 +20,8 @@
 
 static void pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
                                             ChecksumLogicalAccum *acc,
-                                            bool *is_null);
+                                            bool *is_null,
+                                            TupleDesc order_desc);
 
 /*-------------------------------------------------------------------------
  * Partitioned Table Helpers
@@ -265,7 +266,7 @@ pg_table_physical_checksum_calc(Oid reloid, bool include_header,
                                       (uint32) rel->rd_rel->reltablespace);
 
     nblocks = RelationGetNumberOfBlocks(rel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(rel);
     if (nblocks < (uint32) workers)
         workers = (int) nblocks;
 
@@ -376,7 +377,7 @@ pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
                                          (uint64) rel->rd_rel->reltablespace);
 
     nblocks = RelationGetNumberOfBlocks(rel);
-    workers = pg_integrity_checksums_worker_count();
+    workers = pg_integrity_checksums_worker_count_for(rel);
     if (nblocks < (BlockNumber) workers)
         workers = (int) nblocks;
     if (workers < 1)
@@ -482,7 +483,8 @@ pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
 {
     ChecksumLogicalAccum acc = {0, 0};
 
-    pg_table_logical_checksum_accum(reloid, check_privileges, &acc, is_null);
+    pg_table_logical_checksum_accum(reloid, check_privileges, &acc, is_null,
+                                    NULL);
 
     if (*is_null)
         return 0;
@@ -502,7 +504,8 @@ pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
  */
 static void
 pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
-                                ChecksumLogicalAccum *acc, bool *is_null)
+                                ChecksumLogicalAccum *acc, bool *is_null,
+                                TupleDesc order_desc)
 {
     Relation    rel;
     char        relkind;
@@ -538,7 +541,9 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
             Oid         partoid = lfirst_oid(lc);
             bool        part_null = false;
 
-            pg_table_logical_checksum_accum(partoid, false, acc, &part_null);
+            pg_table_logical_checksum_accum(partoid, false, acc, &part_null,
+                                            order_desc ? order_desc :
+                                            RelationGetDescr(rel));
             if (part_null)
                 any_null = true;
         }
@@ -554,7 +559,18 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
-        int         workers = pg_integrity_checksums_worker_count();
+        int         workers = pg_integrity_checksums_worker_count_for(rel);
+
+        /*
+         * A partition that declares its columns in another order than the
+         * partitioned table is hashed in the table's column order, which
+         * only the serial scan knows about.
+         */
+        if (order_desc != NULL &&
+            logical_columns_same_order(RelationGetDescr(rel), order_desc))
+            order_desc = NULL;
+        if (order_desc != NULL)
+            workers = 0;
 
         if (nblocks < (BlockNumber) workers)
             workers = (int) nblocks;
@@ -564,7 +580,7 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
             BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
             scan_table_blocks_logical(rel, 0, nblocks, snapshot, acc,
-                                      bstrategy);
+                                      bstrategy, order_desc);
             FreeAccessStrategy(bstrategy);
         }
         else
@@ -585,7 +601,8 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
  */
 static void
 pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
-                                  ChecksumLogicalAccum64 *acc, bool *is_null)
+                                  ChecksumLogicalAccum64 *acc, bool *is_null,
+                                  TupleDesc order_desc)
 {
     Relation    rel;
     char        relkind;
@@ -620,7 +637,9 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
             Oid         partoid = lfirst_oid(lc);
             bool        part_null = false;
 
-            pg_table_logical_checksum_accum64(partoid, false, acc, &part_null);
+            pg_table_logical_checksum_accum64(partoid, false, acc, &part_null,
+                                              order_desc ? order_desc :
+                                              RelationGetDescr(rel));
             if (part_null)
                 any_null = true;
         }
@@ -636,7 +655,15 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
     {
         BlockNumber nblocks = RelationGetNumberOfBlocks(rel);
 
-        workers = pg_integrity_checksums_worker_count();
+        workers = pg_integrity_checksums_worker_count_for(rel);
+
+        /* See pg_table_logical_checksum_accum(). */
+        if (order_desc != NULL &&
+            logical_columns_same_order(RelationGetDescr(rel), order_desc))
+            order_desc = NULL;
+        if (order_desc != NULL)
+            workers = 0;
+
         if (nblocks < (BlockNumber) workers)
             workers = (int) nblocks;
         if (workers < 1)
@@ -645,7 +672,7 @@ pg_table_logical_checksum_accum64(Oid reloid, bool check_privileges,
             BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
             scan_table_blocks_logical64(rel, 0, nblocks, snapshot, acc,
-                                        bstrategy);
+                                        bstrategy, order_desc);
             FreeAccessStrategy(bstrategy);
         }
         else
@@ -667,7 +694,8 @@ pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
 {
     ChecksumLogicalAccum64 acc = {0, 0};
 
-    pg_table_logical_checksum_accum64(reloid, check_privileges, &acc, is_null);
+    pg_table_logical_checksum_accum64(reloid, check_privileges, &acc, is_null,
+                                      NULL);
 
     if (*is_null)
         return 0;

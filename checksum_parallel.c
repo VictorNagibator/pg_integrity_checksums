@@ -130,10 +130,11 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                     else if (algo == CHECKSUM_ALGO_FNV64)
                         scan_table_blocks_logical64(rel, start, end, snapshot,
                                                     &accs->logical64,
-                                                    bstrategy);
+                                                    bstrategy, NULL);
                     else
                         scan_table_blocks_logical(rel, start, end, snapshot,
-                                                  &accs->logical32, bstrategy);
+                                                  &accs->logical32, bstrategy,
+                                                  NULL);
                 }
 
                 relation_close(rel, AccessShareLock);

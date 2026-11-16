@@ -178,6 +178,19 @@ BEGIN
 END;
 $$;
 
+-- Temporary relations cannot be read by parallel workers: they are scanned
+-- serially, whatever the worker setting.
+CREATE TEMP TABLE test_parallel_temp AS
+    SELECT i AS id, 'data_' || i AS data FROM generate_series(1, 5000) i;
+CREATE INDEX test_parallel_temp_idx ON test_parallel_temp (id);
+SET pg_integrity_checksums.workers = 2;
+SELECT pg_table_physical_checksum('test_parallel_temp') IS NOT NULL AS temp_table_physical;
+SELECT pg_table_logical_checksum('test_parallel_temp') IS NOT NULL AS temp_table_logical;
+SELECT pg_index_physical_checksum('test_parallel_temp_idx') IS NOT NULL AS temp_index_physical;
+SELECT pg_index_logical_checksum('test_parallel_temp_idx') IS NOT NULL AS temp_index_logical;
+RESET pg_integrity_checksums.workers;
+DROP TABLE test_parallel_temp;
+
 -- Clean up
 DROP INDEX idx_test_parallel_group;
 DROP INDEX idx_test_parallel_data;

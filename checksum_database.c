@@ -290,22 +290,19 @@ lock_relation_if_exists(Oid relid)
 }
 
 /*
- * compute_database_relation - checksum one relation of a database scan
+ * compute_database_relation_locked - checksum one relation, lock already held
  */
 static void
-compute_database_relation(Oid relid, char relkind, bool physical,
-                          ChecksumAlgo algo, ChecksumAccum64 *acc,
-                          ChecksumLogicalAccum *logical_acc,
-                          ChecksumLogicalAccum64 *logical_acc64,
-                          uint32 *skipped)
+compute_database_relation_locked(Oid relid, char relkind, bool physical,
+                                 ChecksumAlgo algo, ChecksumAccum64 *acc,
+                                 ChecksumLogicalAccum *logical_acc,
+                                 ChecksumLogicalAccum64 *logical_acc64,
+                                 uint32 *skipped)
 {
     uint64      rel_checksum = 0;
     bool        skip = false;
     MemoryContext oldcontext;
     ResourceOwner oldowner;
-
-    if (!lock_relation_if_exists(relid))
-        return;
 
 #if PG_VERSION_NUM < 170000
     /*
@@ -432,6 +429,30 @@ compute_database_relation(Oid relid, char relkind, bool physical,
         handle_skipped_relation(relid, skipped);
 }
 
+/*
+ * compute_database_relation - checksum one relation of a database scan
+ *
+ * The lock only protects the relation from being dropped while it is
+ * processed.  It is released afterwards: held until the end of the query, the
+ * locks of a database with many relations would exhaust the shared lock table
+ * (max_locks_per_transaction).
+ */
+static void
+compute_database_relation(Oid relid, char relkind, bool physical,
+                          ChecksumAlgo algo, ChecksumAccum64 *acc,
+                          ChecksumLogicalAccum *logical_acc,
+                          ChecksumLogicalAccum64 *logical_acc64,
+                          uint32 *skipped)
+{
+    if (!lock_relation_if_exists(relid))
+        return;
+
+    compute_database_relation_locked(relid, relkind, physical, algo, acc,
+                                     logical_acc, logical_acc64, skipped);
+
+    UnlockRelationOid(relid, AccessShareLock);
+}
+
 /*-------------------------------------------------------------------------
  * Logical table groups: one heap pass for a table and its indexes
  *-------------------------------------------------------------------------
@@ -539,7 +560,7 @@ compute_logical_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     state.indexes = palloc0(sizeof(IndexLogicalScanState) * state.nindexes);
     state.index_valid = palloc0(sizeof(bool) * state.nindexes);
     state.accs = palloc0(sizeof(ChecksumLogicalAccum64) * n);
-    logical_row_hasher_init(&state.hasher, RelationGetDescr(rel));
+    logical_row_hasher_init(&state.hasher, RelationGetDescr(rel), NULL);
 
     skip[0] = false;
     for (i = 0; i < state.nindexes; i++)
@@ -605,10 +626,11 @@ add_group_results(ChecksumRelationItem *items, int n, uint64 *results,
  * nothing in the normal case.
  */
 static void
-compute_database_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
-                       ChecksumLogicalAccum *logical_acc,
-                       ChecksumLogicalAccum64 *logical_acc64,
-                       uint32 *skipped)
+compute_database_group_locked(ChecksumRelationItem *items, int n,
+                              ChecksumAlgo algo,
+                              ChecksumLogicalAccum *logical_acc,
+                              ChecksumLogicalAccum64 *logical_acc64,
+                              uint32 *skipped)
 {
     uint64     *results = palloc(sizeof(uint64) * n);
     bool       *skip = palloc(sizeof(bool) * n);
@@ -616,17 +638,6 @@ compute_database_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     ResourceOwner oldowner;
     bool        failed = false;
     int         i;
-
-    /*
-     * Dropping the table drops its indexes too.  An index dropped on its own
-     * makes the group fail, and the per-relation retry below skips it.
-     */
-    if (!lock_relation_if_exists(items[0].reloid))
-    {
-        pfree(results);
-        pfree(skip);
-        return;
-    }
 
 #if PG_VERSION_NUM < 170000
     /* No subtransactions in parallel mode; see compute_database_relation(). */
@@ -693,6 +704,28 @@ compute_database_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
 
     pfree(results);
     pfree(skip);
+}
+
+/*
+ * compute_database_group - checksum a table and its indexes in one heap pass
+ *
+ * Dropping the table drops its indexes too.  An index dropped on its own
+ * makes the group fail, and the per-relation retry skips it.  The lock is
+ * released afterwards, as in compute_database_relation().
+ */
+static void
+compute_database_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
+                       ChecksumLogicalAccum *logical_acc,
+                       ChecksumLogicalAccum64 *logical_acc64,
+                       uint32 *skipped)
+{
+    if (!lock_relation_if_exists(items[0].reloid))
+        return;
+
+    compute_database_group_locked(items, n, algo, logical_acc, logical_acc64,
+                                  skipped);
+
+    UnlockRelationOid(items[0].reloid, AccessShareLock);
 }
 
 /*

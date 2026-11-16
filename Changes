@@ -2,6 +2,22 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: the logical checksum of a partitioned table depended on the column
+      order of its partitions.  A partition declaring its columns in another
+      order than the parent (for example (b text, a int) under (a int,
+      b text)) gave a different checksum than a plain table with the same
+      rows.  Leaf partitions are now hashed in the column order of the
+      queried table, matched by name.  Checksums of partitioned tables whose
+      partitions have another column order change; all others do not.
+    - Fix: table and index checksum functions failed on temporary tables
+      with pg_integrity_checksums.workers > 0 ("cannot access temporary
+      tables during a parallel operation").  Temporary relations are now
+      always scanned in the calling backend.
+    - Fix: the database checksum functions held a lock on every relation
+      until the end of the query, so a database with many relations failed
+      with "out of shared memory" (max_locks_per_transaction).  The lock is
+      now released as soon as the relation has been processed.
+
     - Fix: the physical checksum of an index (and of a TOAST table) changed
       after crash recovery although no data changed.  The unused space
       between pd_lower and pd_upper of a page is not guaranteed to be zero:

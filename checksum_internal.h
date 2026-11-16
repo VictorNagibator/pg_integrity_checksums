@@ -211,6 +211,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 
 /* Parallel execution and shared scan configuration. */
 extern int pg_integrity_checksums_worker_count(void);
+extern int pg_integrity_checksums_worker_count_for(Relation rel);
 extern Snapshot pg_integrity_checksums_get_snapshot(void);
 
 /*
@@ -642,7 +643,8 @@ typedef struct LogicalRowHasher
 } LogicalRowHasher;
 
 extern void logical_row_hasher_init(LogicalRowHasher *hasher,
-                                    TupleDesc tupdesc);
+                                    TupleDesc tupdesc, TupleDesc order_desc);
+extern bool logical_columns_same_order(TupleDesc tupdesc, TupleDesc order_desc);
 extern uint64 logical_row_hash(LogicalRowHasher *hasher, HeapTuple tuple,
                                ChecksumAlgo algo);
 extern void logical_row_hasher_free(LogicalRowHasher *hasher);
@@ -680,11 +682,13 @@ extern void scan_table_blocks_physical64(Relation rel, BlockNumber start,
 extern void scan_table_blocks_logical(Relation rel, BlockNumber start,
                                       BlockNumber end, Snapshot snapshot,
                                       ChecksumLogicalAccum *acc,
-                                      BufferAccessStrategy bstrategy);
+                                      BufferAccessStrategy bstrategy,
+                                      TupleDesc order_desc);
 extern void scan_table_blocks_logical64(Relation rel, BlockNumber start,
                                         BlockNumber end, Snapshot snapshot,
                                         ChecksumLogicalAccum64 *acc,
-                                        BufferAccessStrategy bstrategy);
+                                        BufferAccessStrategy bstrategy,
+                                        TupleDesc order_desc);
 extern void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
                                        BlockNumber end, bool is_brin,
                                        ChecksumAccum *acc,

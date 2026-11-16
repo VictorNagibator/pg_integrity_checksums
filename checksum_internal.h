@@ -504,10 +504,9 @@ extern bool pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
                                        IndexLogicalScanState *scanstate);
 extern void pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
                                          BlockNumber start, BlockNumber end,
-                                         ChecksumLogicalAccum *acc);
-extern void pg_index_logical_scan_blocks64(IndexLogicalScanState *scanstate,
-                                           BlockNumber start, BlockNumber end,
-                                           ChecksumLogicalAccum64 *acc);
+                                         ChecksumAlgo algo,
+                                         ChecksumLogicalAccum *acc32,
+                                         ChecksumLogicalAccum64 *acc64);
 extern void pg_index_logical_scan_end(IndexLogicalScanState *scanstate);
 extern bool pg_index_logical_row_hash(IndexLogicalScanState *scanstate,
                                       HeapTuple tuple, ChecksumAlgo algo,

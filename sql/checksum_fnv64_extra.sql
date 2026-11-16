@@ -44,6 +44,20 @@ CREATE TABLE fnv64_toast (id integer, body text);
 INSERT INTO fnv64_toast VALUES (1, repeat('x', 100000));
 SELECT length(pg_table_logical_checksum('fnv64_toast'::regclass, 'fnv64')) = 8 AS toast_logical64;
 SELECT length(pg_table_physical_checksum('fnv64_toast'::regclass, false, 'fnv64')) = 8 AS toast_physical64;
+-- The TOAST relation itself is checksummed page by page, in both widths.
+SELECT reltoastrelid::regclass AS fnv64_toast_rel FROM pg_class WHERE oid = 'fnv64_toast'::regclass \gset
+SELECT length(pg_table_physical_checksum(:'fnv64_toast_rel'::regclass, false, 'fnv64')) = 8 AS toast_rel_physical64,
+       pg_table_physical_checksum(:'fnv64_toast_rel'::regclass, false, 'fnv64') =
+       pg_table_physical_checksum(:'fnv64_toast_rel'::regclass, false, 'fnv64') AS toast_rel_physical64_stable,
+       pg_table_physical_checksum(:'fnv64_toast_rel'::regclass, false, 'fnv64') <>
+       pg_table_physical_checksum(:'fnv64_toast_rel'::regclass, false, 'fnv32') AS toast_rel_physical64_differs;
+
+-- A partitioned index aggregates its leaf indexes, in both widths.
+CREATE INDEX fnv64_part_idx ON fnv64_part (id);
+SELECT length(pg_index_physical_checksum('fnv64_part_idx'::regclass, 'fnv64')) = 8 AS part_index_physical64,
+       length(pg_index_physical_checksum('fnv64_part_idx'::regclass, 'fnv32')) = 4 AS part_index_physical32,
+       pg_index_physical_checksum('fnv64_part_idx'::regclass, 'fnv64') =
+       pg_index_physical_checksum('fnv64_part_idx'::regclass, 'fnv64') AS part_index_physical64_stable;
 
 -- A multi-block relation exercises more than one parallel chunk.
 CREATE TABLE fnv64_big AS

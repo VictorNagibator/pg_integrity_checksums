@@ -2,6 +2,15 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: the physical checksum of an index (and of a TOAST table) changed
+      after crash recovery although no data changed.  The unused space
+      between pd_lower and pd_upper of a page is not guaranteed to be zero:
+      it can hold stale bytes left by page compaction, and replaying a
+      full-page image zeroes it.  The space is now masked out before
+      hashing, so physical checksums no longer depend on it.  Physical
+      checksums of indexes and TOAST tables whose pages have such stale
+      bytes change once.
+
     - Fix: logical checksums of text values depended on client_encoding, and
       with parallel workers also on which process read which block: workers
       hashed the text in the server encoding while the leader hashed it in

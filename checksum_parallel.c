@@ -179,14 +179,9 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                 while (pg_integrity_checksums_consume(state,
                                                       PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                       &start, &end))
-                {
-                    if (algo == CHECKSUM_ALGO_FNV64)
-                        pg_index_logical_scan_blocks64(&scanstate, start, end,
-                                                       &accs->logical64);
-                    else
-                        pg_index_logical_scan_blocks(&scanstate, start, end,
-                                                     &accs->logical32);
-                }
+                    pg_index_logical_scan_blocks(&scanstate, start, end, algo,
+                                                 &accs->logical32,
+                                                 &accs->logical64);
 
                 pg_index_logical_scan_end(&scanstate);
                 break;

@@ -249,7 +249,7 @@ FROM generate_series(1, 50) AS i,
      (SELECT CASE WHEN current_setting('server_encoding') = 'UTF8'
                   THEN chr(233) ELSE 'e' END AS c) AS enc;
 SELECT pg_table_logical_checksum('fastpath_enc') AS enc_default \gset
-SET client_encoding = 'LATIN1';
+SET client_encoding = :'other_encoding';
 SELECT pg_table_logical_checksum('fastpath_enc') = :enc_default AS enc_independent;
  enc_independent 
 -----------------

@@ -2,6 +2,9 @@ Revision history for pg_integrity_checksums CLI
 
 Unreleased
 
+    - Feature: update accepts --allow-version-mismatch, so a baseline can be
+      refreshed with its scope kept after a PostgreSQL major upgrade.
+    - Fix: the --format error message now lists junit.
     - Fix: with --output, verify, update, diff, show and doctor truncated an
       existing report (or left an empty new one) when the command failed
       before producing output, for example on an invalid baseline or a

@@ -120,11 +120,8 @@ pg_table_physical_checksum(PG_FUNCTION_ARGS)
     Oid         reloid;
     bool        include_header;
 
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-
     reloid = PG_GETARG_OID(0);
-    include_header = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+    include_header = PG_GETARG_BOOL(1);
 
     PG_RETURN_INT64((int64)
                     pg_table_physical_checksum_calc(reloid, include_header,
@@ -147,11 +144,8 @@ pg_table_physical_checksum_algo(PG_FUNCTION_ARGS)
     ChecksumAlgo         algorithm;
     uint64      result;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
-
     reloid = PG_GETARG_OID(0);
-    include_header = PG_ARGISNULL(1) ? false : PG_GETARG_BOOL(1);
+    include_header = PG_GETARG_BOOL(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
     if (algorithm == CHECKSUM_ALGO_FNV32)
@@ -423,9 +417,6 @@ pg_table_logical_checksum(PG_FUNCTION_ARGS)
     bool        is_null = false;
     int64       result;
 
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-
     reloid = PG_GETARG_OID(0);
 
     result = pg_table_logical_checksum_calc(reloid, true, &is_null);
@@ -448,9 +439,6 @@ pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
     ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
 
     reloid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
@@ -586,7 +574,7 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
         else
             pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_TABLE_LOGICAL,
                                               reloid, false, nblocks, workers,
-                                              0, NULL, acc, NULL, NULL);
+                                              CHECKSUM_ALGO_FNV32, NULL, acc, NULL, NULL);
     }
 
     relation_close(rel, AccessShareLock);

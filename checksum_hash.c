@@ -79,9 +79,6 @@ pg_data_checksum_algo(PG_FUNCTION_ARGS)
     int64       seed;
     ChecksumAlgo         algorithm;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
-
     data = PG_GETARG_BYTEA_PP(0);
     seed = PG_GETARG_INT64(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
@@ -111,9 +108,6 @@ pg_text_checksum_algo(PG_FUNCTION_ARGS)
     text       *input_text;
     int64       seed;
     ChecksumAlgo         algorithm;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
 
     input_text = PG_GETARG_TEXT_PP(0);
     seed = PG_GETARG_INT64(1);
@@ -151,9 +145,6 @@ pg_checksum_bigint(PG_FUNCTION_ARGS)
     uint64      result = 0;
     int         i;
     bool        unsigned_value = false;
-
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
 
     if (PG_NARGS() > 1)
         unsigned_value = PG_GETARG_BOOL(1);

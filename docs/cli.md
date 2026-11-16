@@ -284,7 +284,8 @@ requires `--yes` before replacing the file.  There is no automatic update on
 DML or DDL.  The file is replaced atomically.  `--format` accepts `text`,
 `json` and `junit`; `--output` writes the diff report to a file.  `--config`,
 `--profile`, `--dsn`, `--connect-timeout` and `--application-name` work as in
-`capture`.
+`capture`.  `--allow-version-mismatch` lets a baseline captured on another
+PostgreSQL major be refreshed with its scope kept.
 
 ```bash
 pg_integrity_checksums update \

@@ -198,9 +198,6 @@ pg_page_checksum(PG_FUNCTION_ARGS)
     uint16      stored;
     bool        is_new;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
-
     reloid = PG_GETARG_OID(0);
     blkno = PG_GETARG_INT32(1);
 
@@ -225,9 +222,6 @@ pg_page_checksum_status(PG_FUNCTION_ARGS)
     uint16      stored;
     bool        is_new;
     const char *status;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
 
     reloid = PG_GETARG_OID(0);
     blkno = PG_GETARG_INT32(1);
@@ -358,9 +352,6 @@ pg_cell_checksum(PG_FUNCTION_ARGS)
 {
     uint64      checksum;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
-
     if (!pg_cell_checksum_common(PG_GETARG_OID(0), PG_GETARG_ITEMPOINTER(1),
                                  PG_GETARG_INT32(2), CHECKSUM_ALGO_FNV32,
                                  &checksum))
@@ -376,10 +367,6 @@ pg_cell_checksum_algo(PG_FUNCTION_ARGS)
 {
     ChecksumAlgo         algorithm;
     uint64      checksum;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2) ||
-        PG_ARGISNULL(3))
-        PG_RETURN_NULL();
 
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(3));
 

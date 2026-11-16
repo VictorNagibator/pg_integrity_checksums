@@ -56,8 +56,13 @@ qualified name (`schema.relname`, not the OID, which differs after a dump and
 restore), so moving rows between two tables of the same structure is detected.  Two caveats remain: type names are part of the hash, so renaming a
 type changes the checksum of every table with a column of that type
 (including a table whose row type is used as a column type elsewhere: renaming
-that table changes the checksum of the tables that use it), and values of
-types that store OIDs (`oid`, `regclass`, ...) are hashed as stored.
+that table changes the checksum of the tables that use it), and a plain
+`oid` column is hashed as the stored number, so it does not survive a dump and
+restore.  The `reg*` types (`regclass`, `regtype`, `regproc`, `regprocedure`,
+`regoper`, `regoperator`, `regconfig`, `regdictionary`, `regnamespace`,
+`regrole`, `regcollation`) are hashed by the qualified name of the object they
+reference (a function or operator with its argument types), so they are
+stable across a dump and restore.
 
 ### Physical checksums
 

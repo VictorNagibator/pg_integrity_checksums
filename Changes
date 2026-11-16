@@ -2,6 +2,13 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: columns of type regclass, regtype, regproc, regprocedure, regoper,
+      regoperator, regconfig, regdictionary, regnamespace, regrole and
+      regcollation were hashed as their OID, so their logical checksum did not
+      survive a dump and restore.  They are now hashed by the qualified name
+      of the referenced object.  The logical checksum of a table that has
+      such a column (including arrays of them) changes; others do not.  A
+      plain oid column is still hashed as its number.
     - Fix: tables and materialized views that use a table access method other
       than heap were parsed as heap pages.  The table, tuple and database
       checksum functions now fail with a clear error for them.

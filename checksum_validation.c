@@ -98,7 +98,19 @@ pg_integrity_checksums_check_relation_kind(Relation rel, bool allow_toast,
     char        relkind = rel->rd_rel->relkind;
 
     if (relkind == RELKIND_RELATION || relkind == RELKIND_MATVIEW)
+    {
+        /*
+         * The page and tuple code understands only the heap format; a table
+         * stored by another table access method would be misparsed.
+         */
+        if (rel->rd_rel->relam != HEAP_TABLE_AM_OID)
+            ereport(ERROR,
+                    (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                     errmsg("relation \"%s\" does not use the heap table access method",
+                            RelationGetRelationName(rel)),
+                     errdetail("Only heap tables are supported.")));
         return;
+    }
 
     if (relkind == RELKIND_PARTITIONED_TABLE)
     {

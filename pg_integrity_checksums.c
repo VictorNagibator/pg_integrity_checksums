@@ -155,12 +155,15 @@ pg_integrity_checksums_worker_count(void)
 Snapshot
 pg_integrity_checksums_get_snapshot(void)
 {
-    Snapshot    snapshot = GetActiveSnapshot();
+    /*
+     * GetActiveSnapshot() does not return NULL when no snapshot is active:
+     * it fails (an assertion or an error, depending on the build), so test
+     * with ActiveSnapshotSet() first.
+     */
+    if (ActiveSnapshotSet())
+        return GetActiveSnapshot();
 
-    if (snapshot == NULL)
-        snapshot = GetTransactionSnapshot();
-
-    return snapshot;
+    return GetTransactionSnapshot();
 }
 
 /*

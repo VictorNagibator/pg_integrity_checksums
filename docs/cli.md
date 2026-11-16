@@ -555,6 +555,12 @@ second on PostgreSQL 15 and later), so a change committed in the last moments
 before a `--changed-since` verify may only be noticed by the next one; it is
 never missed for good.
 
+The window therefore works in one direction: a verify run immediately after a
+commit can still reuse the old checksum of that table and report it as
+unchanged, because its counters have not been published yet.  The change is
+reported by a later verify (or at once by a verify without `--changed-since`).
+Do not rely on `--changed-since` to see changes made in the last few seconds.
+
 On a standby (`pg_is_in_recovery()`), `--changed-since` is ignored with a
 warning and every object is checksummed: WAL replay does not update the table
 statistics, so unchanged counters there say nothing about the data.

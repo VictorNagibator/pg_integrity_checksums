@@ -2,6 +2,13 @@ Revision history for pg_integrity_checksums CLI
 
 Unreleased
 
+    - Fix: with --output, verify, update, diff, show and doctor truncated an
+      existing report (or left an empty new one) when the command failed
+      before producing output, for example on an invalid baseline or a
+      connection error.  The report is now only replaced once there is output.
+    - Docs: --changed-since can reuse a stale checksum for a change committed
+      just before the run (statistics are published with a delay).
+
     - Fix: the CLI failed with "function pg_table_logical_checksum(regclass)
       does not exist" when the (relocatable) extension was installed in a
       schema outside search_path.  The extension's schema is now read from

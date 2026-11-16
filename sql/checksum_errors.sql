@@ -114,6 +114,17 @@ $$;
 SELECT pg_cell_checksum('test_errors_dropped'::regclass, '(0,1)'::tid, 1) IS NULL
        AS dropped_column_cell_null;
 
+-- A table of another table access method is refused rather than parsed as
+-- a heap.  heap2 reuses the heap handler, so only its pg_class.relam differs.
+CREATE ACCESS METHOD test_errors_heap2 TYPE TABLE HANDLER heap_tableam_handler;
+CREATE TABLE test_errors_am (a int) USING test_errors_heap2;
+INSERT INTO test_errors_am VALUES (1);
+SELECT pg_table_logical_checksum('test_errors_am'::regclass);
+SELECT pg_table_physical_checksum('test_errors_am'::regclass);
+SELECT pg_tuple_physical_checksum('test_errors_am'::regclass, '(0,1)'::tid);
+DROP TABLE test_errors_am;
+DROP ACCESS METHOD test_errors_heap2;
+
 -- Cleanup.
 DROP TABLE test_errors_zero;
 DROP TABLE test_errors_dropped;

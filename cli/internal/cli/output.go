@@ -84,15 +84,47 @@ func writeDiffJSON(w io.Writer, oldB, newB *baseline.Baseline, changes []baselin
 	})
 }
 
-// outputWriter returns stdout for "" or "-", or creates a report file.
-// Reports are not baselines, so plain os.Create is sufficient here.
+// outputWriter returns stdout for "" or "-", or a report file.
+//
+// The path is validated up front (the file is opened without truncating it),
+// but an existing file is only truncated when the first byte is written, and
+// a file that this call created is removed again if nothing was written.  A
+// command that fails before producing its report therefore neither destroys
+// a previous report nor leaves an empty one behind.
 func outputWriter(stdout io.Writer, path string) (io.Writer, func() error, error) {
 	if path == "" || path == "-" {
 		return stdout, func() error { return nil }, nil
 	}
-	f, err := os.Create(path)
+	_, statErr := os.Stat(path)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE, 0o666)
 	if err != nil {
 		return nil, nil, err
 	}
-	return f, f.Close, nil
+	rf := &reportFile{f: f, path: path, created: os.IsNotExist(statErr)}
+	return rf, rf.Close, nil
+}
+
+type reportFile struct {
+	f       *os.File
+	path    string
+	created bool
+	wrote   bool
+}
+
+func (r *reportFile) Write(p []byte) (int, error) {
+	if !r.wrote {
+		if err := r.f.Truncate(0); err != nil {
+			return 0, err
+		}
+		r.wrote = true
+	}
+	return r.f.Write(p)
+}
+
+func (r *reportFile) Close() error {
+	err := r.f.Close()
+	if r.created && !r.wrote {
+		_ = os.Remove(r.path)
+	}
+	return err
 }

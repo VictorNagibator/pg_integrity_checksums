@@ -2,6 +2,13 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix: tables and materialized views that use a table access method other
+      than heap were parsed as heap pages.  The table, tuple and database
+      checksum functions now fail with a clear error for them.
+    - Fix: pg_integrity_checksums_get_snapshot() tested GetActiveSnapshot()
+      for NULL, but that function raises an error instead of returning NULL;
+      it now tests ActiveSnapshotSet().
+
     - Fix: the logical checksum of a partitioned table depended on the column
       order of its partitions.  A partition declaring its columns in another
       order than the parent (for example (b text, a int) under (a int,

@@ -159,6 +159,18 @@ func TestParseHash(t *testing.T) {
 	}
 }
 
+func TestParseFormat(t *testing.T) {
+	for _, value := range []string{"text", "json", "junit"} {
+		if got, err := parseFormat(value); err != nil || got != value {
+			t.Fatalf("parseFormat(%q): %q %v", value, got, err)
+		}
+	}
+	_, err := parseFormat("xml")
+	if err == nil || !strings.Contains(err.Error(), "text, json or junit") {
+		t.Fatalf("expected error listing all formats, got %v", err)
+	}
+}
+
 func TestDiffRejectsHashMismatch(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "old.json")

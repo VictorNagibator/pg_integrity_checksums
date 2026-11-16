@@ -359,7 +359,11 @@ mask_index_hints(Page page, Oid relam)
  *   opportunistically;
  * - B-tree, hash and GiST index scans mark line pointers LP_DEAD and set
  *   "page has garbage" flags under a share lock, as hints;
- * - heap (TOAST) tuples get their infomask hint bits set by readers.
+ * - heap (TOAST) tuples get their infomask hint bits set by readers;
+ * - the unused space between pd_lower and pd_upper is not guaranteed to be
+ *   zero: page compaction (e.g. B-tree deletion, heap pruning) leaves stale
+ *   bytes there, while replaying a full-page image after crash recovery
+ *   (which removes the "hole") zeroes it.
  *
  * Copy BLCKSZ bytes of "page" into "dst" and clear that state in the copy.
  * Bits outside PD_VALID_FLAG_BITS are kept, so a corrupt header still changes
@@ -386,6 +390,9 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
 
     if (!pg_integrity_checksums_page_header_sane(page))
         return;
+
+    /* The hole between pd_lower and pd_upper has no defined content. */
+    memset(dst + phdr->pd_lower, 0, phdr->pd_upper - phdr->pd_lower);
 
     if (kind == CHECKSUM_PAGE_INDEX)
     {

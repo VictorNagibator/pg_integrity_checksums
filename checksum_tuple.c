@@ -356,12 +356,9 @@ pg_tuple_physical_checksum(PG_FUNCTION_ARGS)
 {
     uint64      checksum;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
-
     if (!pg_tuple_physical_checksum_common(PG_GETARG_OID(0),
                                            PG_GETARG_ITEMPOINTER(1),
-                                           PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2),
+                                           PG_GETARG_BOOL(2),
                                            0, &checksum))
         PG_RETURN_NULL();
 
@@ -376,14 +373,11 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
     ChecksumAlgo         algorithm;
     uint64      checksum;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(3))
-        PG_RETURN_NULL();
-
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(3));
 
     if (!pg_tuple_physical_checksum_common(PG_GETARG_OID(0),
                                            PG_GETARG_ITEMPOINTER(1),
-                                           PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2),
+                                           PG_GETARG_BOOL(2),
                                            algorithm, &checksum))
         PG_RETURN_NULL();
 
@@ -658,9 +652,6 @@ pg_tuple_logical_checksum(PG_FUNCTION_ARGS)
 {
     uint64      checksum;
 
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
-
     if (!pg_tuple_logical_checksum_common(PG_GETARG_OID(0),
                                           PG_GETARG_ITEMPOINTER(1),
                                           CHECKSUM_ALGO_FNV32,
@@ -677,9 +668,6 @@ pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS)
 {
     ChecksumAlgo         algorithm;
     uint64      checksum;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(2))
-        PG_RETURN_NULL();
 
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 

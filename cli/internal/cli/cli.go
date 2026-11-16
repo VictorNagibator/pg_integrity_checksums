@@ -718,6 +718,7 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	connectTimeout := fs.Duration("connect-timeout", 0, "connect timeout")
 	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	baselinePath := fs.String("baseline", "", "baseline file")
+	allowVersion := fs.Bool("allow-version-mismatch", false, "allow a different PostgreSQL major")
 	yes := fs.Bool("yes", false, "confirm replacing the baseline")
 	dryRun := fs.Bool("dry-run", false, "print the diff without writing")
 	formatValue := fs.String("format", "text", "text, json or junit")
@@ -817,7 +818,7 @@ func runUpdate(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		Timeout:     *timeout,
 		Progress:    progress(*quiet, stderr),
 		Precheck: func(header *baseline.Baseline) error {
-			return checkCompatibility(oldB, header, false)
+			return checkCompatibility(oldB, header, *allowVersion)
 		},
 	})
 	if err != nil {

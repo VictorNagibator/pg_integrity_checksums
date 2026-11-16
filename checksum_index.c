@@ -68,8 +68,8 @@ index_supports_checksum(Oid amoid)
  * pg_index_physical_checksum - SQL function for physical index checksums
  *
  * Public interface for computing physical index checksums.
- * Supports all major index types. Returns NULL for unsupported index types
- * and for partitioned indexes.  Empty indexes are still distinguished by
+ * Supports all major index types. Returns NULL for unsupported index types.
+ * Partitioned indexes are aggregated over their leaf indexes.  Empty indexes are still distinguished by
  * their relation and storage identity.
  */
 PG_FUNCTION_INFO_V1(pg_index_physical_checksum);
@@ -80,9 +80,6 @@ pg_index_physical_checksum(PG_FUNCTION_ARGS)
     Oid         indexoid;
     bool        is_null = false;
     uint32      index_checksum;
-
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
 
     indexoid = PG_GETARG_OID(0);
 
@@ -201,7 +198,7 @@ pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
     else
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_PHYSICAL,
                                           indexoid, false, nblocks, workers,
-                                          0, &acc, NULL, NULL, NULL);
+                                          CHECKSUM_ALGO_FNV32, &acc, NULL, NULL, NULL);
 
     index_checksum = checksum_accum_finalize(&acc);
 
@@ -250,9 +247,6 @@ pg_index_logical_checksum(PG_FUNCTION_ARGS)
     bool        is_null = false;
     uint32      index_checksum;
 
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-
     indexoid = PG_GETARG_OID(0);
 
     index_checksum = pg_index_logical_checksum_calc(indexoid, true, &is_null);
@@ -275,9 +269,6 @@ pg_index_logical_checksum_algo(PG_FUNCTION_ARGS)
     ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
 
     indexoid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));
@@ -723,7 +714,7 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
         pg_index_logical_scan_end(&scanstate);
         pg_integrity_checksums_parallel_scan_blocks(CHECKSUM_TASK_INDEX_LOGICAL,
                                           indexoid, false, nblocks, workers,
-                                          0, NULL, acc, NULL, NULL);
+                                          CHECKSUM_ALGO_FNV32, NULL, acc, NULL, NULL);
     }
 
     pg_integrity_checksums_restore_user(&owner_ctx);
@@ -972,9 +963,6 @@ pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
     ChecksumAlgo         algorithm;
     bool        is_null = false;
     uint64      result;
-
-    if (PG_ARGISNULL(0) || PG_ARGISNULL(1))
-        PG_RETURN_NULL();
 
     indexoid = PG_GETARG_OID(0);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(1));

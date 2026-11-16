@@ -50,7 +50,7 @@ func parseFormat(value string) (string, error) {
 	case "text", "json", "junit":
 		return value, nil
 	default:
-		return "", fmt.Errorf("invalid --format %q (want text or json)", value)
+		return "", fmt.Errorf("invalid --format %q (want text, json or junit)", value)
 	}
 }
 

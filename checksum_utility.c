@@ -36,9 +36,6 @@ pg_data_checksum(PG_FUNCTION_ARGS)
     uint32 seed;
     uint32 checksum;
 
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
-
     data = PG_GETARG_BYTEA_PP(0);
     seed = PG_GETARG_INT32(1);
 
@@ -63,9 +60,6 @@ pg_text_checksum(PG_FUNCTION_ARGS)
     text *input_text;
     uint32 seed;
     uint32 checksum;
-
-    if (PG_ARGISNULL(0))
-        PG_RETURN_NULL();
 
     input_text = PG_GETARG_TEXT_PP(0);
     seed = PG_GETARG_INT32(1);

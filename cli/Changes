@@ -1,5 +1,20 @@
 Revision history for pg_integrity_checksums CLI
 
+Unreleased
+
+    - Fix: the CLI failed with "function pg_table_logical_checksum(regclass)
+      does not exist" when the (relocatable) extension was installed in a
+      schema outside search_path.  The extension's schema is now read from
+      pg_extension and used to qualify the function calls.
+    - Fix: schema_changed was reported after a dump/restore of a table with
+      a dropped column, because attnum (which counts dropped columns) went
+      into schema_hash.  Columns are now numbered by position among live
+      columns.  Baselines record schema_hash_version 3; older hashes are not
+      comparable, so re-capture baselines (update --yes).
+    - Fix: an object that was checksummed in the baseline but is skipped now
+      (for example an index that became invalid) is reported as changed
+      instead of skipped, so verify no longer exits 0 for it.
+
 0.5.0   2026-11-15
 
     - verify and update check that the baseline matches the server

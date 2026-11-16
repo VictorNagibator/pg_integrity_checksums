@@ -167,6 +167,23 @@ func TestCompareStatuses(t *testing.T) {
 	}
 }
 
+func TestCompareOKToSkippedIsChange(t *testing.T) {
+	old := []Object{{Kind: ObjectIndex, Schema: "public", Name: "i", Status: StatusOK, Checksum: "1"}}
+	cur := []Object{{Kind: ObjectIndex, Schema: "public", Name: "i", Status: StatusSkipped, Reason: "invalid index"}}
+	changes, summary := Compare(old, cur)
+	if summary.Changed != 1 || summary.Skipped != 0 || !summary.HasChanges() {
+		t.Fatalf("bad summary: %#v", summary)
+	}
+	if changes[0].Status != "changed" {
+		t.Fatalf("status %q, want changed", changes[0].Status)
+	}
+	// skipped -> skipped and skipped -> ok stay skipped.
+	old[0].Status = StatusSkipped
+	if _, s2 := Compare(old, cur); s2.Skipped != 1 || s2.HasChanges() {
+		t.Fatalf("bad summary: %#v", s2)
+	}
+}
+
 func TestCompareSchemaChanged(t *testing.T) {
 	oldObjects := []Object{{
 		Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK,

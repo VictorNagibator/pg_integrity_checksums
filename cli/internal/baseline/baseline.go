@@ -51,8 +51,10 @@ const (
 	// search_path and quote_all_identifiers and on constraint OID order, so
 	// it changed after a dump/restore. Version 2 is computed with fixed
 	// settings and constraints ordered by name. Hashes of different versions
-	// are not comparable.
-	SchemaHashVersion = 2
+	// are not comparable. Version 3 numbers columns by position among live
+	// columns instead of attnum, which a dump/restore changes for tables
+	// that had dropped columns.
+	SchemaHashVersion = 3
 )
 
 // checksumRE keeps checksums as strings in JSON (bigint values are not safe

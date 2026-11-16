@@ -96,6 +96,17 @@ func Compare(oldObjects, currentObjects []Object) ([]Change, Summary) {
 			base.CurrentChecksum = curObj.Checksum
 			base.Reason = curObj.Reason
 			summary.New++
+		case oldObj.Status != StatusSkipped && curObj.Status == StatusSkipped:
+			// The object was checksummed before and now cannot be (for
+			// example an index that became invalid). Reporting this as a
+			// harmless skip would hide it from monitoring.
+			base.Status = "changed"
+			base.BaselineChecksum = oldObj.Checksum
+			base.Reason = "object can no longer be checksummed"
+			if curObj.Reason != "" {
+				base.Reason += ": " + curObj.Reason
+			}
+			summary.Changed++
 		case oldObj.Status == StatusSkipped || curObj.Status == StatusSkipped:
 			base.Status = "skipped"
 			base.BaselineChecksum = oldObj.Checksum

@@ -301,14 +301,15 @@ scan_table_blocks_logical_common(Relation rel, BlockNumber start,
                                  ChecksumAlgo algo,
                                  ChecksumLogicalAccum *acc32,
                                  ChecksumLogicalAccum64 *acc64,
-                                 BufferAccessStrategy bstrategy)
+                                 BufferAccessStrategy bstrategy,
+                                 TupleDesc order_desc)
 {
     LogicalVisitorState state;
 
     state.algo = algo;
     state.acc32 = acc32;
     state.acc64 = acc64;
-    logical_row_hasher_init(&state.hasher, RelationGetDescr(rel));
+    logical_row_hasher_init(&state.hasher, RelationGetDescr(rel), order_desc);
 
     scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
                         logical_tuple_visitor, &state);
@@ -322,11 +323,11 @@ scan_table_blocks_logical_common(Relation rel, BlockNumber start,
 void
 scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
                           Snapshot snapshot, ChecksumLogicalAccum *acc,
-                          BufferAccessStrategy bstrategy)
+                          BufferAccessStrategy bstrategy, TupleDesc order_desc)
 {
     scan_table_blocks_logical_common(rel, start, end, snapshot,
                                      CHECKSUM_ALGO_FNV32, acc, NULL,
-                                     bstrategy);
+                                     bstrategy, order_desc);
 }
 
 /*
@@ -335,11 +336,11 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
 void
 scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
                             Snapshot snapshot, ChecksumLogicalAccum64 *acc,
-                            BufferAccessStrategy bstrategy)
+                            BufferAccessStrategy bstrategy, TupleDesc order_desc)
 {
     scan_table_blocks_logical_common(rel, start, end, snapshot,
                                      CHECKSUM_ALGO_FNV64, NULL, acc,
-                                     bstrategy);
+                                     bstrategy, order_desc);
 }
 
 /*-------------------------------------------------------------------------

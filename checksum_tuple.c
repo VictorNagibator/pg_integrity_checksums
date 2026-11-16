@@ -405,7 +405,8 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
  * guarantees.
  */
 void
-logical_row_hasher_init(LogicalRowHasher *hasher, TupleDesc tupdesc)
+logical_row_hasher_init(LogicalRowHasher *hasher, TupleDesc tupdesc,
+                        TupleDesc order_desc)
 {
     int         natts = tupdesc->natts;
     int         i;
@@ -420,10 +421,73 @@ logical_row_hasher_init(LogicalRowHasher *hasher, TupleDesc tupdesc)
                                            "pg_integrity_checksums row",
                                            ALLOCSET_DEFAULT_SIZES);
 
-    for (i = 0; i < natts; i++)
+    if (order_desc == NULL)
     {
-        if (!TupleDescAttr(tupdesc, i)->attisdropped)
-            hasher->attidx[hasher->ncols++] = i;
+        for (i = 0; i < natts; i++)
+        {
+            if (!TupleDescAttr(tupdesc, i)->attisdropped)
+                hasher->attidx[hasher->ncols++] = i;
+        }
+        return;
+    }
+
+    /*
+     * Take the columns in the order of order_desc, matched by name: a
+     * partition may declare its columns in another order than its parent.
+     */
+    for (i = 0; i < order_desc->natts; i++)
+    {
+        Form_pg_attribute oattr = TupleDescAttr(order_desc, i);
+        int         j;
+
+        if (oattr->attisdropped)
+            continue;
+
+        for (j = 0; j < natts; j++)
+        {
+            Form_pg_attribute attr = TupleDescAttr(tupdesc, j);
+
+            if (!attr->attisdropped &&
+                strcmp(NameStr(attr->attname), NameStr(oattr->attname)) == 0)
+                break;
+        }
+
+        if (j >= natts)
+            elog(ERROR, "column \"%s\" of the partitioned table was not found in a partition",
+                 NameStr(oattr->attname));
+
+        hasher->attidx[hasher->ncols++] = j;
+    }
+}
+
+/*
+ * logical_columns_same_order - do both descriptors list the same live columns
+ *
+ * True when the non-dropped columns of tupdesc have the names of order_desc
+ * in the same sequence, so no reordering is needed.
+ */
+bool
+logical_columns_same_order(TupleDesc tupdesc, TupleDesc order_desc)
+{
+    int         i = 0;
+    int         j = 0;
+
+    for (;;)
+    {
+        while (i < tupdesc->natts && TupleDescAttr(tupdesc, i)->attisdropped)
+            i++;
+        while (j < order_desc->natts && TupleDescAttr(order_desc, j)->attisdropped)
+            j++;
+
+        if (i >= tupdesc->natts || j >= order_desc->natts)
+            return i >= tupdesc->natts && j >= order_desc->natts;
+
+        if (strcmp(NameStr(TupleDescAttr(tupdesc, i)->attname),
+                   NameStr(TupleDescAttr(order_desc, j)->attname)) != 0)
+            return false;
+
+        i++;
+        j++;
     }
 }
 
@@ -512,7 +576,7 @@ pg_tuple_logical_checksum_internal(Relation rel, HeapTuple tuple, ChecksumAlgo a
     LogicalRowHasher hasher;
     uint64      checksum;
 
-    logical_row_hasher_init(&hasher, RelationGetDescr(rel));
+    logical_row_hasher_init(&hasher, RelationGetDescr(rel), NULL);
     checksum = logical_row_hash(&hasher, tuple, algo);
     logical_row_hasher_free(&hasher);
 

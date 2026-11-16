@@ -94,6 +94,22 @@ _PG_init(void)
 }
 
 /*
+ * pg_integrity_checksums_worker_count_for - worker count for scanning rel
+ *
+ * Temporary relations live in the buffers of the owning backend, which a
+ * parallel worker must not access ("cannot access temporary tables during a
+ * parallel operation"), so they are always scanned serially.
+ */
+int
+pg_integrity_checksums_worker_count_for(Relation rel)
+{
+    if (RelationUsesLocalBuffers(rel))
+        return 0;
+
+    return pg_integrity_checksums_worker_count();
+}
+
+/*
  * pg_integrity_checksums_worker_count - determine how many parallel workers to use
  *
  * Returns 0 when the scan should run in a single backend.  This happens

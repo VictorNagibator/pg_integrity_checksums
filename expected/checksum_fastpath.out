@@ -239,14 +239,15 @@ ORDER BY e.ordinal;
 
 RESET client_encoding;
 -- The logical checksum must not depend on client_encoding: the text types are
--- always hashed in the server encoding.  Non-ASCII text needs a UTF8 server;
--- LATIN1 can represent U+00E9, so the client conversion would change the bytes.
-SELECT current_setting('server_encoding') = 'UTF8' AS is_utf8 \gset
-\if :is_utf8
+-- always hashed in the server encoding.  With a UTF8 server the data holds
+-- U+00E9, which LATIN1 can represent, so the client conversion would change
+-- the bytes; other servers get ASCII only, which still exercises the path.
 CREATE TABLE fastpath_enc AS
-SELECT i, chr(233) || i::text AS t, (chr(233) || i::text)::name AS n,
-       ('{"k":"' || chr(233) || i::text || '"}')::json AS j
-FROM generate_series(1, 50) AS i;
+SELECT i, c || i::text AS t, (c || i::text)::name AS n,
+       ('{"k":"' || c || i::text || '"}')::json AS j
+FROM generate_series(1, 50) AS i,
+     (SELECT CASE WHEN current_setting('server_encoding') = 'UTF8'
+                  THEN chr(233) ELSE 'e' END AS c) AS enc;
 SELECT pg_table_logical_checksum('fastpath_enc') AS enc_default \gset
 SET client_encoding = 'LATIN1';
 SELECT pg_table_logical_checksum('fastpath_enc') = :enc_default AS enc_independent;
@@ -257,8 +258,5 @@ SELECT pg_table_logical_checksum('fastpath_enc') = :enc_default AS enc_independe
 
 RESET client_encoding;
 DROP TABLE fastpath_enc;
-\else
-SELECT true AS enc_independent;
-\endif
 DROP TABLE fastpath, fastpath_domain;
 DROP DOMAIN fastpath_dom;

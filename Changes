@@ -54,6 +54,20 @@ Unreleased
       value changes.  New SQL functions: run ALTER EXTENSION
       pg_integrity_checksums UPDATE TO '2.9.0'.
 
+    - Fix: pg_index_logical_checksum() read the pages of a table that uses
+      another table access method as heap pages; the table checksums already
+      rejected such tables.  It now fails with "relation ... does not use
+      the heap table access method", like them (and a database checksum
+      reports the index as an error, or skips it when strict is off).
+
+    - Fix: a logical index checksum locked the index before its table, the
+      reverse of PostgreSQL's own order.  A concurrent DROP INDEX, or DROP
+      TABLE of a partition under a partitioned index, deadlocked with it and
+      the deadlock detector cancelled one of the two, often the user's DROP.
+      pg_index_logical_checksum() and the database checksums (for an index
+      computed on its own: parallel scans, or a relations filter) now lock
+      the table, and the partitions, first.  Checksum values do not change.
+
     - Fix: pg_page_checksum_status() reported a modified page of a temporary
       table as mismatch: it compared the local buffer, whose pd_checksum is
       only set when the page is written out.  Temporary tables are now read

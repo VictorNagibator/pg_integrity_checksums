@@ -166,6 +166,14 @@ DETAIL:  Only heap tables are supported.
 SELECT pg_tuple_physical_checksum('test_errors_am'::regclass, '(0,1)'::tid);
 ERROR:  relation "test_errors_am" does not use the heap table access method
 DETAIL:  Only heap tables are supported.
+-- A logical index checksum reads the table as well.
+CREATE INDEX test_errors_am_a ON test_errors_am (a);
+SELECT pg_index_logical_checksum('test_errors_am_a'::regclass);
+ERROR:  relation "test_errors_am" does not use the heap table access method
+DETAIL:  Only heap tables are supported.
+SELECT pg_index_logical_checksum('test_errors_am_a'::regclass, 'fnv64');
+ERROR:  relation "test_errors_am" does not use the heap table access method
+DETAIL:  Only heap tables are supported.
 DROP TABLE test_errors_am;
 DROP ACCESS METHOD test_errors_heap2;
 -- Cleanup.

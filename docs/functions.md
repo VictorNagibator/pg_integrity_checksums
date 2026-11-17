@@ -273,7 +273,10 @@ Computes the logical content of an index from the visible table rows and the
 index definition.  Plain columns, expressions, partial-index predicates and
 INCLUDE columns are evaluated for each row; no heap TIDs, relation OIDs or dead
 entries are included.  It works for every index access method (B-tree, Hash,
-GiST, GIN, SP-GiST, BRIN and custom AMs), and for partitioned indexes.
+GiST, GIN, SP-GiST, BRIN and custom AMs), and for partitioned indexes.  The
+table must use the heap table access method, as for the table checksums.  The
+table is locked before the index, in the order PostgreSQL itself uses, so a
+concurrent `DROP INDEX` or `DROP TABLE` waits instead of deadlocking.
 
 ```sql
 -- Logical content of any index

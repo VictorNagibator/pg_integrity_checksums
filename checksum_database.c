@@ -370,6 +370,12 @@ compute_database_relation_locked(ChecksumRelationItem *item, bool physical,
         if (is_fatal_scan_error(sqlerrcode))
             PG_RE_THROW();
 
+        /*
+         * skip is not volatile, so its value is undefined after the longjmp;
+         * the relation failed, it was not skipped.
+         */
+        skip = false;
+
         MemoryContextSwitchTo(oldcontext);
         edata = CopyErrorData();
         FlushErrorState();
@@ -451,13 +457,26 @@ compute_database_relation(ChecksumRelationItem *item, bool physical,
                           ChecksumLogicalAccum64 *logical_acc64,
                           uint32 *skipped)
 {
-    if (!lock_relation_if_exists(item->reloid))
-        return;
+    Oid         heapoid = InvalidOid;
 
-    compute_database_relation_locked(item, physical, algo, acc,
-                                     logical_acc, logical_acc64, skipped);
+    /*
+     * A logical index checksum reads the index's table: lock the table
+     * before the index, or a concurrent DROP INDEX / DROP TABLE deadlocks
+     * with the scan; see pg_integrity_checksums_lock_index_table().
+     */
+    if (!physical && item->relkind == RELKIND_INDEX)
+        heapoid = pg_integrity_checksums_lock_index_table(item->reloid);
 
-    UnlockRelationOid(item->reloid, AccessShareLock);
+    if (lock_relation_if_exists(item->reloid))
+    {
+        compute_database_relation_locked(item, physical, algo, acc,
+                                         logical_acc, logical_acc64, skipped);
+
+        UnlockRelationOid(item->reloid, AccessShareLock);
+    }
+
+    if (OidIsValid(heapoid))
+        UnlockRelationOid(heapoid, AccessShareLock);
 }
 
 /*-------------------------------------------------------------------------

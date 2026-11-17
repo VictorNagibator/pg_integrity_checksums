@@ -97,7 +97,11 @@ jobs:
         run: |
           "$PWD/pgcov/bin/pg_config" --version
           rm -rf .coverage-pgdata
-          "$PWD/pgcov/bin/initdb" -D "$PWD/.coverage-pgdata" -A trust --no-sync
+          # Data checksums on, on every version (PostgreSQL 18 enables them
+          # by default, older versions do not), so that page verification is
+          # covered beyond its "checksums disabled" branch.
+          "$PWD/pgcov/bin/initdb" -D "$PWD/.coverage-pgdata" -A trust --no-sync \
+            --data-checksums
           "$PWD/pgcov/bin/pg_ctl" -D "$PWD/.coverage-pgdata" \
             -l "$PWD/.coverage-pgdata/server.log" \
             -o "-p 55432 -k /tmp -c autovacuum=off" \

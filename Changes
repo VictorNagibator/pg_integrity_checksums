@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-2.8.0   Unreleased
+Unreleased
 
     - New: pg_database_logical_checksums() and
       pg_database_physical_checksums() return the checksum of every relation

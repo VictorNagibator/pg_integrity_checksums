@@ -17,6 +17,13 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
       Superuser only.  Existing checksum values do not change.  Requires
       ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.8.0'.
 
+    - Fix: on PostgreSQL 17 and later, a parallel database checksum
+      (pg_integrity_checksums.workers > 0) called from a statement that
+      writes, such as CREATE TABLE AS or INSERT ... SELECT, failed with
+      "cannot start commands during a parallel operation" for every relation
+      the leader processed: in strict mode the call failed, otherwise those
+      relations were skipped with a warning and left out of the result.
+
     - Fix: columns of type regclass, regtype, regproc, regprocedure, regoper,
       regoperator, regconfig, regdictionary, regnamespace, regrole and
       regcollation were hashed as their OID, so their logical checksum did not

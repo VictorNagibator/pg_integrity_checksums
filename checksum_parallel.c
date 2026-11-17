@@ -543,6 +543,20 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
     snapshot = pg_integrity_checksums_get_snapshot();
     snapshot_size = (uint32) EstimateSnapshotSpace(snapshot);
 
+    /*
+     * On PostgreSQL 17+ the leader checksums its share of the relations in
+     * internal subtransactions while in parallel mode, and committing one
+     * runs CommandCounterIncrement(), which fails in parallel mode once the
+     * current command ID has been used: "cannot start commands during a
+     * parallel operation".  The calling statement uses it when it writes
+     * (CREATE TABLE AS, INSERT ... SELECT), so every relation of the
+     * leader's share failed there (skipped with a warning when not strict).
+     * Advance the command counter before entering parallel mode, as SPI does
+     * between the statements of a volatile function; the scan snapshot is a
+     * copy with its own command ID and does not change.
+     */
+    CommandCounterIncrement();
+
     EnterParallelMode();
 
     PG_TRY();

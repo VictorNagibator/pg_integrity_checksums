@@ -125,6 +125,18 @@ UNION ALL
 SELECT (SELECT count(*) FROM dbrel_result) = (SELECT count(*) FROM dbrel_parallel)
        AS same_row_count;
 
+-- The parallel scans above ran inside CREATE TABLE AS, a statement that has
+-- used its command ID.  On PostgreSQL 17+ the leader's subtransactions
+-- failed there ("cannot start commands during a parallel operation").  The
+-- aggregate functions share the scan; check one of them the same way.
+SET pg_integrity_checksums.workers = 2;
+CREATE TEMP TABLE dbrel_agg AS
+SELECT pg_database_logical_checksum(false, true, 'fnv64') AS parallel_value;
+RESET pg_integrity_checksums.workers;
+SELECT parallel_value = pg_database_logical_checksum(false, true, 'fnv64')
+       AS parallel_in_ctas_matches_serial
+FROM dbrel_agg;
+
 -- The relations filter returns the matching rows of the full scan; NULL
 -- elements are ignored, and an empty list returns nothing.
 SELECT r.rel_name, r.checksum = f.checksum AS same_checksum
@@ -217,5 +229,5 @@ DROP ROLE regress_dbrel_user;
 -- Cleanup.
 DROP SCHEMA dbrel CASCADE;
 DROP FUNCTION dbrel_expected(regclass, boolean, text);
-DROP TABLE dbrel_temp, dbrel_result, dbrel_parallel;
+DROP TABLE dbrel_temp, dbrel_result, dbrel_parallel, dbrel_agg;
 RESET client_min_messages;

@@ -99,7 +99,8 @@ typedef enum ChecksumTaskType
     CHECKSUM_TASK_INDEX_PHYSICAL,
     CHECKSUM_TASK_INDEX_LOGICAL,
     CHECKSUM_TASK_DATABASE_PHYSICAL,
-    CHECKSUM_TASK_DATABASE_LOGICAL
+    CHECKSUM_TASK_DATABASE_LOGICAL,
+    CHECKSUM_TASK_TABLE_BUCKETS
 } ChecksumTaskType;
 
 /*
@@ -214,6 +215,10 @@ typedef struct ChecksumParallelState
     uint32      nitems;
     uint32      snapshot_size;
     pg_atomic_uint32 next_item;
+
+    /* CHECKSUM_TASK_TABLE_BUCKETS only */
+    uint32      nbuckets;       /* number of key hash buckets */
+    int         nkeys;          /* key columns, 0 for the whole row */
 } ChecksumParallelState;
 
 /* Keys for the shm_toc used by the parallel scan. */
@@ -221,6 +226,8 @@ typedef struct ChecksumParallelState
 #define CHECKSUM_KEY_SNAPSHOT    1
 #define CHECKSUM_KEY_RESULTS     2
 #define CHECKSUM_KEY_ITEMS       3
+#define CHECKSUM_KEY_KEYNAMES    4  /* bucket scan: NUL-separated key names */
+#define CHECKSUM_KEY_BUCKETS     5  /* bucket scan: pg_atomic_uint64[2 * nbuckets] */
 
 /* Number of blocks claimed per atomic fetch during a parallel scan. */
 #define PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK 64
@@ -261,6 +268,25 @@ extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_ty
                                                         ChecksumLogicalAccum *logical_acc,
                                                         ChecksumAccum64 *acc64,
                                                         ChecksumLogicalAccum64 *logical_acc64);
+extern bool pg_integrity_checksums_parallel_consume(ChecksumParallelState *state,
+                                                   uint32 chunk,
+                                                   uint32 *start, uint32 *end);
+extern void pg_integrity_checksums_parallel_scan_buckets(Oid reloid,
+                                                         uint32 nblocks,
+                                                         int workers,
+                                                         ChecksumAlgo algo,
+                                                         uint32 nbuckets,
+                                                         int nkeys,
+                                                         char **keynames,
+                                                         Snapshot snapshot,
+                                                         ChecksumLogicalAccum *acc32,
+                                                         ChecksumLogicalAccum64 *acc64);
+
+/* Bucket checksums (checksum_diff.c), one participant's share. */
+extern void pg_table_bucket_parallel_task(ChecksumParallelState *pstate,
+                                          char **keynames,
+                                          pg_atomic_uint64 *shared,
+                                          Snapshot snapshot);
 extern void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                            ChecksumRelationItem *items,
                                                            uint32 nitems,

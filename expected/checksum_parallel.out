@@ -164,6 +164,47 @@ BEGIN
     END IF;
 END;
 $$;
+-- Test J: parallel bucket checksums equal serial ones, for both algorithms,
+-- the primary key, chosen key columns and the whole row, and for a
+-- partitioned table with a partition whose columns are in another order.
+CREATE TABLE test_parallel_part (id integer, data text) PARTITION BY RANGE (id);
+CREATE TABLE test_parallel_part_1 PARTITION OF test_parallel_part
+    FOR VALUES FROM (0) TO (2500);
+CREATE TABLE test_parallel_part_2 (data text, id integer);
+ALTER TABLE test_parallel_part ATTACH PARTITION test_parallel_part_2
+    FOR VALUES FROM (2500) TO (10000);
+INSERT INTO test_parallel_part
+    SELECT i, repeat('p' || i, 40) FROM generate_series(1, 5000) i;
+CREATE FUNCTION test_parallel_buckets() RETURNS TABLE(
+    rel text, algo text, keys text, bucket integer, row_count bigint,
+    checksum bytea)
+LANGUAGE sql AS $$
+    SELECT r, a, coalesce(k.k::text, 'pk'), b.*
+    FROM unnest(ARRAY['test_parallel', 'test_parallel_part']) r,
+         unnest(ARRAY['fnv32', 'fnv64']) a,
+         (VALUES (NULL::text[]), ('{data}'), ('{}')) k(k),
+         pg_table_bucket_checksums(r::regclass, 37, k.k, a) b
+$$;
+SET pg_integrity_checksums.workers = 0;
+CREATE TEMP TABLE test_parallel_buckets_serial AS
+    SELECT * FROM test_parallel_buckets();
+SET pg_integrity_checksums.workers = 4;
+CREATE TEMP TABLE test_parallel_buckets_par AS
+    SELECT * FROM test_parallel_buckets();
+RESET pg_integrity_checksums.workers;
+SELECT count(*) AS bucket_rows,
+       count(*) FILTER (WHERE s IS DISTINCT FROM p) AS differing,
+       sum(s.row_count) AS serial_rows
+FROM test_parallel_buckets_serial s
+FULL JOIN test_parallel_buckets_par p USING (rel, algo, keys, bucket);
+ bucket_rows | differing | serial_rows 
+-------------+-----------+-------------
+         444 |         0 |       60000
+(1 row)
+
+DROP TABLE test_parallel_buckets_serial, test_parallel_buckets_par;
+DROP FUNCTION test_parallel_buckets();
+DROP TABLE test_parallel_part;
 -- Temporary relations cannot be read by parallel workers: they are scanned
 -- serially, whatever the worker setting.
 CREATE TEMP TABLE test_parallel_temp AS
@@ -192,6 +233,13 @@ SELECT pg_index_logical_checksum('test_parallel_temp_idx') IS NOT NULL AS temp_i
  temp_index_logical 
 --------------------
  t
+(1 row)
+
+SELECT sum(row_count) AS temp_bucket_rows
+FROM pg_table_bucket_checksums('test_parallel_temp', 8);
+ temp_bucket_rows 
+------------------
+             5000
 (1 row)
 
 RESET pg_integrity_checksums.workers;

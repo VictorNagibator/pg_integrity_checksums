@@ -27,8 +27,10 @@
  * Row checksums are the same canonical logical row hashes that
  * pg_table_logical_checksum() aggregates, and each bucket is aggregated the
  * same way, so with one bucket the bucket checksum equals the table checksum.
- * These scans always run in the calling backend; they do not start parallel
- * workers.
+ * Bucket scans hand chunks of blocks to parallel workers, like a table scan,
+ * when pg_integrity_checksums.workers allows it; each participant keeps its
+ * own bucket accumulators and adds them to a shared array at the end.  Row
+ * and block range scans always run in the calling backend.
  *
  *-------------------------------------------------------------------------
  */
@@ -547,12 +549,70 @@ diff_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 }
 
 /*
+ * diff_leaf_begin - prepare the row hasher and key columns for one heap
+ * relation
+ */
+static void
+diff_leaf_begin(Relation rel, TupleDesc order_desc, DiffScanState *state)
+{
+    int         k;
+
+    logical_row_hasher_init(&state->hasher, RelationGetDescr(rel), order_desc);
+
+    state->keyidx = palloc(sizeof(int) * Max(state->nkeys, 1));
+    state->keyhints = palloc0(sizeof(LogicalColumnHint) * Max(state->nkeys, 1));
+    for (k = 0; k < state->nkeys; k++)
+    {
+        state->keyidx[k] = diff_find_column(RelationGetDescr(rel),
+                                            state->keynames[k]);
+        if (state->keyidx[k] < 0)
+            elog(ERROR, "key column \"%s\" was not found in relation \"%s\"",
+                 state->keynames[k], RelationGetRelationName(rel));
+    }
+}
+
+/* diff_leaf_end - release what diff_leaf_begin() set up */
+static void
+diff_leaf_end(DiffScanState *state)
+{
+    pfree(state->keyidx);
+    pfree(state->keyhints);
+    logical_row_hasher_free(&state->hasher);
+}
+
+/*
+ * diff_bucket_workers - number of parallel workers for a bucket scan of one
+ * heap relation, 0 to scan it in the calling backend
+ */
+static int
+diff_bucket_workers(Relation rel, BlockNumber nblocks)
+{
+    int         workers = pg_integrity_checksums_worker_count_for(rel);
+    uint32      chunks;
+
+    if (workers <= 0 || nblocks == 0)
+        return 0;
+
+    /* Do not start more workers than there are chunks of blocks. */
+    chunks = nblocks / PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK +
+        (nblocks % PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK != 0);
+    if ((uint32) workers > chunks)
+        workers = (int) chunks;
+
+    return workers;
+}
+
+/*
  * diff_scan_relation - scan one heap relation (or the leaves of a
  * partitioned table) into the bucket accumulators or the result rows
  *
  * order_desc is the descriptor of the queried table when rel is one of its
  * partitions: rows are hashed in the queried table's column order and key
  * columns are found by name.
+ *
+ * A bucket scan of a relation whose rows are hashed in their own column
+ * order uses parallel workers when pg_integrity_checksums.workers allows it;
+ * row scans always run in the calling backend.
  */
 static void
 diff_scan_relation(Relation rel, TupleDesc order_desc, Snapshot snapshot,
@@ -560,7 +620,8 @@ diff_scan_relation(Relation rel, TupleDesc order_desc, Snapshot snapshot,
 {
     TupleDesc   tupdesc = RelationGetDescr(rel);
     BufferAccessStrategy bstrategy;
-    int         k;
+    BlockNumber nblocks;
+    int         workers = 0;
 
     if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
     {
@@ -590,26 +651,115 @@ diff_scan_relation(Relation rel, TupleDesc order_desc, Snapshot snapshot,
     if (order_desc != NULL && logical_columns_same_order(tupdesc, order_desc))
         order_desc = NULL;
 
-    logical_row_hasher_init(&state->hasher, tupdesc, order_desc);
+    nblocks = RelationGetNumberOfBlocks(rel);
 
-    state->keyidx = palloc(sizeof(int) * Max(state->nkeys, 1));
-    state->keyhints = palloc0(sizeof(LogicalColumnHint) * Max(state->nkeys, 1));
-    for (k = 0; k < state->nkeys; k++)
+    /*
+     * Workers hash rows in the relation's own column order; a partition
+     * whose columns are in another order than the queried table's is
+     * scanned here.
+     */
+    if (state->mode == DIFF_BUCKETS && order_desc == NULL)
+        workers = diff_bucket_workers(rel, nblocks);
+
+    if (workers > 0)
     {
-        state->keyidx[k] = diff_find_column(tupdesc, state->keynames[k]);
-        if (state->keyidx[k] < 0)
-            elog(ERROR, "key column \"%s\" was not found in relation \"%s\"",
-                 state->keynames[k], RelationGetRelationName(rel));
+        pg_integrity_checksums_parallel_scan_buckets(RelationGetRelid(rel),
+                                                     nblocks, workers,
+                                                     state->algo,
+                                                     state->nbuckets,
+                                                     state->nkeys,
+                                                     state->keynames,
+                                                     snapshot,
+                                                     state->acc32,
+                                                     state->acc64);
+        return;
     }
 
+    diff_leaf_begin(rel, order_desc, state);
+
     bstrategy = GetAccessStrategy(BAS_BULKREAD);
-    scan_visible_tuples(rel, 0, RelationGetNumberOfBlocks(rel), snapshot,
-                        bstrategy, false, diff_tuple_visitor, state);
+    scan_visible_tuples(rel, 0, nblocks, snapshot, bstrategy, false,
+                        diff_tuple_visitor, state);
     FreeAccessStrategy(bstrategy);
 
-    pfree(state->keyidx);
-    pfree(state->keyhints);
-    logical_row_hasher_free(&state->hasher);
+    diff_leaf_end(state);
+}
+
+/*
+ * pg_table_bucket_parallel_task - one participant's share of a parallel
+ * bucket scan
+ *
+ * Run by the leader and by every worker of
+ * pg_integrity_checksums_parallel_scan_buckets(): claims chunks of blocks of
+ * pstate->reloid until none remain, accumulates the visible rows into
+ * private per-bucket accumulators and then adds those to the shared
+ * (sum, count) pairs.
+ */
+void
+pg_table_bucket_parallel_task(ChecksumParallelState *pstate, char **keynames,
+                              pg_atomic_uint64 *shared, Snapshot snapshot)
+{
+    DiffScanState state;
+    Relation    rel;
+    BufferAccessStrategy bstrategy;
+    uint32      start;
+    uint32      end;
+    uint32      b;
+
+    memset(&state, 0, sizeof(state));
+    state.mode = DIFF_BUCKETS;
+    state.algo = pstate->algo;
+    state.nbuckets = pstate->nbuckets;
+    state.nkeys = pstate->nkeys;
+    state.keynames = keynames;
+
+    if (state.algo == CHECKSUM_ALGO_FNV32)
+        state.acc32 = palloc0(sizeof(ChecksumLogicalAccum) * state.nbuckets);
+    else
+        state.acc64 = palloc0(sizeof(ChecksumLogicalAccum64) * state.nbuckets);
+
+    rel = relation_open(pstate->reloid, AccessShareLock);
+    diff_leaf_begin(rel, NULL, &state);
+    bstrategy = GetAccessStrategy(BAS_BULKREAD);
+
+    while (pg_integrity_checksums_parallel_consume(pstate,
+                                                   PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
+                                                   &start, &end))
+        scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
+                            diff_tuple_visitor, &state);
+
+    FreeAccessStrategy(bstrategy);
+    diff_leaf_end(&state);
+    relation_close(rel, AccessShareLock);
+
+    for (b = 0; b < state.nbuckets; b++)
+    {
+        uint64      sum;
+        uint64      count;
+
+        if (state.algo == CHECKSUM_ALGO_FNV32)
+        {
+            sum = state.acc32[b].sum;
+            count = state.acc32[b].count;
+        }
+        else
+        {
+            sum = state.acc64[b].sum;
+            count = state.acc64[b].count;
+        }
+
+        if (count == 0)
+            continue;
+
+        /* Two's complement: adding the reinterpreted value adds mod 2^64. */
+        pg_atomic_fetch_add_u64(&shared[2 * b], (int64) sum);
+        pg_atomic_fetch_add_u64(&shared[2 * b + 1], (int64) count);
+    }
+
+    if (state.acc32)
+        pfree(state.acc32);
+    if (state.acc64)
+        pfree(state.acc64);
 }
 
 /*

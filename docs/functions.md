@@ -440,8 +440,13 @@ set-returning functions (since 2.8) split the same logical checksum into
 pieces, so the differing rows can be found without moving the table between
 servers.  All of them require `SELECT` on the table, reject tables with
 row-level security, see the statement's snapshot (only visible rows count)
-and accept `fnv32` or `fnv64` (the default) as `algorithm`.  They run in the
-calling backend and do not use `pg_integrity_checksums.workers`.
+and accept `fnv32` or `fnv64` (the default) as `algorithm`.
+`pg_table_bucket_checksums` hands chunks of blocks to parallel workers when
+`pg_integrity_checksums.workers` is above zero, like the table checksums (not
+for temporary tables, nor for a partition whose columns are in another order
+than the partitioned table's); the result is the same as a serial scan.
+`pg_table_row_checksums` and `pg_table_block_checksums` always run in the
+calling backend.
 
 The row checksums are the logical tuple checksums, and each bucket or range is
 aggregated like `pg_table_logical_checksum`: the checksum of one bucket that

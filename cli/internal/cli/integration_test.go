@@ -9,6 +9,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/pgdb"
 )
@@ -139,12 +142,18 @@ func TestIntegrationSequences(t *testing.T) {
 		t.Fatalf("verify clean: code=%d err=%s", code, errOut)
 	}
 
+	// doctor lists sequences with their privilege check.
+	code, out, errOut := runCLI("doctor", "--db", dsn, "--format", "json", "--verbose", "--quiet")
+	if code != 0 || !strings.Contains(out, `"sequence"`) || !strings.Contains(out, `"invoice_no"`) {
+		t.Fatalf("doctor: code=%d out=%s err=%s", code, out, errOut)
+	}
+
 	// A sequence that moved while the table rows did not is a change: after
 	// a migration it would hand out duplicate keys.
 	if _, err := db.ExecContext(ctx, "SELECT nextval('"+schema+".invoice_no')"); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut := runCLI("verify", "--db", dsn, "--baseline", path, "--format", "json")
+	code, out, errOut = runCLI("verify", "--db", dsn, "--baseline", path, "--format", "json")
 	if code != 1 {
 		t.Fatalf("verify after nextval: code=%d out=%s err=%s", code, out, errOut)
 	}
@@ -203,5 +212,74 @@ func TestIntegrationSequences(t *testing.T) {
 	}
 	if pb.Scope.IncludeSequences {
 		t.Fatal("physical scope includes sequences")
+	}
+}
+
+// TestIntegrationSequencesOldExtension checks capture and verify against an
+// extension that predates pg_sequence_logical_checksum (2.8.0).
+func TestIntegrationSequencesOldExtension(t *testing.T) {
+	dsn := os.Getenv("PGICS_TEST_DSN")
+	if dsn == "" {
+		t.Skip("PGICS_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	admin, err := pgdb.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	dbname := fmt.Sprintf("pgics_oldext_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+dbname); err != nil {
+		t.Skipf("cannot create a second database: %v", err)
+	}
+	defer admin.ExecContext(ctx, "DROP DATABASE "+dbname)
+
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Database = dbname
+	oldDSN := stdlib.RegisterConnConfig(cfg)
+	defer stdlib.UnregisterConnConfig(oldDSN)
+	old, err := pgdb.Open(ctx, oldDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	for _, stmt := range []string{
+		"CREATE EXTENSION pg_integrity_checksums VERSION '2.8.0'",
+		"CREATE TABLE t (id serial PRIMARY KEY)",
+		"CREATE SEQUENCE s",
+	} {
+		if _, err := old.ExecContext(ctx, stmt); err != nil {
+			t.Skipf("cannot set up extension 2.8.0: %v", err)
+		}
+	}
+	cliDSN := oldDSN
+
+	// Default capture: warns and leaves sequences out.
+	path := filepath.Join(t.TempDir(), "old.json")
+	code, _, errOut := runCLI("capture", "--db", cliDSN, "--output", path)
+	if code != 0 || !strings.Contains(errOut, "cannot checksum sequences") {
+		t.Fatalf("capture: code=%d err=%s", code, errOut)
+	}
+	b, err := baseline.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Scope.IncludeSequences {
+		t.Fatal("scope includes sequences without extension support")
+	}
+	code, _, errOut = runCLI("verify", "--db", cliDSN, "--baseline", path, "--quiet")
+	if code != 0 {
+		t.Fatalf("verify: code=%d err=%s", code, errOut)
+	}
+
+	// An explicit request fails.
+	code, _, errOut = runCLI("capture", "--db", cliDSN, "--no-sequences=false",
+		"--output", filepath.Join(t.TempDir(), "x.json"), "--quiet")
+	if code == 0 || !strings.Contains(errOut, "needs 2.9.0") {
+		t.Fatalf("explicit capture: code=%d err=%s", code, errOut)
 	}
 }

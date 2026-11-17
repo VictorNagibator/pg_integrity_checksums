@@ -62,6 +62,6 @@ Out of scope:
 
 ## What to expect
 
-I will acknowledge the report, investigate it, and coordinate disclosure through
+I will acknowledge the report within 14 days, investigate it, and coordinate disclosure through
 a GitHub Security Advisory. Please allow reasonable time for a fix before
 publishing details.

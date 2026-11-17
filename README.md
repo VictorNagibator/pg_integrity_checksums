@@ -5,6 +5,7 @@
 [![CodeQL](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml/badge.svg)](https://github.com/VictorNagibator/pg_integrity_checksums/actions/workflows/codeql.yml)
 [![codecov](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums/branch/main/graph/badge.svg)](https://codecov.io/gh/VictorNagibator/pg_integrity_checksums)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/VictorNagibator/pg_integrity_checksums/badge)](https://scorecard.dev/viewer/?uri=github.com/VictorNagibator/pg_integrity_checksums)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16732/badge)](https://www.bestpractices.dev/projects/16732)
 
 [![Release](https://img.shields.io/github/v/release/VictorNagibator/pg_integrity_checksums?filter=v*&label=extension)](https://github.com/VictorNagibator/pg_integrity_checksums/releases/latest)
 [![CLI release](https://img.shields.io/github/v/release/VictorNagibator/pg_integrity_checksums?filter=cli-v*&label=cli)](https://github.com/VictorNagibator/pg_integrity_checksums/releases?q=cli-v)

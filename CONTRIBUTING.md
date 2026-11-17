@@ -93,6 +93,11 @@ change did not change a result.
 - `chore/<topic>` — maintenance;
 - `release/<version>` — release preparation.
 
+Every behavior change comes with a test: a regression test in `sql/` and
+`expected/` (listed in `REGRESS` in the `Makefile`), a TAP test in `t/`, or a Go
+test in `cli/`.  A pull request without one needs a stated reason.  CI must be
+green before merge.
+
 Use Conventional Commits:
 
 ```text

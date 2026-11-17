@@ -31,6 +31,7 @@ COMMENT ON FUNCTION pg_relation_page_checksum_status(regclass, text, boolean) IS
  that exists (main, fsm, vm, init) unless fork_name names one. Returns the
  blocks whose status is mismatch; with include_ok = true, every block with
  status ok, mismatch or new. Fails when data checksums are disabled.';
+
 /*-----------------------------------------------------------
  * SEQUENCE FUNCTIONS (Logical)
  *-----------------------------------------------------------
@@ -56,4 +57,3 @@ LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_sequence_logical_checksum(regclass, text) IS
 'Generic logical sequence checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
-

@@ -36,8 +36,8 @@ When two copies of a table differ, the logical checksum can be split by key
 bucket (or, on a physical standby, by block range) to find the rows that
 differ; see [Finding differing rows](docs/functions.md#finding-differing-rows).
 
-A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
-wider checksum or a raw `bytea` value is required.  It is described in the
+A generic API with an explicit algorithm (FNV-1a 32/64-bit, CRC-32C or
+XXH3-64) returns raw `bytea` digests, for a wider or faster checksum.  It is described in the
 [function reference](docs/functions.md).
 
 ## Errors and skipped relations
@@ -102,7 +102,7 @@ The CLI uses the 32-bit v1 baseline format by default.  Add
 ## Compatibility
 
 The 32-bit numeric SQL functions are the default and remain fully supported,
-as are v1 baselines.  The optional generic API adds explicit `fnv32`/`fnv64`
+as are v1 baselines.  The optional generic API adds explicit `fnv32`/`fnv64`/`crc32c`/`xxh3`
 digests and v2 baselines; see [Functions and algorithms](docs/functions.md)
 and [Concepts](docs/concepts.md) for selection guidance.
 

@@ -52,11 +52,18 @@ hash_tuple_with_header(HeapTupleHeader tuple, Size len, uint64 seed,
 
         return fnv1a_32_buf(rest, len - hoff, h);
     }
-    else
+    else if (algo == CHECKSUM_ALGO_FNV64)
     {
         uint64      h = fnv1a_64_hash(header, hoff, seed);
 
         return fnv1a_64_buf(rest, len - hoff, h);
+    }
+    else
+    {
+        /* CRC-32C continues exactly; XXH3 is seeded with the header hash. */
+        uint64      h = hash_bytes_algo(seed, header, hoff, algo);
+
+        return hash_bytes_algo(h, rest, len - hoff, algo);
     }
 }
 
@@ -142,9 +149,8 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     location = ((uint64)blkno << 32) | (uint64)offnum;
 
     /* Hash the location with the selected algorithm. */
-    location_hash = (algo == CHECKSUM_ALGO_FNV32) ?
-        fnv1a_32_hash(&location, sizeof(location), FNV_BASIS_32) :
-        fnv1a_64_hash(&location, sizeof(location), FNV_BASIS_64);
+    location_hash = hash_bytes_algo(checksum_algo_basis(algo), &location,
+                                    sizeof(location), algo);
 
     /*
      * Include relation identity and storage identity.  relfilenode changes
@@ -178,10 +184,8 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
      */
     if (include_header)
         checksum = hash_tuple_with_header(tuple, len, location_hash, algo);
-    else if (algo == CHECKSUM_ALGO_FNV32)
-        checksum = pg_checksum_data_custom(data, len, (uint32) location_hash);
     else
-        checksum = fnv1a_64_hash(data, len, location_hash);
+        checksum = hash_bytes_algo(location_hash, data, len, algo);
 
     /* Incorporate MVCC information and other physical metadata */
     mvcc_info = (HeapTupleHeaderGetRawXmin(tuple) ^
@@ -193,7 +197,7 @@ pg_tuple_physical_checksum_internal(Relation rel, Page page,
     itemid_info = (ItemIdGetFlags(lp) << 24) | ItemIdGetLength(lp);
     checksum = combine_hash(checksum, itemid_info, algo);
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
     {
         if (checksum == CHECKSUM_NULL)
             checksum = (CHECKSUM_NULL ^ location_hash) & 0xFFFFFFFE;
@@ -381,7 +385,7 @@ pg_tuple_physical_checksum_algo(PG_FUNCTION_ARGS)
                                            algorithm, &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, checksum_algo_len(algorithm)));
 }
 
 /*-------------------------------------------------------------------------
@@ -555,7 +559,7 @@ uint64
 logical_row_hash_values(LogicalRowHasher *hasher, ChecksumAlgo algo)
 {
     TupleDesc   tupdesc = hasher->tupdesc;
-    uint64      checksum = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
+    uint64      checksum = checksum_algo_basis(algo);
     MemoryContext oldcontext;
     int         c;
 
@@ -579,7 +583,7 @@ logical_row_hash_values(LogicalRowHasher *hasher, ChecksumAlgo algo)
 
     MemoryContextSwitchTo(oldcontext);
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
     {
         if (checksum == CHECKSUM_NULL || checksum == 0)
             checksum = hash_mix32((uint32) checksum ^ FNV_BASIS_32);
@@ -705,6 +709,6 @@ pg_tuple_logical_checksum_algo(PG_FUNCTION_ARGS)
                                           &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, checksum_algo_len(algorithm)));
 }
 

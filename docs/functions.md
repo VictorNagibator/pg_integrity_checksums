@@ -25,7 +25,8 @@ New to the extension? Read [Getting started](getting-started.md) and
 | Rows of buckets (logical) | `pg_table_row_checksums(regclass, integer, integer[], text[], text)` | — |
 | Block ranges (logical) | `pg_table_block_checksums(regclass, integer, text)` | — |
 
-The generic API returns `bytea` and accepts `fnv32` or `fnv64`.  The default
+The generic API returns `bytea` and accepts `fnv32`, `fnv64`, `crc32c` or
+`xxh3` (see [Algorithm Details](#algorithm-details)).  The default
 32-bit API returns `integer`/`bigint` and is the simplest choice for most
 users.  The bucket, row and block range functions (see
 [Finding differing rows](#finding-differing-rows)) return sets and default to
@@ -407,7 +408,7 @@ optional:
 | `include_system` | `false` | Include `pg_catalog` relations, as in the aggregate functions |
 | `include_indexes` / `include_toast` | `true` / `false` | As in `pg_database_logical_checksum` / `pg_database_physical_checksum` |
 | `relations regclass[]` | `NULL` (all) | Only return these relations.  Listed relations that the scan would not include (a catalog without `include_system`, a view, a temporary table) return no row; `NULL` elements are ignored |
-| `algorithm text` | `'fnv32'` | `fnv32` or `fnv64` |
+| `algorithm text` | `'fnv32'` | `fnv32`, `fnv64`, `crc32c` or `xxh3` |
 
 Each row has these columns:
 
@@ -423,8 +424,8 @@ Each row has these columns:
 `checksum` is exactly what the per-relation function with the same algorithm
 returns (`pg_table_logical_checksum(rel, algorithm)`,
 `pg_index_physical_checksum(rel, algorithm)`, ...), including its width:
-4 bytes for `fnv32` except physical table checksums, which are always 8
-bytes.  Use `pg_checksum_bigint(checksum)` for the integer form.  It is the
+4 bytes for `fnv32` and `crc32c` except physical table checksums, which are
+always 8 bytes.  Use `pg_checksum_bigint(checksum)` for the integer form.  It is the
 relation's own checksum: the aggregate database checksum additionally folds in
 the relation identity.
 
@@ -477,7 +478,7 @@ Wrapper for text data checksum.
 SELECT pg_text_checksum('sample text', 0);
 ```
 
-## Generic API (optional 32/64-bit)
+## Generic API (algorithm argument)
 
 The default numeric functions above keep their FNV-1a 32-bit return type.
 The generic overloads take an extra `text` algorithm argument and return a
@@ -500,8 +501,35 @@ pg_database_logical_checksum(boolean, boolean, text)
 
 Supported algorithms:
 
-* `fnv32` — 4-byte big-endian digest;
-* `fnv64` — 8-byte big-endian digest.
+| Algorithm | Digest | Since | Notes |
+|---|---|---|---|
+| `fnv32` | 4 bytes | 2.2 | FNV-1a 32-bit, the same values as the default `integer` API |
+| `fnv64` | 8 bytes | 2.2 | FNV-1a 64-bit |
+| `crc32c` | 4 bytes | 2.9 | CRC-32C (Castagnoli), with PostgreSQL's implementation (CPU CRC instructions where available) |
+| `xxh3` | 8 bytes | 2.9 | XXH3-64 from xxHash 0.8.3 |
+
+`crc32c` and `xxh3` are much faster than FNV-1a on long inputs (pages,
+large values) and slightly slower on short ones; see
+[Which API should I use?](concepts.md#generic-api-choose-the-algorithm).
+Digests are big-endian.  Names are case-sensitive; an unknown name is an
+error that lists the supported ones.  None of the algorithms is
+cryptographic.
+
+The `bigint` seed of `pg_data_checksum` and `pg_text_checksum` selects the
+starting state: `0` is the algorithm's standard start (the FNV offset basis,
+a fresh CRC-32C, XXH3's default seed).  For `crc32c` the seed is a previous
+CRC-32C value to continue, so the CRC of a concatenation can be computed in
+parts; for `xxh3` it is the XXH3 seed; for `fnv32` and `crc32c` only its low
+32 bits are used.
+
+```sql
+-- the standard CRC-32C check value
+SELECT encode(pg_text_checksum('123456789', 0, 'crc32c'), 'hex');  -- e3069283
+-- continue a CRC: crc32c('hello world') in two parts
+SELECT pg_data_checksum(convert_to(' world', 'UTF8'),
+                        pg_checksum_bigint(pg_data_checksum(convert_to('hello', 'UTF8'), 0, 'crc32c'), true),
+                        'crc32c');
+```
 
 Table and database physical checksums always return 8 bytes because relation
 identity is part of the value.  Convert a digest to a signed SQL `bigint`
@@ -512,8 +540,8 @@ pg_checksum_bigint(bytea) -> bigint
 pg_checksum_bigint(bytea, boolean) -> bigint
 ```
 
-The second argument selects unsigned interpretation for 4-byte `fnv32`
-digests.  The one-argument form sign-extends 4-byte values, matching the
+The second argument selects unsigned interpretation for 4-byte (`fnv32`,
+`crc32c`) digests.  The one-argument form sign-extends 4-byte values, matching the
 `integer` functions.  Use the unsigned form when comparing with default table
 logical checksums, which return a positive 32-bit value in a `bigint`.
 
@@ -534,7 +562,10 @@ set-returning functions (since 2.8) split the same logical checksum into
 pieces, so the differing rows can be found without moving the table between
 servers.  All of them require `SELECT` on the table, reject tables with
 row-level security, see the statement's snapshot (only visible rows count)
-and accept `fnv32` or `fnv64` (the default) as `algorithm`.
+and accept every algorithm of the generic API (`fnv64` is the default) as
+`algorithm`.  The key hash that assigns a row to a bucket is always 64-bit
+FNV-1a, so the buckets of a row are the same whichever algorithm computes the
+checksums.
 `pg_table_bucket_checksums` hands chunks of blocks to parallel workers when
 `pg_integrity_checksums.workers` is above zero, like the table checksums (not
 for temporary tables, nor for a partition whose columns are in another order
@@ -667,6 +698,37 @@ existing v2 baselines stay valid.)  Non-NULL values that hash to zero or to
 `UINT64_MAX` are remapped by the final mix.
 All canonical value handling (types, arrays, ranges, numerics, endianness)
 is shared between the 32-bit and 64-bit paths.
+
+### CRC-32C and XXH3
+
+`crc32c` and `xxh3` replace FNV-1a wherever bytes are hashed: values,
+tuples, pages, and the order-dependent combination of the parts of a value
+(type tag, position, array elements, composite fields, a row's columns).
+The order-independent aggregation of rows, pages and relations, the final
+mixing and the sentinels described here depend only on the digest width, so
+`crc32c` aggregates like `fnv32` and `xxh3` like `fnv64`.  An empty table,
+for example, has the same logical checksum with `fnv32` and `crc32c`.
+
+A logical value is hashed in steps, each continuing from the previous result
+and starting from the FNV offset basis of the algorithm's width:
+
+1. the type tag, then that hash as little-endian bytes (4 for `crc32c`, 8 for
+   `xxh3`): the value prefix;
+2. the column position, as little-endian bytes of the same width;
+3. the canonical encoding of the value (for scalars, the bytes of the send
+   function, in one step).
+
+A row hashes its column hashes in order, as little-endian bytes.  "Continuing"
+means the CRC-32C register for `crc32c`, so for it every sequence of steps
+equals one CRC-32C over the concatenation of their bytes (as with FNV-1a);
+for `xxh3` it means the previous result is the seed of the next XXH3 call.
+The `checksum_fastpath` regression test recomputes cell and tuple checksums
+from these rules with `pg_data_checksum` and the types' send functions, for
+every algorithm.
+
+Logical `crc32c` and `xxh3` checksums are portable like the FNV ones: the
+same on every platform, byte order and cluster.  Physical ones describe one
+cluster, as with FNV.
 
 ### Order-Independent Aggregation
 

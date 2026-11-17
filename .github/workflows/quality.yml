@@ -118,7 +118,7 @@ jobs:
           # Keep only the extension's own sources: drop PostgreSQL headers
           # from the coverage build tree and system headers.
           lcov --capture --directory . --output-file coverage-raw.info || true
-          lcov --remove coverage-raw.info '*/pgcov/*' '/usr/*' \
+          lcov --remove coverage-raw.info '*/pgcov/*' '/usr/*' '*/third_party/*' \
             --ignore-errors unused --output-file coverage.info || true
           lcov --list coverage.info || true
           genhtml coverage.info --output-directory coverage-html || true

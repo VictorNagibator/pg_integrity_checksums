@@ -3,8 +3,9 @@
  * checksum_hash.c
  *    SQL hash entry points and order-independent aggregation
  *
- * The FNV-1a and hash combination primitives, and the per-item accumulator
- * steps, are static inline functions in checksum_internal.h.
+ * The FNV-1a, CRC-32C and hash combination primitives, and the per-item
+ * accumulator steps, are static inline functions in checksum_internal.h.
+ * XXH3 comes from the vendored xxHash library (third_party/xxhash).
  *
  *-------------------------------------------------------------------------
  */
@@ -14,6 +15,35 @@
 #include "utils/builtins.h"
 
 #include "checksum_internal.h"
+
+/*
+ * Compile xxHash into this translation unit only: XXH_INLINE_ALL makes all of
+ * its functions static.  Streaming and the 32-bit/XXH64 variants are unused.
+ * The library predates some of PostgreSQL's warning flags.  Inlining it into
+ * every caller (through checksum_internal.h) made no measurable difference.
+ */
+#define XXH_INLINE_ALL
+#define XXH_NO_STREAM
+#if defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdeclaration-after-statement"
+#endif
+#include "xxhash/xxhash.h"
+#if defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
+/*
+ * xxh3_64_hash - XXH3 64-bit hash of a byte range with a seed
+ *
+ * XXH3 reads its input as little-endian, so the result is the same on every
+ * platform.  Seed 0 is XXH3's default.
+ */
+uint64
+xxh3_64_hash(const void *data, size_t len, uint64 seed)
+{
+    return (uint64) XXH3_64bits_withSeed(data, len, (XXH64_hash_t) seed);
+}
 
 /*-------------------------------------------------------------------------
  * SQL argument handling and hash entry points
@@ -36,10 +66,15 @@ checksum_algorithm(text *value)
         result = CHECKSUM_ALGO_FNV32;
     else if (strcmp(name, "fnv64") == 0)
         result = CHECKSUM_ALGO_FNV64;
+    else if (strcmp(name, "crc32c") == 0)
+        result = CHECKSUM_ALGO_CRC32C;
+    else if (strcmp(name, "xxh3") == 0)
+        result = CHECKSUM_ALGO_XXH3;
     else
         ereport(ERROR,
                 (errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-                 errmsg("unknown checksum algorithm \"%s\"", name)));
+                 errmsg("unknown checksum algorithm \"%s\"", name),
+                 errhint("Supported algorithms are fnv32, fnv64, crc32c and xxh3.")));
 
     pfree(name);
     return result;
@@ -83,18 +118,11 @@ pg_data_checksum_algo(PG_FUNCTION_ARGS)
     seed = PG_GETARG_INT64(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
-    if (algorithm == CHECKSUM_ALGO_FNV32)
-    {
-        uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(data),
-                                                       VARSIZE_ANY_EXHDR(data),
-                                                       (uint32) seed);
-
-        PG_RETURN_BYTEA_P(checksum_bytea(checksum, 4));
-    }
-
-    PG_RETURN_BYTEA_P(checksum_bytea(fnv1a_64_hash(VARDATA_ANY(data),
-                                                    VARSIZE_ANY_EXHDR(data),
-                                                    (uint64) seed), 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(hash_bytes_algo((uint64) seed,
+                                                     VARDATA_ANY(data),
+                                                     VARSIZE_ANY_EXHDR(data),
+                                                     algorithm),
+                                     checksum_algo_len(algorithm)));
 }
 
 /*
@@ -113,18 +141,11 @@ pg_text_checksum_algo(PG_FUNCTION_ARGS)
     seed = PG_GETARG_INT64(1);
     algorithm = checksum_algorithm(PG_GETARG_TEXT_PP(2));
 
-    if (algorithm == CHECKSUM_ALGO_FNV32)
-    {
-        uint32      checksum = pg_checksum_data_custom(VARDATA_ANY(input_text),
-                                                       VARSIZE_ANY_EXHDR(input_text),
-                                                       (uint32) seed);
-
-        PG_RETURN_BYTEA_P(checksum_bytea(checksum, 4));
-    }
-
-    PG_RETURN_BYTEA_P(checksum_bytea(fnv1a_64_hash(VARDATA_ANY(input_text),
-                                                    VARSIZE_ANY_EXHDR(input_text),
-                                                    (uint64) seed), 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(hash_bytes_algo((uint64) seed,
+                                                     VARDATA_ANY(input_text),
+                                                     VARSIZE_ANY_EXHDR(input_text),
+                                                     algorithm),
+                                     checksum_algo_len(algorithm)));
 }
 
 /*

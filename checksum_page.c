@@ -531,6 +531,6 @@ pg_cell_checksum_algo(PG_FUNCTION_ARGS)
                                  PG_GETARG_INT32(2), algorithm, &checksum))
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(checksum, checksum_algo_len(algorithm)));
 }
 

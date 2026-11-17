@@ -54,7 +54,9 @@ These notes cover what to check when upgrading.
 2.9 adds `pg_relation_page_checksum_status()`, which verifies every page of a
 relation (all forks, or one) against its stored `pd_checksum` in one call,
 instead of calling `pg_page_checksum_status()` for each block (see
-[Page Level Functions](functions.md#page-level-functions-physical-only)).
+[Page Level Functions](functions.md#page-level-functions-physical-only)), and
+two algorithms for the generic (`algorithm`) functions: `crc32c` (4 bytes)
+and `xxh3` (8 bytes); see [CRC-32C and XXH3](functions.md#crc-32c-and-xxh3).
 Upgrade with:
 
 ```sql
@@ -63,13 +65,19 @@ ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0';
 
 What changes:
 
-- **No checksum value changes.**
+- **No checksum value changes.**  `fnv32` and `fnv64` values, and the default
+  `integer` API, are unchanged; `crc32c` and `xxh3` are new values, not
+  comparable with them.
 - `pg_sequence_logical_checksum()` checksums a sequence's definition and
   `last_value`/`is_called` (see
   [Sequence Level Functions](functions.md#sequence-level-functions-logical-only)).
   Database checksums still do not include sequences, so their values do not
   change.  The CLI captures sequences in new logical baselines; baselines
   captured before do not cover them until they are captured again.
+- The new algorithms need the 2.9 library; with an older one the generic
+  functions reject them as unknown.  CLI 0.7.0 captures `crc32c` and `xxh3`
+  baselines (`capture --hash xxh3`) and refuses to on an older extension.
+- An unknown algorithm name now also gets a hint listing the supported ones.
 - `pg_page_checksum_status()` on a temporary table reads the page from the
   table's file, like for other relations.  It used to compare the local buffer,
   whose `pd_checksum` is only set when the page is written out, so a modified

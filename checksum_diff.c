@@ -481,7 +481,7 @@ diff_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 
     if (state->mode == DIFF_BUCKETS)
     {
-        if (state->algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(state->algo))
             logical_accum_add(&state->acc32[bucket], (uint32) row_hash);
         else
             logical_accum_add64(&state->acc64[bucket], row_hash);
@@ -500,7 +500,7 @@ diff_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
         values[1] = PointerGetDatum(checksum_bytea(key_hash, 8));
         values[2] = PointerGetDatum(diff_key_text(state));
         values[3] = PointerGetDatum(checksum_bytea(row_hash,
-                                                   state->algo == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+                                                   checksum_algo_len(state->algo)));
         values[4] = PointerGetDatum(&tid);
         values[5] = ObjectIdGetDatum(RelationGetRelid(rel));
         MemoryContextSwitchTo(oldcontext);
@@ -676,7 +676,7 @@ pg_table_bucket_parallel_task(ChecksumParallelState *pstate, char **keynames,
     state.nkeys = pstate->nkeys;
     state.keynames = keynames;
 
-    if (state.algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(state.algo))
         state.acc32 = palloc0(sizeof(ChecksumLogicalAccum) * state.nbuckets);
     else
         state.acc64 = palloc0(sizeof(ChecksumLogicalAccum64) * state.nbuckets);
@@ -700,7 +700,7 @@ pg_table_bucket_parallel_task(ChecksumParallelState *pstate, char **keynames,
         uint64      sum;
         uint64      count;
 
-        if (state.algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(state.algo))
         {
             sum = state.acc32[b].sum;
             count = state.acc32[b].count;
@@ -777,7 +777,7 @@ pg_table_bucket_checksums(PG_FUNCTION_ARGS)
     diff_resolve_key(rel, PG_ARGISNULL(2) ? NULL : PG_GETARG_ARRAYTYPE_P(2),
                      &state);
 
-    if (state.algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(state.algo))
         state.acc32 = palloc0(sizeof(ChecksumLogicalAccum) * state.nbuckets);
     else
         state.acc64 = palloc0(sizeof(ChecksumLogicalAccum64) * state.nbuckets);
@@ -792,7 +792,7 @@ pg_table_bucket_checksums(PG_FUNCTION_ARGS)
         bool        nulls[3] = {false, false, false};
 
         values[0] = Int32GetDatum((int32) b);
-        if (state.algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(state.algo))
         {
             values[1] = Int64GetDatum((int64) state.acc32[b].count);
             values[2] = PointerGetDatum(checksum_bytea(logical_accum_finalize(&state.acc32[b]), 4));
@@ -907,7 +907,7 @@ block_range_visitor(Relation rel, Page page, BlockNumber blkno,
     BlockRangeState *state = (BlockRangeState *) arg;
     uint64      row_hash = logical_row_hash(&state->hasher, tuple, state->algo);
 
-    if (state->algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(state->algo))
         logical_accum_add(&state->acc32, (uint32) row_hash);
     else
         logical_accum_add64(&state->acc64, row_hash);
@@ -980,7 +980,7 @@ pg_table_block_checksums(PG_FUNCTION_ARGS)
                             snapshot, bstrategy, false,
                             block_range_visitor, &state);
 
-        if (state.algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(state.algo))
         {
             checksum = logical_accum_finalize(&state.acc32);
             count = state.acc32.count;
@@ -995,7 +995,7 @@ pg_table_block_checksums(PG_FUNCTION_ARGS)
         values[1] = Int64GetDatum((int64) end);
         values[2] = Int64GetDatum((int64) count);
         values[3] = PointerGetDatum(checksum_bytea(checksum,
-                                                   state.algo == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+                                                   checksum_algo_len(state.algo)));
 
         tuplestore_putvalues(store, resultdesc, values, nulls);
         pfree(DatumGetPointer(values[3]));

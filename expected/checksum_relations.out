@@ -312,6 +312,7 @@ DROP ACCESS METHOD dbrel_heap2;
 -- Argument checks.
 SELECT * FROM pg_database_logical_checksums(algorithm => 'md5');
 ERROR:  unknown checksum algorithm "md5"
+HINT:  Supported algorithms are fnv32, fnv64, crc32c and xxh3.
 SELECT * FROM pg_database_logical_checksums(include_system => NULL);
 ERROR:  only the relations argument can be NULL
 SELECT * FROM pg_database_physical_checksums(algorithm => NULL);

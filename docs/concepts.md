@@ -130,7 +130,7 @@ This is the simplest interface and the right default for most users.  A
 32-bit checksum is sufficient for detecting accidental data changes and
 corruption; it is also the format used by v1 CLI baselines.
 
-### Optional 64-bit API
+### Generic API: choose the algorithm
 
 The generic overloads take an algorithm name and return raw `bytea`:
 
@@ -141,18 +141,38 @@ SELECT pg_table_logical_checksum('orders'::regclass, 'fnv32');
 
 Choose this form when you need:
 
-- a wider 64-bit digest (`fnv64`);
+- a wider 64-bit digest (`fnv64` or `xxh3`);
+- a faster hash for large values and pages: `xxh3` (64-bit) or the
+  hardware-accelerated `crc32c` (32-bit);
 - an explicit algorithm in the call;
 - a cross-system format that is not tied to a SQL integer type;
 - a v2 CLI baseline.
 
-Digests are big-endian bytes: `fnv32` is 4 bytes and `fnv64` is 8 bytes.
+Digests are big-endian bytes: `fnv32` and `crc32c` are 4 bytes, `fnv64` and
+`xxh3` are 8 bytes.
 Table and database physical checksums always return 8 bytes because the
 relation/database identity is part of the value.
 
-The 32-bit and 64-bit paths share the same canonical value handling and
-aggregation rules.  A 64-bit digest is wider, but FNV-1a remains a
-non-cryptographic checksum.
+All algorithms share the same canonical value handling and aggregation rules;
+checksums of different algorithms are never comparable with each other.  A
+64-bit digest is wider, but none of the algorithms is cryptographic.
+
+| Algorithm | Width | Use it for |
+|---|---|---|
+| `fnv32` | 32 bits | the default API, v1 baselines, narrow rows |
+| `fnv64` | 64 bits | existing 64-bit baselines, narrow rows |
+| `crc32c` | 32 bits | 32-bit checksums of large values and of pages |
+| `xxh3` | 64 bits | 64-bit checksums of large values and of pages |
+
+FNV-1a hashes one byte at a time, so it is slow on long inputs but has no
+per-call overhead.  `crc32c` (hardware-accelerated where PostgreSQL uses CPU
+CRC instructions) and `xxh3` are much faster on long inputs and slightly
+slower on short ones.  Measured on one machine: physical table and index
+checksums, which hash whole pages, took a third to a seventh of the FNV time;
+logical checksums of a table of large (TOASTed) values took less than half;
+logical checksums of tables with narrow rows (integers, short text) took
+10-20% longer than with FNV.  Measure with your own data
+(`bench/run_bench.sh`) if speed matters.
 
 ### Converting a digest to `bigint`
 
@@ -160,7 +180,7 @@ non-cryptographic checksum.
 SELECT pg_checksum_bigint(pg_table_logical_checksum('orders'::regclass, 'fnv64'));
 ~~~
 
-For 4-byte `fnv32` digests, the one-argument form sign-extends.  Use
+For 4-byte (`fnv32`, `crc32c`) digests, the one-argument form sign-extends.  Use
 `pg_checksum_bigint(digest, true)` when you need the unsigned value (for
 example, to compare with a table logical checksum from the default API).
 
@@ -173,8 +193,8 @@ change, the rough chance of an unnoticed collision is about `2^-32`, or
 `2.3e-10`.  For a 64-bit checksum it is about `2^-64`, or `5.4e-20`.
 
 The final table/database checksum is still only as wide as the selected
-output.  These numbers are approximate and assume a random change; FNV-1a is
-not cryptographic, and an adversary who can recompute the checksum can
+output.  These numbers are approximate and assume a random change; none of
+the algorithms (FNV-1a, CRC-32C, XXH3) is cryptographic, and an adversary who can recompute the checksum can
 produce a collision.  The 32-bit default is adequate for ordinary change and
 corruption detection.
 
@@ -189,8 +209,7 @@ The count is important: a pure XOR would cancel duplicate rows.
 
 Parallel workers split the scan by blocks or relations and the leader combines
 their partial results.  With `pg_integrity_checksums.workers > 0`, serial and
-parallel executions produce identical checksums, for both 32-bit and 64-bit
-paths.
+parallel executions produce identical checksums, for every algorithm.
 
 ## Baseline formats
 
@@ -199,7 +218,7 @@ The CLI stores a snapshot in a versioned JSON baseline.
 | Format | Algorithm | Written by |
 |---|---|---|
 | `v1` | FNV-1a 32-bit | `capture` by default |
-| `v2` | explicit `hash` (`fnv32` or `fnv64`) | `capture --hash fnv64` |
+| `v2` | explicit `hash` (`fnv64`, `crc32c` or `xxh3`) | `capture --hash fnv64` (or `crc32c`, `xxh3`) |
 
 `verify` and `update` inherit the algorithm from the baseline they read.
 Older CLI releases reject v2 instead of comparing incompatible digests.
@@ -208,8 +227,8 @@ See [CLI baseline formats](cli.md#baseline-formats).
 
 ## What this is not
 
-- FNV-1a is **not cryptographic**.  It detects accidental changes, not a
-  malicious attacker who can recompute the hash.
+- FNV-1a, CRC-32C and XXH3 are **not cryptographic**.  They detect accidental
+  changes, not a malicious attacker who can recompute the hash.
 - Physical checksums are tied to one cluster and database.
 - Logical checksums describe content, not physical layout.
 - The extension does not replace backups, `pg_checksums` or `amcheck`.

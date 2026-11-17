@@ -26,9 +26,12 @@ const (
 	// FormatV2 adds an explicit checksum algorithm field.
 	FormatV2 = "pg_integrity_checksums.baseline/v2"
 
-	// HashFNV32 and HashFNV64 are the supported baseline algorithms.
-	HashFNV32 = "fnv32"
-	HashFNV64 = "fnv64"
+	// HashFNV32, HashFNV64, HashCRC32C and HashXXH3 are the supported
+	// baseline algorithms. fnv32 baselines are v1, the others v2.
+	HashFNV32  = "fnv32"
+	HashFNV64  = "fnv64"
+	HashCRC32C = "crc32c"
+	HashXXH3   = "xxh3"
 
 	// KindLogical is stable across physical reorganization and is the default.
 	KindLogical = "logical"
@@ -285,7 +288,7 @@ func (b *Baseline) Validate() error {
 	if b.Format == FormatV1 && b.Hash != "" {
 		return errors.New("v1 baseline must not contain a hash algorithm")
 	}
-	if b.Format == FormatV2 && b.Hash != HashFNV32 && b.Hash != HashFNV64 {
+	if b.Format == FormatV2 && !ValidHash(b.Hash) {
 		return fmt.Errorf("v2 baseline has invalid hash %q", b.Hash)
 	}
 	if b.Kind != KindLogical && b.Kind != KindPhysical {
@@ -514,4 +517,28 @@ func withoutSchemaHashes(objects []Object) []Object {
 		out[i].SchemaHash = ""
 	}
 	return out
+}
+
+// Hashes lists the supported checksum algorithms, in the order help texts
+// name them.
+var Hashes = []string{HashFNV32, HashFNV64, HashCRC32C, HashXXH3}
+
+// ValidHash reports whether h names a supported checksum algorithm.
+func ValidHash(h string) bool {
+	for _, known := range Hashes {
+		if h == known {
+			return true
+		}
+	}
+	return false
+}
+
+// HashMinExtension returns the oldest extension version whose SQL functions
+// accept the algorithm h, or "" when every version this CLI supports does.
+func HashMinExtension(h string) string {
+	switch h {
+	case HashCRC32C, HashXXH3:
+		return "2.9.0"
+	}
+	return ""
 }

@@ -1,3 +1,5 @@
 # Keep GitHub's language bar about the code, not test fixtures and docs.
 expected/** linguist-generated
 docs/** linguist-documentation
+# Vendored third-party code.
+third_party/** linguist-vendored

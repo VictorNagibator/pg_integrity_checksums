@@ -79,6 +79,26 @@ BEGIN
         RAISE EXCEPTION 'endian_mr cell checksum changed: %', int_value;
     END IF;
 
+    -- crc32c and xxh3: PostgreSQL keeps the CRC-32C state byte-swapped on
+    -- big-endian machines, and XXH3 reads its input as little-endian.  The
+    -- values must still be the ones computed on little-endian machines.
+    IF encode(pg_text_checksum('123456789', 0, 'crc32c'), 'hex') <> 'e3069283'
+       OR encode(pg_text_checksum('123456789', 0, 'xxh3'), 'hex') <> '72dcb18b67a17dff' THEN
+        RAISE EXCEPTION 'crc32c/xxh3 test vectors changed';
+    END IF;
+    IF encode(pg_table_logical_checksum('endian_t'::regclass, 'crc32c'), 'hex') <> 'f4ec318a'
+       OR encode(pg_tuple_logical_checksum('endian_t'::regclass, '(0,1)', 'crc32c'), 'hex') <> 'dc33bf52'
+       OR encode(pg_cell_checksum('endian_t'::regclass, '(0,1)', 1, 'crc32c'), 'hex') <> 'e42f6345'
+       OR encode(pg_table_logical_checksum('endian_mr'::regclass, 'crc32c'), 'hex') <> '14dc2aad' THEN
+        RAISE EXCEPTION 'crc32c logical checksums changed';
+    END IF;
+    IF encode(pg_table_logical_checksum('endian_t'::regclass, 'xxh3'), 'hex') <> '3a259bafbec01404'
+       OR encode(pg_tuple_logical_checksum('endian_t'::regclass, '(0,1)', 'xxh3'), 'hex') <> '20d952e886baadbd'
+       OR encode(pg_cell_checksum('endian_t'::regclass, '(0,1)', 1, 'xxh3'), 'hex') <> 'baffec06b08758c4'
+       OR encode(pg_table_logical_checksum('endian_mr'::regclass, 'xxh3'), 'hex') <> '143c942445f46530' THEN
+        RAISE EXCEPTION 'xxh3 logical checksums changed';
+    END IF;
+
     RAISE NOTICE 'big-endian logical checksums OK';
 END
 $$;

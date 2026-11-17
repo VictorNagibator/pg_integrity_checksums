@@ -51,6 +51,7 @@ REGRESS = \
 	checksum_errors \
 	checksum_fnv64 \
 	checksum_fnv64_extra \
+	checksum_algorithms \
 	checksum_page_status \
 	checksum_portability \
 	checksum_strict \
@@ -65,6 +66,9 @@ REGRESS = \
 	checksum_relations \
 	checksum_diff \
 	checksum_sequence
+
+# Vendored xxHash (XXH3), compiled into checksum_hash.c only.
+PG_CPPFLAGS = -I$(srcdir)/third_party
 
 REGRESS_OPTS = \
     --inputdir=./ \

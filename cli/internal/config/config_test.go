@@ -88,3 +88,16 @@ func TestBaseDir(t *testing.T) {
 		t.Fatalf("BaseDir empty: %q", got)
 	}
 }
+
+func TestProfileHash(t *testing.T) {
+	for _, hash := range []string{"fnv32", "fnv64", "crc32c", "xxh3"} {
+		path := writeConfig(t, "profiles:\n  p:\n    hash: "+hash+"\n")
+		if _, _, err := Load(path); err != nil {
+			t.Fatalf("hash %s: %v", hash, err)
+		}
+	}
+	path := writeConfig(t, "profiles:\n  p:\n    hash: md5\n")
+	if _, _, err := Load(path); err == nil || !strings.Contains(err.Error(), "hash must be one of") {
+		t.Fatalf("hash md5: expected error, got %v", err)
+	}
+}

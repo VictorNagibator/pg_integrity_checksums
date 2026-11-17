@@ -431,7 +431,7 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
 }
 
 /*
- * scan_relation_raw_pages_common - checksum a relation as a sequence of raw pages
+ * scan_relation_raw_pages - checksum a relation as a sequence of raw pages
  *
  * Used for TOAST relations, which are checksummed page by page rather than
  * through the visible-tuple path.  Pages are hashed through
@@ -439,10 +439,10 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
  * pd_checksum do not leak into the result.  Only the accumulator that
  * matches "algo" is used.
  */
-static void
-scan_relation_raw_pages_common(Relation rel, BlockNumber start,
-                               BlockNumber end, ChecksumAlgo algo,
-                               ChecksumAccum *acc32, ChecksumAccum64 *acc64)
+void
+scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
+                        ChecksumAlgo algo, ChecksumAccum *acc32,
+                        ChecksumAccum64 *acc64)
 {
     BlockNumber blkno;
     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
@@ -464,7 +464,7 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
         page_hash = hash_bytes_algo(0, masked.data, BLCKSZ, algo);
         page_hash = combine_hash(page_hash, blkno, algo);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(algo))
             checksum_accum_add(acc32, (uint32) page_hash);
         else
             checksum_accum64_add(acc64, page_hash);
@@ -474,26 +474,4 @@ scan_relation_raw_pages_common(Relation rel, BlockNumber start,
     }
 
     FreeAccessStrategy(bstrategy);
-}
-
-/*
- * scan_relation_raw_pages - 32-bit raw-page checksum of a block range
- */
-void
-scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
-                        ChecksumAccum *acc)
-{
-    scan_relation_raw_pages_common(rel, start, end, CHECKSUM_ALGO_FNV32, acc,
-                                   NULL);
-}
-
-/*
- * scan_relation_raw_pages64 - 64-bit raw-page checksum of a block range
- */
-void
-scan_relation_raw_pages64(Relation rel, BlockNumber start, BlockNumber end,
-                          ChecksumAccum64 *acc)
-{
-    scan_relation_raw_pages_common(rel, start, end, CHECKSUM_ALGO_FNV64, NULL,
-                                   acc);
 }

@@ -77,7 +77,8 @@ go build -o pg_integrity_checksums ./cmd/pg_integrity_checksums
 ## Quick start
 
 The default 32-bit baseline works with any supported extension version; the
-optional `fnv64` format requires extension 2.2 or newer.
+optional `fnv64` format requires extension 2.2 or newer, `crc32c` and `xxh3`
+require 2.9 or newer.
 
 ~~~bash
 # Capture a logical baseline (32-bit v1 by default)
@@ -92,7 +93,8 @@ pg_integrity_checksums verify \
   --baseline baseline.json
 ~~~
 
-Add `--hash fnv64` to `capture` to create a 64-bit v2 baseline.  A clean verify
+Add `--hash fnv64` (or `xxh3`, `crc32c`) to `capture` to create a v2
+baseline.  A clean verify
 prints `no changes` and exits `0`.  See [Getting started](getting-started.md)
 for the extension side and the [command reference](#commands) below for every
 flag.
@@ -101,7 +103,7 @@ flag.
 
 The CLI is currently **0.6.0**.  It is versioned separately from the
 extension.  It writes **v1** (FNV-1a 32-bit) by default and **v2** with
-`capture --hash fnv64`.
+`capture --hash fnv64`, `crc32c` or `xxh3`.
 
 ## Commands
 
@@ -203,7 +205,7 @@ Options:
 | `--application-name` | | Value for `pg_stat_activity.application_name` |
 | `--output` | `baseline.json` | Output file; `-` means stdout; `.gz` is compressed |
 | `--kind` | `logical` | `logical` or `physical` |
-| `--hash` | `fnv32` | `fnv32` (v1) or `fnv64` (v2) |
+| `--hash` | `fnv32` | `fnv32` (v1), or `fnv64`, `crc32c`, `xxh3` (v2) |
 | `--schema` | all non-system | Schemas to include; globs allowed |
 | `--exclude-schema` | | Schemas to exclude; globs allowed |
 | `--table` | all | `schema.table` or table glob to include |
@@ -225,8 +227,11 @@ that did not ask for sequences explicitly (with `--no-sequences=false` or
 `include_sequences: true` in the profile) warns and writes a baseline
 without them (`include_sequences: false`).
 
-`--hash fnv64` writes a **v2** baseline.  The default `--hash fnv32` keeps
-writing the historical **v1** format.  `verify` and `update` inherit the
+`--hash fnv64`, `crc32c` or `xxh3` writes a **v2** baseline.  The default
+`--hash fnv32` keeps writing the historical **v1** format.  `crc32c` and
+`xxh3` need extension 2.9 or later; `capture` fails before the scan on an
+older extension.  For choosing one see
+[Which API should I use?](concepts.md#generic-api-choose-the-algorithm).  `verify` and `update` inherit the
 hash algorithm from the baseline they read; there is no separate verify flag.
 
 ### `verify`
@@ -510,9 +515,10 @@ pg_integrity_checksums.baseline/v2
 }
 ```
 
-The supported values are `fnv32` and `fnv64`.  The CLI writes `fnv64` v2
-baselines when `capture --hash fnv64` is used.  Older CLI releases reject v2
-instead of silently comparing incompatible digests.  The current CLI reads
+The supported values are `fnv32`, `fnv64`, `crc32c` and `xxh3`.  The CLI
+writes a v2 baseline when `capture --hash` names anything but `fnv32`.  Older
+CLI releases reject v2 instead of silently comparing incompatible digests;
+releases before 0.7.0 also reject v2 baselines with `crc32c` or `xxh3`.  The current CLI reads
 both v1 and v2 baselines.
 
 Rules:

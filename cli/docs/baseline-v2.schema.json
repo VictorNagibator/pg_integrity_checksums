@@ -73,9 +73,12 @@
       }
     },
     "hash": {
+      "description": "Checksum algorithm. crc32c and xxh3 need extension 2.9.0 or later.",
       "enum": [
         "fnv32",
-        "fnv64"
+        "fnv64",
+        "crc32c",
+        "xxh3"
       ]
     }
   },

@@ -112,7 +112,7 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	applicationName := fs.String("application-name", "", "application_name for pg_stat_activity")
 	output := fs.String("output", "baseline.json", "output file, or - for stdout")
 	kindValue := fs.String("kind", baseline.KindLogical, "logical or physical")
-	hashValue := fs.String("hash", baseline.HashFNV32, "fnv32 or fnv64")
+	hashValue := fs.String("hash", baseline.HashFNV32, "fnv32 (v1 baseline), fnv64, crc32c or xxh3 (v2)")
 	var schemas, excludeSchemas, tables, excludeTables stringList
 	fs.Var(&schemas, "schema", "include schema (repeatable or comma-separated; globs allowed)")
 	fs.Var(&excludeSchemas, "exclude-schema", "exclude schema (repeatable; globs allowed)")
@@ -205,9 +205,10 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if err != nil {
 		return commandError(stderr, err)
 	}
+	// fnv32 keeps writing v1 baselines; every other algorithm needs v2.
 	baselineHash := ""
-	if hash == baseline.HashFNV64 {
-		baselineHash = baseline.HashFNV64
+	if hash != baseline.HashFNV32 {
+		baselineHash = hash
 	}
 	if *workers < 0 {
 		return commandError(stderr, errors.New("--workers must be >= 0"))

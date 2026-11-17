@@ -151,11 +151,19 @@ func TestShowHelp(t *testing.T) {
 }
 
 func TestParseHash(t *testing.T) {
-	if got, err := parseHash("fnv64"); err != nil || got != baseline.HashFNV64 {
-		t.Fatalf("parseHash: %q %v", got, err)
+	for _, value := range []string{"fnv32", "fnv64", "crc32c", "xxh3"} {
+		if got, err := parseHash(value); err != nil || got != value {
+			t.Fatalf("parseHash(%q): %q %v", value, got, err)
+		}
 	}
-	if _, err := parseHash("sha256"); err == nil {
-		t.Fatal("expected invalid hash error")
+	for _, value := range []string{"sha256", "XXH3", "crc32", ""} {
+		_, err := parseHash(value)
+		if err == nil {
+			t.Fatalf("parseHash(%q): expected invalid hash error", value)
+		}
+		if !strings.Contains(err.Error(), "fnv32, fnv64, crc32c, xxh3") {
+			t.Fatalf("parseHash(%q) error does not list the algorithms: %v", value, err)
+		}
 	}
 }
 

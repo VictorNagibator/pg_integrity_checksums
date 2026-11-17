@@ -2,6 +2,22 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Feature: the generic (algorithm) functions accept two more algorithms:
+      crc32c, a 4-byte CRC-32C computed with PostgreSQL's hardware-
+      accelerated implementation, and xxh3, an 8-byte XXH3-64 from the
+      vendored xxHash 0.8.3 (third_party/xxhash, BSD-2-Clause).  They
+      replace FNV-1a wherever bytes are hashed; the aggregation of rows,
+      pages and relations is the same as for fnv32 (crc32c) and fnv64
+      (xxh3).  Logical crc32c and xxh3 checksums are portable across
+      platforms and clusters like the FNV ones.  For crc32c the seed of
+      pg_data_checksum() and pg_text_checksum() is a previous CRC to
+      continue.  Every level supports them: data, text, cell, tuple, table,
+      index, sequence, database, the per-relation database functions and
+      the bucket, row and block range functions.  An unknown algorithm name
+      gets a hint listing the supported ones.  Only the function comments change in
+      SQL: run ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0'.
+      fnv32 and fnv64 values do not change.
+
     - Feature: pg_table_bucket_checksums() uses parallel workers when
       pg_integrity_checksums.workers is above zero.  Chunks of heap blocks
       are handed out like in a table checksum; each participant keeps its

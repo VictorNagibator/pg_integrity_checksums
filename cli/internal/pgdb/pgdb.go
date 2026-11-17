@@ -149,7 +149,7 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	if opts.Kind != baseline.KindLogical && opts.Kind != baseline.KindPhysical {
 		return nil, fmt.Errorf("invalid kind %q", opts.Kind)
 	}
-	if opts.Hash != "" && opts.Hash != baseline.HashFNV32 && opts.Hash != baseline.HashFNV64 {
+	if opts.Hash != "" && !baseline.ValidHash(opts.Hash) {
 		return nil, fmt.Errorf("invalid hash %q", opts.Hash)
 	}
 	// Sequences have a logical checksum only.
@@ -208,6 +208,10 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	extVersion, postgresVersion, database, err := metadata(ctx, tx)
 	if err != nil {
 		return nil, err
+	}
+	if min := baseline.HashMinExtension(opts.Hash); min != "" && versionLess(extVersion, min) {
+		return nil, fmt.Errorf("hash %s needs extension %s %s or later, the database has %s (run ALTER EXTENSION %s UPDATE)",
+			opts.Hash, extensionName, min, extVersion, extensionName)
 	}
 
 	var systemIdentifier string
@@ -993,4 +997,33 @@ func checksumObject(ctx context.Context, tx *sql.Tx, extSchema string, c Candida
 		return "", "checksum function returned NULL", nil
 	}
 	return checksum.String, "", nil
+}
+
+// versionLess reports whether extension version a is older than b. Versions
+// are dot-separated numbers; a missing component counts as 0 and a
+// non-numeric one stops the comparison (treated as equal from there on).
+func versionLess(a, b string) bool {
+	as := strings.Split(a, ".")
+	bs := strings.Split(b, ".")
+	for i := 0; i < len(as) || i < len(bs); i++ {
+		var x, y int
+		if i < len(as) {
+			n, err := strconv.Atoi(as[i])
+			if err != nil {
+				return false
+			}
+			x = n
+		}
+		if i < len(bs) {
+			n, err := strconv.Atoi(bs[i])
+			if err != nil {
+				return false
+			}
+			y = n
+		}
+		if x != y {
+			return x < y
+		}
+	}
+	return false
 }

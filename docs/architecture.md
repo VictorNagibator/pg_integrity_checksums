@@ -20,7 +20,11 @@ The extension exposes six levels of checksums, plus sequences:
 
 Page checksums are PostgreSQL's built-in checksum and do not use the
 extension's FNV paths.  The other levels use FNV-1a 32-bit by default and can
-select FNV-1a 64-bit through the generic overloads.
+select FNV-1a 64-bit, CRC-32C or XXH3 through the generic overloads.  The
+algorithm (`ChecksumAlgo`) is only used where bytes are hashed
+(`hash_bytes_algo()`, `combine_hash()`); scans and aggregation only look at
+its width (`checksum_algo_is32()`), so a new algorithm of an existing width
+needs no change outside the hash primitives.
 
 ## Execution model
 
@@ -210,7 +214,7 @@ The implementation is split into a small set of translation units:
 | File | Responsibility |
 |---|---|
 | `pg_integrity_checksums.c` | module entry point, GUCs and shared worker/snapshot helpers |
-| `checksum_hash.c` | SQL hash entry points and accumulator finalizers; the FNV-1a and combination primitives are inline functions in `checksum_internal.h` |
+| `checksum_hash.c` | SQL hash entry points and accumulator finalizers; the FNV-1a, CRC-32C and combination primitives are inline functions in `checksum_internal.h`; XXH3 is compiled here from the vendored `third_party/xxhash/xxhash.h` |
 | `checksum_types.c` | canonical encoding for scalar, array, composite, range and multirange values |
 | `checksum_validation.c` | relation, page, line-pointer and tuple validation |
 | `checksum_page.c` | page checksum verification and canonical cell checksums |

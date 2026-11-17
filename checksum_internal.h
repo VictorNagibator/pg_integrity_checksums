@@ -18,6 +18,8 @@
 #include "executor/tuptable.h"
 #include "nodes/execnodes.h"
 #include "port/atomics.h"
+#include "port/pg_bswap.h"
+#include "port/pg_crc32c.h"
 #include "storage/bufmgr.h"
 #include "storage/dsm.h"
 #include "storage/shm_toc.h"
@@ -44,14 +46,56 @@ extern bool pg_integrity_checksums_strict;
 /*
  * ChecksumAlgo - hash algorithm selected by the SQL "algo" argument
  *
+ * The algorithm hashes bytes: values, tuples, pages, and the order-dependent
+ * combination of a value's parts.  The order-independent aggregation of rows
+ * or pages and the final mixing steps only depend on the digest width, so
+ * they are shared by every algorithm of the same width (see
+ * checksum_algo_is32()).
+ *
  * The numeric values are part of the shared-memory state layout only; they
  * are never exposed in SQL.
  */
 typedef enum ChecksumAlgo
 {
     CHECKSUM_ALGO_FNV32 = 0,
-    CHECKSUM_ALGO_FNV64 = 1
+    CHECKSUM_ALGO_FNV64 = 1,
+    CHECKSUM_ALGO_CRC32C = 2,
+    CHECKSUM_ALGO_XXH3 = 3
 } ChecksumAlgo;
+
+/* Number of ChecksumAlgo values (array sizes). */
+#define CHECKSUM_ALGO_COUNT 4
+
+/*
+ * checksum_algo_is32 - does the algorithm produce a 32-bit digest?
+ *
+ * 32-bit algorithms share the 32-bit aggregation (ChecksumAccum,
+ * ChecksumLogicalAccum), 64-bit ones the 64-bit variants.
+ */
+static inline bool
+checksum_algo_is32(ChecksumAlgo algo)
+{
+    return algo == CHECKSUM_ALGO_FNV32 || algo == CHECKSUM_ALGO_CRC32C;
+}
+
+/* checksum_algo_len - digest length in bytes (the bytea the SQL API returns) */
+static inline int
+checksum_algo_len(ChecksumAlgo algo)
+{
+    return checksum_algo_is32(algo) ? 4 : 8;
+}
+
+/*
+ * checksum_algo_basis - the starting state of an order-dependent hash
+ *
+ * The FNV offset basis of the algorithm's width.  For the other algorithms
+ * it is just a fixed seed.
+ */
+static inline uint64
+checksum_algo_basis(ChecksumAlgo algo)
+{
+    return checksum_algo_is32(algo) ? FNV_BASIS_32 : FNV_BASIS_64;
+}
 
 /*
  * ChecksumAccum - order-independent aggregate of 32-bit physical hashes
@@ -300,7 +344,7 @@ extern void pg_integrity_checksums_parallel_scan_database(bool physical,
                                                            uint32 *skipped);
 
 /*-------------------------------------------------------------------------
- * FNV-1a hashing and hash combination
+ * Byte hashing (FNV-1a, CRC-32C, XXH3) and hash combination
  *
  * These primitives run several times per column of every row, so they are
  * defined here as static inline functions: calls across translation units
@@ -383,16 +427,56 @@ pg_checksum_data_custom(const char *data, uint32 len, uint32 init_value)
 }
 
 /*
- * hash_bytes_algo - FNV-1a over a byte range with the selected algorithm
+ * crc32c_update - continue a CRC-32C (Castagnoli) over a byte range
  *
- * "seed" is the running hash (or 0 to start from the offset basis).  For
- * fnv32 the result is zero-extended.
+ * "crc" is a finished CRC-32C value: 0 starts a new one, and passing the
+ * result of a previous call continues it, so chained calls give the CRC of
+ * the concatenation (the convention of zlib's crc32() and Go's
+ * crc32.Update()).  PostgreSQL's hardware-accelerated implementation keeps
+ * its intermediate state byte-swapped on big-endian machines (only the
+ * slicing-by-8 fallback runs there); FIN_CRC32C() undoes that, and so must
+ * the conversion back to a state.
+ */
+static inline uint32
+crc32c_update(uint32 crc, const void *data, size_t len)
+{
+    pg_crc32c   state;
+
+#ifdef WORDS_BIGENDIAN
+    state = pg_bswap32(crc ^ 0xFFFFFFFF);
+#else
+    state = crc ^ 0xFFFFFFFF;
+#endif
+    COMP_CRC32C(state, data, len);
+    FIN_CRC32C(state);
+
+    return state;
+}
+
+/* xxh3_64_hash - XXH3 64-bit with a seed; see checksum_hash.c */
+extern uint64 xxh3_64_hash(const void *data, size_t len, uint64 seed);
+
+/*
+ * hash_bytes_algo - hash a byte range with the selected algorithm
+ *
+ * "seed" is the running hash, or 0 to start a new one: the FNV offset basis,
+ * the standard CRC-32C initial value, XXH3's default seed.  32-bit results
+ * are zero-extended.
  */
 static inline uint64
 hash_bytes_algo(uint64 seed, const void *data, size_t len, ChecksumAlgo algo)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return fnv1a_32_hash(data, len, (uint32) seed);
+    switch (algo)
+    {
+        case CHECKSUM_ALGO_FNV32:
+            return fnv1a_32_hash(data, len, (uint32) seed);
+        case CHECKSUM_ALGO_CRC32C:
+            return crc32c_update((uint32) seed, data, len);
+        case CHECKSUM_ALGO_XXH3:
+            return xxh3_64_hash(data, len, seed);
+        case CHECKSUM_ALGO_FNV64:
+            break;
+    }
 
     return fnv1a_64_hash(data, len, seed);
 }
@@ -444,15 +528,34 @@ combine_checksums_64(uint64 current, uint64 new_val)
 /*
  * combine_hash - order-dependent combination with the selected algorithm
  *
- * For fnv32 both operands are truncated to 32 bits.
+ * For 32-bit algorithms both operands are truncated to 32 bits.  The FNV
+ * algorithms keep their historical byte orders (see combine_checksums()); the
+ * others hash new_val as little-endian bytes, 4 or 8 of them, continuing
+ * from "current".
  */
 static inline uint64
 combine_hash(uint64 current, uint64 new_val, ChecksumAlgo algo)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
-        return combine_checksums((uint32) current, (uint32) new_val);
+    unsigned char bytes[8];
 
-    return combine_checksums_64(current, new_val);
+    switch (algo)
+    {
+        case CHECKSUM_ALGO_FNV32:
+            return combine_checksums((uint32) current, (uint32) new_val);
+        case CHECKSUM_ALGO_FNV64:
+            return combine_checksums_64(current, new_val);
+        case CHECKSUM_ALGO_CRC32C:
+        case CHECKSUM_ALGO_XXH3:
+            break;
+    }
+
+    for (int i = 0; i < 8; i++)
+        bytes[i] = (unsigned char) (new_val >> (i * 8));
+
+    if (algo == CHECKSUM_ALGO_CRC32C)
+        return crc32c_update((uint32) current, bytes, 4);
+
+    return xxh3_64_hash(bytes, 8, current);
 }
 
 /*
@@ -535,18 +638,14 @@ extern uint32 logical_accum_finalize(ChecksumLogicalAccum *acc);
 extern uint64 logical_accum_finalize64(ChecksumLogicalAccum64 *acc);
 
 /* Index checksum implementations shared with the parallel scan. */
-extern uint32 pg_index_physical_checksum_calc(Oid indexoid,
+extern uint64 pg_index_physical_checksum_calc(Oid indexoid,
                                               bool check_privileges,
+                                              ChecksumAlgo algo,
                                               bool *is_null);
-extern uint64 pg_index_physical_checksum_calc64(Oid indexoid,
-                                                bool check_privileges,
-                                                bool *is_null);
-extern uint32 pg_index_logical_checksum_calc(Oid indexoid,
+extern uint64 pg_index_logical_checksum_calc(Oid indexoid,
                                              bool check_privileges,
+                                             ChecksumAlgo algo,
                                              bool *is_null);
-extern uint64 pg_index_logical_checksum_calc64(Oid indexoid,
-                                               bool check_privileges,
-                                               bool *is_null);
 extern bool pg_index_definition_parallel_safe(Relation idxRel);
 extern bool pg_index_oid_definition_parallel_safe(Oid indexoid);
 extern bool pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
@@ -570,18 +669,18 @@ extern void compute_database_items(ChecksumRelationItem *items, uint32 start,
                                    uint32 *skipped);
 
 /* Table checksum implementations shared with the database scan. */
+/*
+ * These return the value of the generic (algo) SQL function, as an integer;
+ * 32-bit digests are zero-extended.
+ */
 extern uint64 pg_table_physical_checksum_calc(Oid reloid,
                                               bool include_header,
-                                              bool check_privileges);
-extern uint64 pg_table_physical_checksum_calc64(Oid reloid,
-                                                bool include_header,
-                                                bool check_privileges);
-extern int64 pg_table_logical_checksum_calc(Oid reloid,
-                                            bool check_privileges,
-                                            bool *is_null);
-extern uint64 pg_table_logical_checksum_calc64(Oid reloid,
-                                               bool check_privileges,
-                                               bool *is_null);
+                                              bool check_privileges,
+                                              ChecksumAlgo algo);
+extern uint64 pg_table_logical_checksum_calc(Oid reloid,
+                                             bool check_privileges,
+                                             ChecksumAlgo algo,
+                                             bool *is_null);
 
 /* Partition helpers shared by table and index checksums. */
 extern List *pg_integrity_checksums_leaf_indexes(Oid indexoid);
@@ -651,9 +750,9 @@ extern void pg_integrity_checksums_mask_page(Page page, char *dst,
                                              ChecksumPageKind kind,
                                              Oid relam);
 extern void scan_relation_raw_pages(Relation rel, BlockNumber start,
-                                     BlockNumber end, ChecksumAccum *acc);
-extern void scan_relation_raw_pages64(Relation rel, BlockNumber start,
-                                       BlockNumber end, ChecksumAccum64 *acc);
+                                     BlockNumber end, ChecksumAlgo algo,
+                                     ChecksumAccum *acc32,
+                                     ChecksumAccum64 *acc64);
 
 /*
  * Tuple lookup by TID for the tuple and cell functions.  The buffer must be
@@ -721,33 +820,31 @@ extern void scan_visible_tuples(Relation rel, BlockNumber start,
                                 BufferAccessStrategy bstrategy,
                                 bool needs_lock,
                                 TupleVisitor visitor, void *arg);
+
+/*
+ * The block-range scans fold into the accumulator that matches the width of
+ * "algo" (acc32 for 32-bit algorithms, acc64 otherwise); the other one is
+ * not touched and may be NULL.
+ */
 extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
                                        BlockNumber end, bool include_header,
-                                       Snapshot snapshot, ChecksumAccum *acc,
+                                       Snapshot snapshot, ChecksumAlgo algo,
+                                       ChecksumAccum *acc32,
+                                       ChecksumAccum64 *acc64,
                                        BufferAccessStrategy bstrategy);
-extern void scan_table_blocks_physical64(Relation rel, BlockNumber start,
-                                         BlockNumber end, bool include_header,
-                                         Snapshot snapshot,
-                                         ChecksumAccum64 *acc,
-                                         BufferAccessStrategy bstrategy);
 extern void scan_table_blocks_logical(Relation rel, BlockNumber start,
                                       BlockNumber end, Snapshot snapshot,
-                                      ChecksumLogicalAccum *acc,
+                                      ChecksumAlgo algo,
+                                      ChecksumLogicalAccum *acc32,
+                                      ChecksumLogicalAccum64 *acc64,
                                       BufferAccessStrategy bstrategy,
                                       TupleDesc order_desc);
-extern void scan_table_blocks_logical64(Relation rel, BlockNumber start,
-                                        BlockNumber end, Snapshot snapshot,
-                                        ChecksumLogicalAccum64 *acc,
-                                        BufferAccessStrategy bstrategy,
-                                        TupleDesc order_desc);
 extern void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
                                        BlockNumber end, bool is_brin,
-                                       ChecksumAccum *acc,
+                                       ChecksumAlgo algo,
+                                       ChecksumAccum *acc32,
+                                       ChecksumAccum64 *acc64,
                                        BufferAccessStrategy bstrategy);
-extern void scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
-                                         BlockNumber end, bool is_brin,
-                                         ChecksumAccum64 *acc,
-                                         BufferAccessStrategy bstrategy);
 
 /* Canonical logical encoding. */
 extern void logical_type_cache_invalidate(Datum arg, int cacheid,

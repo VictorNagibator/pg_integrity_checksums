@@ -232,7 +232,7 @@ pg_sequence_logical_checksum_common(Oid seqoid, ChecksumAlgo algo,
     item = hash_bytes_algo(0, buf.data, buf.len, algo);
     pfree(buf.data);
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
     {
         ChecksumLogicalAccum acc = {0, 0};
 
@@ -288,6 +288,5 @@ pg_sequence_logical_checksum_algo(PG_FUNCTION_ARGS)
     if (is_null)
         PG_RETURN_NULL();
 
-    PG_RETURN_BYTEA_P(checksum_bytea(result,
-                                     algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(result, checksum_algo_len(algorithm)));
 }

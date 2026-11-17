@@ -114,28 +114,17 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                                                       &start, &end))
                 {
                     if (state->task_type == CHECKSUM_TASK_TABLE_PHYSICAL)
-                    {
-                        if (algo == CHECKSUM_ALGO_FNV64)
-                            scan_table_blocks_physical64(rel, start, end,
-                                                         state->include_header,
-                                                         snapshot,
-                                                         &accs->physical64,
-                                                         bstrategy);
-                        else
-                            scan_table_blocks_physical(rel, start, end,
-                                                       state->include_header,
-                                                       snapshot,
-                                                       &accs->physical32,
-                                                       bstrategy);
-                    }
-                    else if (algo == CHECKSUM_ALGO_FNV64)
-                        scan_table_blocks_logical64(rel, start, end, snapshot,
-                                                    &accs->logical64,
-                                                    bstrategy, NULL);
+                        scan_table_blocks_physical(rel, start, end,
+                                                   state->include_header,
+                                                   snapshot, algo,
+                                                   &accs->physical32,
+                                                   &accs->physical64,
+                                                   bstrategy);
                     else
                         scan_table_blocks_logical(rel, start, end, snapshot,
-                                                  &accs->logical32, bstrategy,
-                                                  NULL);
+                                                  algo, &accs->logical32,
+                                                  &accs->logical64,
+                                                  bstrategy, NULL);
                 }
 
                 relation_close(rel, AccessShareLock);
@@ -152,15 +141,9 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                                                       PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                       &start, &end))
                 {
-                    if (algo == CHECKSUM_ALGO_FNV64)
-                        scan_index_blocks_physical64(idxRel, start, end,
-                                                     is_brin,
-                                                     &accs->physical64,
-                                                     bstrategy);
-                    else
-                        scan_index_blocks_physical(idxRel, start, end, is_brin,
-                                                   &accs->physical32,
-                                                   bstrategy);
+                    scan_index_blocks_physical(idxRel, start, end, is_brin,
+                                               algo, &accs->physical32,
+                                               &accs->physical64, bstrategy);
                 }
 
                 index_close(idxRel, AccessShareLock);
@@ -205,7 +188,7 @@ accums_to_result(ChecksumTaskType task_type, ChecksumAlgo algo,
 {
     if (task_is_logical(task_type))
     {
-        if (algo == CHECKSUM_ALGO_FNV64)
+        if (!checksum_algo_is32(algo))
         {
             *partial = accs->logical64.sum;
             *count = accs->logical64.count;
@@ -216,7 +199,7 @@ accums_to_result(ChecksumTaskType task_type, ChecksumAlgo algo,
             *count = accs->logical32.count;
         }
     }
-    else if (algo == CHECKSUM_ALGO_FNV64)
+    else if (!checksum_algo_is32(algo))
     {
         *partial = accs->physical64.partial;
         *count = accs->physical64.count;
@@ -239,7 +222,7 @@ fold_result(ChecksumTaskType task_type, ChecksumAlgo algo, uint64 partial,
 {
     if (task_is_logical(task_type))
     {
-        if (algo == CHECKSUM_ALGO_FNV64)
+        if (!checksum_algo_is32(algo))
         {
             logical_acc64->sum += partial;
             logical_acc64->count += count;
@@ -250,7 +233,7 @@ fold_result(ChecksumTaskType task_type, ChecksumAlgo algo, uint64 partial,
             logical_acc->count += count;
         }
     }
-    else if (algo == CHECKSUM_ALGO_FNV64)
+    else if (!checksum_algo_is32(algo))
         checksum_accum64_merge(acc64, partial, count);
     else
         checksum_accum_merge(acc, partial, count);
@@ -377,7 +360,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     compute_database_items(items, start, end, physical,
                                            state->algo, &acc64,
                                            physical ? NULL : &lacc,
-                                           (!physical && state->algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                                           (!physical && !checksum_algo_is32(state->algo)) ? &lacc64 : NULL,
                                            &myresult->skipped);
 
                 if (pushed)
@@ -388,7 +371,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     myresult->partial = acc64.partial;
                     myresult->count = acc64.count;
                 }
-                else if (state->algo == CHECKSUM_ALGO_FNV64)
+                else if (!checksum_algo_is32(state->algo))
                 {
                     myresult->partial = lacc64.sum;
                     myresult->count = lacc64.count;
@@ -669,7 +652,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
                 if (physical)
                     checksum_accum64_merge(acc, results[i].partial,
                                            results[i].count);
-                else if (algo == CHECKSUM_ALGO_FNV64)
+                else if (!checksum_algo_is32(algo))
                 {
                     logical_acc64->sum += results[i].partial;
                     logical_acc64->count += results[i].count;
@@ -821,7 +804,7 @@ pg_integrity_checksums_parallel_scan_buckets(Oid reloid, uint32 nblocks,
             uint64      sum = pg_atomic_read_u64(&shared[2 * b]);
             uint64      count = pg_atomic_read_u64(&shared[2 * b + 1]);
 
-            if (algo == CHECKSUM_ALGO_FNV32)
+            if (checksum_algo_is32(algo))
             {
                 acc32[b].sum += sum;
                 acc32[b].count += count;

@@ -228,7 +228,7 @@ physical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
     if (tuple_checksum == 0)
         return;
 
-    if (state->algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(state->algo))
         checksum_accum_add(state->acc32, (uint32) tuple_checksum);
     else
         checksum_accum64_add(state->acc64, tuple_checksum);
@@ -240,28 +240,11 @@ physical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 void
 scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
                            bool include_header, Snapshot snapshot,
-                           ChecksumAccum *acc,
+                           ChecksumAlgo algo, ChecksumAccum *acc32,
+                           ChecksumAccum64 *acc64,
                            BufferAccessStrategy bstrategy)
 {
-    PhysicalVisitorState state = {include_header, CHECKSUM_ALGO_FNV32,
-                                  acc, NULL};
-
-    /* Reads xmax and the infomask, which concurrent backends change. */
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy, true,
-                        physical_tuple_visitor, &state);
-}
-
-/*
- * scan_table_blocks_physical64 - 64-bit physical checksum over heap blocks
- */
-void
-scan_table_blocks_physical64(Relation rel, BlockNumber start, BlockNumber end,
-                             bool include_header, Snapshot snapshot,
-                             ChecksumAccum64 *acc,
-                             BufferAccessStrategy bstrategy)
-{
-    PhysicalVisitorState state = {include_header, CHECKSUM_ALGO_FNV64,
-                                  NULL, acc};
+    PhysicalVisitorState state = {include_header, algo, acc32, acc64};
 
     /* Reads xmax and the infomask, which concurrent backends change. */
     scan_visible_tuples(rel, start, end, snapshot, bstrategy, true,
@@ -286,23 +269,22 @@ logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 
     tuple_checksum = logical_row_hash(&state->hasher, tuple, state->algo);
 
-    if (state->algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(state->algo))
         logical_accum_add(state->acc32, (uint32) tuple_checksum);
     else
         logical_accum_add64(state->acc64, tuple_checksum);
 }
 
 /*
- * scan_table_blocks_logical_common - logical checksum over heap blocks
+ * scan_table_blocks_logical - logical checksum over a range of heap blocks
  */
-static void
-scan_table_blocks_logical_common(Relation rel, BlockNumber start,
-                                 BlockNumber end, Snapshot snapshot,
-                                 ChecksumAlgo algo,
-                                 ChecksumLogicalAccum *acc32,
-                                 ChecksumLogicalAccum64 *acc64,
-                                 BufferAccessStrategy bstrategy,
-                                 TupleDesc order_desc)
+void
+scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
+                          Snapshot snapshot, ChecksumAlgo algo,
+                          ChecksumLogicalAccum *acc32,
+                          ChecksumLogicalAccum64 *acc64,
+                          BufferAccessStrategy bstrategy,
+                          TupleDesc order_desc)
 {
     LogicalVisitorState state;
 
@@ -315,32 +297,6 @@ scan_table_blocks_logical_common(Relation rel, BlockNumber start,
                         logical_tuple_visitor, &state);
 
     logical_row_hasher_free(&state.hasher);
-}
-
-/*
- * scan_table_blocks_logical - logical checksum over a range of heap blocks
- */
-void
-scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
-                          Snapshot snapshot, ChecksumLogicalAccum *acc,
-                          BufferAccessStrategy bstrategy, TupleDesc order_desc)
-{
-    scan_table_blocks_logical_common(rel, start, end, snapshot,
-                                     CHECKSUM_ALGO_FNV32, acc, NULL,
-                                     bstrategy, order_desc);
-}
-
-/*
- * scan_table_blocks_logical64 - 64-bit logical checksum over heap blocks
- */
-void
-scan_table_blocks_logical64(Relation rel, BlockNumber start, BlockNumber end,
-                            Snapshot snapshot, ChecksumLogicalAccum64 *acc,
-                            BufferAccessStrategy bstrategy, TupleDesc order_desc)
-{
-    scan_table_blocks_logical_common(rel, start, end, snapshot,
-                                     CHECKSUM_ALGO_FNV64, NULL, acc,
-                                     bstrategy, order_desc);
 }
 
 /*-------------------------------------------------------------------------
@@ -421,16 +377,16 @@ index_page_hash(const char *masked, BlockNumber blkno, bool is_brin,
 }
 
 /*
- * scan_index_blocks_physical_common - physical checksum over index blocks
+ * scan_index_blocks_physical - physical checksum over a range of index blocks
  *
  * Only the accumulator that matches "algo" is used.
  */
-static void
-scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
-                                  BlockNumber end, bool is_brin,
-                                  ChecksumAlgo algo, ChecksumAccum *acc32,
-                                  ChecksumAccum64 *acc64,
-                                  BufferAccessStrategy bstrategy)
+void
+scan_index_blocks_physical(Relation idxRel, BlockNumber start,
+                           BlockNumber end, bool is_brin,
+                           ChecksumAlgo algo, ChecksumAccum *acc32,
+                           ChecksumAccum64 *acc64,
+                           BufferAccessStrategy bstrategy)
 {
     BlockNumber blkno;
     Oid         relam = idxRel->rd_rel->relam;
@@ -450,7 +406,7 @@ scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
 
         page_hash = index_page_hash(masked.data, blkno, is_brin, algo);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(algo))
             checksum_accum_add(acc32, (uint32) page_hash);
         else
             checksum_accum64_add(acc64, page_hash);
@@ -458,31 +414,4 @@ scan_index_blocks_physical_common(Relation idxRel, BlockNumber start,
         if ((blkno & (SCAN_INTERRUPT_INTERVAL - 1)) == 0)
             CHECK_FOR_INTERRUPTS();
     }
-}
-
-/*
- * scan_index_blocks_physical - physical checksum over a range of index blocks
- */
-void
-scan_index_blocks_physical(Relation idxRel, BlockNumber start, BlockNumber end,
-                           bool is_brin, ChecksumAccum *acc,
-                           BufferAccessStrategy bstrategy)
-{
-    scan_index_blocks_physical_common(idxRel, start, end, is_brin,
-                                      CHECKSUM_ALGO_FNV32, acc, NULL,
-                                      bstrategy);
-}
-
-/*
- * scan_index_blocks_physical64 - 64-bit physical checksum over index blocks
- */
-void
-scan_index_blocks_physical64(Relation idxRel, BlockNumber start,
-                             BlockNumber end, bool is_brin,
-                             ChecksumAccum64 *acc,
-                             BufferAccessStrategy bstrategy)
-{
-    scan_index_blocks_physical_common(idxRel, start, end, is_brin,
-                                      CHECKSUM_ALGO_FNV64, NULL, acc,
-                                      bstrategy);
 }

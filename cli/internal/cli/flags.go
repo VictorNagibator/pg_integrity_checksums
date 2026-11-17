@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
 )
 
 // stringList implements flag.Value for repeatable filters such as
@@ -37,12 +39,10 @@ func parseKind(value string) (string, error) {
 }
 
 func parseHash(value string) (string, error) {
-	switch value {
-	case "fnv32", "fnv64":
+	if baseline.ValidHash(value) {
 		return value, nil
-	default:
-		return "", fmt.Errorf("invalid --hash %q (want fnv32 or fnv64)", value)
 	}
+	return "", fmt.Errorf("invalid --hash %q (want %s)", value, strings.Join(baseline.Hashes, ", "))
 }
 
 func parseFormat(value string) (string, error) {

@@ -49,7 +49,7 @@ static inline void
 physical_accum_add(ChecksumAlgo algo, ChecksumAccum *acc32,
                    ChecksumAccum64 *acc64, uint64 h)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         checksum_accum_add(acc32, (uint32) h);
     else
         checksum_accum64_add(acc64, h);
@@ -59,7 +59,7 @@ static inline uint64
 physical_accum_finalize(ChecksumAlgo algo, ChecksumAccum *acc32,
                         ChecksumAccum64 *acc64)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         return checksum_accum_finalize(acc32);
 
     return checksum_accum64_finalize(acc64);
@@ -69,7 +69,7 @@ static inline void
 logical_accum_add_algo(ChecksumAlgo algo, ChecksumLogicalAccum *acc32,
                        ChecksumLogicalAccum64 *acc64, uint64 h)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         logical_accum_add(acc32, (uint32) h);
     else
         logical_accum_add64(acc64, h);
@@ -126,7 +126,9 @@ pg_index_physical_checksum(PG_FUNCTION_ARGS)
 
     indexoid = PG_GETARG_OID(0);
 
-    index_checksum = pg_index_physical_checksum_calc(indexoid, true, &is_null);
+    index_checksum = (uint32) pg_index_physical_checksum_calc(indexoid, true,
+                                                              CHECKSUM_ALGO_FNV32,
+                                                              &is_null);
 
     if (is_null)
         PG_RETURN_NULL();
@@ -156,7 +158,7 @@ pg_index_physical_checksum_algo(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     PG_RETURN_BYTEA_P(checksum_bytea(result,
-                                     algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+                                     checksum_algo_len(algorithm)));
 }
 
 /*
@@ -262,12 +264,8 @@ pg_index_physical_checksum_common(Oid indexoid, bool check_privileges,
     {
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
-            scan_index_blocks_physical(idxRel, 0, nblocks, is_brin, &acc32,
-                                       bstrategy);
-        else
-            scan_index_blocks_physical64(idxRel, 0, nblocks, is_brin, &acc64,
-                                         bstrategy);
+        scan_index_blocks_physical(idxRel, 0, nblocks, is_brin, algo,
+                                   &acc32, &acc64, bstrategy);
         FreeAccessStrategy(bstrategy);
     }
     else
@@ -308,27 +306,14 @@ pg_index_physical_checksum_common(Oid indexoid, bool check_privileges,
 }
 
 /*
- * pg_index_physical_checksum_calc - 32-bit physical index checksum
- */
-uint32
-pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
-                                bool *is_null)
-{
-    return (uint32) pg_index_physical_checksum_common(indexoid,
-                                                      check_privileges,
-                                                      CHECKSUM_ALGO_FNV32,
-                                                      is_null);
-}
-
-/*
- * pg_index_physical_checksum_calc64 - 64-bit physical index checksum
+ * pg_index_physical_checksum_calc - physical index checksum for one algo
  */
 uint64
-pg_index_physical_checksum_calc64(Oid indexoid, bool check_privileges,
-                                  bool *is_null)
+pg_index_physical_checksum_calc(Oid indexoid, bool check_privileges,
+                                ChecksumAlgo algo, bool *is_null)
 {
     return pg_index_physical_checksum_common(indexoid, check_privileges,
-                                             CHECKSUM_ALGO_FNV64, is_null);
+                                             algo, is_null);
 }
 
 /*-------------------------------------------------------------------------
@@ -353,7 +338,9 @@ pg_index_logical_checksum(PG_FUNCTION_ARGS)
 
     indexoid = PG_GETARG_OID(0);
 
-    index_checksum = pg_index_logical_checksum_calc(indexoid, true, &is_null);
+    index_checksum = (uint32) pg_index_logical_checksum_calc(indexoid, true,
+                                                             CHECKSUM_ALGO_FNV32,
+                                                             &is_null);
 
     if (is_null)
         PG_RETURN_NULL();
@@ -383,7 +370,7 @@ pg_index_logical_checksum_algo(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     PG_RETURN_BYTEA_P(checksum_bytea(result,
-                                     algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+                                     checksum_algo_len(algorithm)));
 }
 
 /*
@@ -614,7 +601,7 @@ pg_index_logical_row_hash(IndexLogicalScanState *scanstate, HeapTuple tuple,
     FormIndexDatum(scanstate->indexInfo, scanstate->slot, scanstate->estate,
                    scanstate->values, scanstate->nulls);
 
-    h = (algo == CHECKSUM_ALGO_FNV32) ? FNV_BASIS_32 : FNV_BASIS_64;
+    h = checksum_algo_is32(algo) ? FNV_BASIS_32 : FNV_BASIS_64;
 
     /*
      * Hash in the per-tuple memory context, which the next row resets, so
@@ -823,32 +810,19 @@ pg_index_logical_checksum_common(Oid indexoid, bool check_privileges,
     if (*is_null)
         return 0;
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         return logical_accum_finalize(&acc32);
 
     return logical_accum_finalize64(&acc64);
 }
 
 /*
- * pg_index_logical_checksum_calc - 32-bit logical index checksum
- */
-uint32
-pg_index_logical_checksum_calc(Oid indexoid, bool check_privileges,
-                               bool *is_null)
-{
-    return (uint32) pg_index_logical_checksum_common(indexoid,
-                                                     check_privileges,
-                                                     CHECKSUM_ALGO_FNV32,
-                                                     is_null);
-}
-
-/*
- * pg_index_logical_checksum_calc64 - 64-bit logical index checksum
+ * pg_index_logical_checksum_calc - logical index checksum for one algo
  */
 uint64
-pg_index_logical_checksum_calc64(Oid indexoid, bool check_privileges,
-                                 bool *is_null)
+pg_index_logical_checksum_calc(Oid indexoid, bool check_privileges,
+                               ChecksumAlgo algo, bool *is_null)
 {
-    return pg_index_logical_checksum_common(indexoid, check_privileges,
-                                            CHECKSUM_ALGO_FNV64, is_null);
+    return pg_index_logical_checksum_common(indexoid, check_privileges, algo,
+                                            is_null);
 }

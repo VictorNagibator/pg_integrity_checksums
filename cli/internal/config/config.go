@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
 )
 
 // DefaultFileNames are searched in the current directory when no explicit
@@ -112,8 +114,8 @@ func validate(name string, p Profile) error {
 	if p.Workers != nil && *p.Workers < 0 {
 		return fmt.Errorf("profile %q: workers must be >= 0", name)
 	}
-	if p.Hash != "" && p.Hash != "fnv32" && p.Hash != "fnv64" {
-		return fmt.Errorf("profile %q: hash must be fnv32 or fnv64", name)
+	if p.Hash != "" && !baseline.ValidHash(p.Hash) {
+		return fmt.Errorf("profile %q: hash must be one of %s", name, strings.Join(baseline.Hashes, ", "))
 	}
 	return nil
 }

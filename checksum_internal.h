@@ -117,7 +117,27 @@ typedef struct ChecksumRelationItem
      * an index that the head of its group (the table) covers.
      */
     uint32      group_size;
+
+    /*
+     * Outcome for this relation, filled in by whichever participant computes
+     * it (each item is computed by exactly one participant, so parallel
+     * workers write their items in shared memory without locking).  The
+     * per-relation set-returning functions report these; the aggregate
+     * functions ignore them.  checksum is the relation's own checksum, the
+     * value pg_table_* / pg_index_* return for it, before the database
+     * aggregate folds in the relation identity.
+     */
+    uint8       status;         /* CHECKSUM_REL_* */
+    int         sqlerrcode;     /* CHECKSUM_REL_ERROR: the caught error */
+    uint64      checksum;       /* CHECKSUM_REL_OK: the relation checksum */
 } ChecksumRelationItem;
+
+/* ChecksumRelationItem.status */
+#define CHECKSUM_REL_PENDING        0   /* not computed (dropped meanwhile) */
+#define CHECKSUM_REL_OK             1
+#define CHECKSUM_REL_INVALID_INDEX  2   /* skipped: invalid index */
+#define CHECKSUM_REL_UNSUPPORTED    3   /* skipped: no checksum in this mode */
+#define CHECKSUM_REL_ERROR          4   /* skipped: error (non-strict mode) */
 
 /* Opaque per-type cache entry; see checksum_types.c. */
 typedef struct LogicalTypeInfo LogicalTypeInfo;

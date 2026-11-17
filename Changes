@@ -1,6 +1,21 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.8.0   Unreleased
+
+    - New: pg_database_logical_checksums() and
+      pg_database_physical_checksums() return the checksum of every relation
+      of a database scan, one row per relation (relid, schema_name,
+      rel_name, relkind, checksum, status, reason), computed in one call with
+      one snapshot.  Each checksum equals what the per-relation function with
+      the same algorithm returns, so a changed database checksum can be
+      traced to the relations that changed.  The scan is the one of the
+      aggregate functions: relations are handed to parallel workers, and a
+      serial logical scan reads each table once for the table and all of its
+      indexes.  An optional relations regclass[] argument limits the scan to
+      the listed relations.  In non-strict mode, relations without a usable
+      checksum are returned with status skipped or error and a reason.
+      Superuser only.  Existing checksum values do not change.  Requires
+      ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.8.0'.
 
     - Fix: columns of type regclass, regtype, regproc, regprocedure, regoper,
       regoperator, regconfig, regdictionary, regnamespace, regrole and

@@ -36,6 +36,7 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
+| 2.8 | Logical checksums of tables with `reg*` columns (`regclass`, `regtype`, ..., and arrays of them); of partitioned tables whose partitions declare their columns in another order; of text values hashed with a `client_encoding` other than the server encoding; physical checksums of indexes and TOAST tables whose pages hold stale bytes between `pd_lower` and `pd_upper`.  The new per-relation functions change no values | Recompute the affected values; re-capture affected baselines |
 | 2.7 | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); physical checksums of mapped catalogs (`pg_class`, `pg_type`, `pg_proc`, `pg_attribute`, shared catalogs) and of indexes with metapages or non-B-tree page layouts, and the database physical checksums that include them; table and index logical checksums do not change | Recompute stored database logical checksums; re-capture physical baselines |
 | 2.6 | Physical checksums of indexes and TOAST relations | Re-capture physical baselines (`capture --kind physical`) |
 | 2.4 | Logical checksums of tables with dropped columns or composite types with dropped attributes; user types when the baseline was taken with a non-default `search_path`; physical tuple and table checksums with `include_header = true` | Recompute the affected values and compare; recreate baselines that differ |
@@ -47,6 +48,22 @@ contains do not change.  Releases not listed here kept every value.
 The complete history is in
 [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 These notes cover what to check when upgrading.
+
+### 2.8
+
+2.8 adds `pg_database_logical_checksums()` and
+`pg_database_physical_checksums()`, which return the checksum of every
+relation of a database scan; see
+[Database Level Functions](functions.md#database-level-functions-superuser-only).
+Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.8.0';
+```
+
+The new functions do not change any existing checksum value.  Some fixes in
+this release do; see the table above and
+[Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 
 ### 2.7
 

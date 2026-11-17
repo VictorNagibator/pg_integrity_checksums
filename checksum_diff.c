@@ -123,43 +123,6 @@ diff_bucket(uint64 hash, uint32 nbuckets)
     return (uint32) ((hi * nbuckets + ((lo * nbuckets) >> 32)) >> 32);
 }
 
-/*
- * diff_begin_srf - set up a materialized set-returning function result
- *
- * InitMaterializedSRF() only exists from PostgreSQL 15 on.
- */
-static Tuplestorestate *
-diff_begin_srf(FunctionCallInfo fcinfo, TupleDesc *resultdesc)
-{
-    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-    MemoryContext oldcontext;
-    Tuplestorestate *store;
-    TupleDesc   tupdesc;
-
-    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
-        ereport(ERROR,
-                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                 errmsg("set-valued function called in context that cannot accept a set")));
-    if (!(rsinfo->allowedModes & SFRM_Materialize))
-        ereport(ERROR,
-                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-                 errmsg("materialize mode required, but it is not allowed in this context")));
-
-    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
-        elog(ERROR, "return type must be a row type");
-
-    oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
-    tupdesc = CreateTupleDescCopy(tupdesc);
-    store = tuplestore_begin_heap(true, false, work_mem);
-    rsinfo->returnMode = SFRM_Materialize;
-    rsinfo->setResult = store;
-    rsinfo->setDesc = tupdesc;
-    MemoryContextSwitchTo(oldcontext);
-
-    *resultdesc = tupdesc;
-    return store;
-}
-
 /* diff_buckets_arg - validate the bucket count argument */
 static uint32
 diff_buckets_arg(FunctionCallInfo fcinfo, int argno)
@@ -799,7 +762,7 @@ pg_table_bucket_checksums(PG_FUNCTION_ARGS)
     Relation    rel;
     uint32      b;
 
-    store = diff_begin_srf(fcinfo, &resultdesc);
+    store = pg_integrity_checksums_begin_srf(fcinfo, &resultdesc);
 
     /* Like a STRICT function: no relation, no rows. */
     if (PG_ARGISNULL(0))
@@ -869,7 +832,7 @@ pg_table_row_checksums(PG_FUNCTION_ARGS)
     Relation    rel;
 
     memset(&state, 0, sizeof(state));
-    state.store = diff_begin_srf(fcinfo, &state.resultdesc);
+    state.store = pg_integrity_checksums_begin_srf(fcinfo, &state.resultdesc);
 
     /* Like a STRICT function: no relation, no rows. */
     if (PG_ARGISNULL(0))
@@ -976,7 +939,7 @@ pg_table_block_checksums(PG_FUNCTION_ARGS)
     int32       per_range;
     uint64      start;
 
-    store = diff_begin_srf(fcinfo, &resultdesc);
+    store = pg_integrity_checksums_begin_srf(fcinfo, &resultdesc);
 
     /* Like a STRICT function: no relation, no rows. */
     if (PG_ARGISNULL(0))

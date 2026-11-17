@@ -11,6 +11,25 @@ Unreleased
       identical to a serial scan; checksum values do not change.
       pg_table_row_checksums() and pg_table_block_checksums() stay serial.
 
+    - Feature: pg_relation_page_checksum_status(relname, fork_name,
+      include_ok) verifies every page of a relation against its stored
+      pd_checksum in one call; until now pg_page_checksum_status() checked
+      one block at a time.  Every fork that exists (main, fsm, vm, init) is
+      checked unless fork_name names one.  Each block is read from disk and
+      read again before a mismatch is reported, as pg_page_checksum_status()
+      does.  Returns the mismatching blocks (fork, blkno, status,
+      stored_checksum, calculated_checksum), or every block with status ok,
+      mismatch or new when include_ok is true.  Fails when data checksums are
+      disabled.  Requires SELECT on the relation.  New SQL function: run
+      ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0'.  Checksum
+      values do not change.
+
+    - Fix: pg_page_checksum_status() reported a modified page of a temporary
+      table as mismatch: it compared the local buffer, whose pd_checksum is
+      only set when the page is written out.  Temporary tables are now read
+      from their file like other relations; a page not written yet is new.
+      Temporary tables of other sessions are rejected.
+
 2.8.0   2026-11-17
 
     - Feature: locate the rows that differ between two copies of a table,

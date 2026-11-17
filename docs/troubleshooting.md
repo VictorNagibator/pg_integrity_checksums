@@ -41,7 +41,8 @@ checksum aborts the call instead of being skipped.  The message and the
 - **Unlogged table on a standby**: the table has no data there.  Drop it on the
   primary, make it logged, or run the check on the primary.
 - **Relation dropped during the scan**: retry.
-- **Corrupt page or missing file**: investigate with `pg_page_checksum_status`
+- **Corrupt page or missing file**: investigate with
+  `pg_relation_page_checksum_status`
   (see [Investigating a mismatch](operations.md#investigating-a-mismatch)).
 
 To skip such relations anyway, `SET pg_integrity_checksums.strict = off`; the

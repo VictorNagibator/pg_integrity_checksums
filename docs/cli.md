@@ -181,6 +181,24 @@ Precedence: command-line flags, environment, profile, built-in defaults.
 `output` paths resolve against the config file directory.  `env:NAME` DSNs
 read a connection string from the environment.
 
+### Encrypted connections
+
+The CLI passes the connection string to the PostgreSQL driver, so TLS is
+configured with the usual `sslmode`, `sslrootcert`, `sslcert` and `sslkey`
+parameters (or the `PGSSL*` variables).  The default `sslmode=prefer` and
+`require` encrypt the traffic but do not check the server certificate, and
+`prefer` falls back to plaintext, so a network attacker can intercept or alter
+what the CLI reads.  For a remote server use `sslmode=verify-full`:
+
+```text
+postgresql://user@db.example.com/app?sslmode=verify-full&sslrootcert=/etc/ssl/db-ca.pem
+```
+
+When a command connects to a remote host (not a Unix socket, `localhost` or a
+loopback address) without `verify-ca` or `verify-full`, the CLI prints a
+warning to stderr.  Set `PGICS_NO_SSL_WARNING=1` to silence it, for example on
+a trusted private network.
+
 ### `capture`
 
 Discovers objects in scope, computes checksums in one repeatable-read

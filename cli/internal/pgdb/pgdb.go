@@ -114,6 +114,11 @@ func OpenWithOptions(ctx context.Context, dsn string, opts ConnectOptions) (*sql
 	if opts.Timeout <= 0 {
 		opts.Timeout = 15 * time.Second
 	}
+	if !sslWarningSuppressed() {
+		if w := SSLWarning(dsn); w != "" {
+			fmt.Fprintln(os.Stderr, w)
+		}
+	}
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return nil, err

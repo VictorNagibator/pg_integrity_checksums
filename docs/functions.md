@@ -351,6 +351,12 @@ SELECT pg_database_physical_checksum(true, true);
 covered by the physical database checksum; table-level physical checksums
 store only the toast pointer in the main tuple.
 
+**System schemas:** `include_system` covers `pg_catalog` and
+`information_schema` (since 2.9; before, `information_schema` was always
+included).  initdb creates both, and `information_schema` holds the server
+version, so leaving them out keeps the checksum of the same data equal across
+PostgreSQL versions.
+
 **Note about shared system tables**: The database checksum only includes
 relations from the current database.  Cluster-wide shared catalogs (e.g.,
 `pg_authid`, `pg_database`) are excluded even when `include_system` is true.
@@ -408,7 +414,7 @@ optional:
 
 | Argument | Default | Meaning |
 |---|---|---|
-| `include_system` | `false` | Include `pg_catalog` relations, as in the aggregate functions |
+| `include_system` | `false` | Include `pg_catalog` and `information_schema` relations, as in the aggregate functions |
 | `include_indexes` / `include_toast` | `true` / `false` | As in `pg_database_logical_checksum` / `pg_database_physical_checksum` |
 | `relations regclass[]` | `NULL` (all) | Only return these relations.  Listed relations that the scan would not include (a catalog without `include_system`, a view, a temporary table) return no row; `NULL` elements are ignored |
 | `algorithm text` | `'fnv32'` | `fnv32`, `fnv64`, `crc32c` or `xxh3` |

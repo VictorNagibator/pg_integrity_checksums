@@ -233,6 +233,33 @@ FROM pg_database_logical_checksums(include_system => true,
             1
 (1 row)
 
+-- information_schema is a system schema too: its tables hold the server
+-- version, so they would make the checksum differ between PostgreSQL
+-- versions.  Only include_system brings them in, in both modes.
+SELECT count(*) AS infoschema_rows_logical
+FROM pg_database_logical_checksums()
+WHERE schema_name = 'information_schema';
+ infoschema_rows_logical 
+-------------------------
+                       0
+(1 row)
+
+SELECT count(*) AS infoschema_rows_physical
+FROM pg_database_physical_checksums()
+WHERE schema_name = 'information_schema';
+ infoschema_rows_physical 
+--------------------------
+                        0
+(1 row)
+
+SELECT count(*) > 0 AS infoschema_rows_with_system
+FROM pg_database_logical_checksums(include_system => true)
+WHERE schema_name = 'information_schema';
+ infoschema_rows_with_system 
+-----------------------------
+ t
+(1 row)
+
 -- After a change to one table, only its own rows differ: the table and the
 -- indexes whose entries changed.  The partial index does not cover the row.
 UPDATE dbrel.t SET b = 'changed' WHERE id = 50;

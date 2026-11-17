@@ -122,6 +122,10 @@ INSERT INTO test_errors_am VALUES (1);
 SELECT pg_table_logical_checksum('test_errors_am'::regclass);
 SELECT pg_table_physical_checksum('test_errors_am'::regclass);
 SELECT pg_tuple_physical_checksum('test_errors_am'::regclass, '(0,1)'::tid);
+-- A logical index checksum reads the table as well.
+CREATE INDEX test_errors_am_a ON test_errors_am (a);
+SELECT pg_index_logical_checksum('test_errors_am_a'::regclass);
+SELECT pg_index_logical_checksum('test_errors_am_a'::regclass, 'fnv64');
 DROP TABLE test_errors_am;
 DROP ACCESS METHOD test_errors_heap2;
 

@@ -16,6 +16,7 @@
 #include "catalog/index.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_index.h"
+#include "catalog/pg_inherits.h"
 #include "catalog/pg_proc.h"
 #include "executor/executor.h"
 #include "executor/tuptable.h"
@@ -24,6 +25,7 @@
 #include "nodes/nodeFuncs.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
+#include "storage/lmgr.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -444,6 +446,30 @@ pg_index_oid_definition_parallel_safe(Oid indexoid)
 }
 
 /*
+ * pg_integrity_checksums_lock_index_table - lock the table of an index first
+ *
+ * PostgreSQL locks a table before its indexes (DROP INDEX, DROP TABLE,
+ * REINDEX ...).  A logical index checksum reads the table too, and opening
+ * the index before the table deadlocked with a concurrent DROP INDEX or DROP
+ * TABLE: the checksum held the index and waited for the table that the DROP
+ * held, while the DROP waited for the index, and the deadlock detector
+ * cancelled one of them (often the user's DROP).  Take AccessShareLock on
+ * the table before the index is opened, as amcheck does.  Returns the
+ * table's OID, or InvalidOid when indexoid is not an index; the caller
+ * releases the lock with UnlockRelationOid().
+ */
+Oid
+pg_integrity_checksums_lock_index_table(Oid indexoid)
+{
+    Oid         heapoid = IndexGetRelation(indexoid, true);
+
+    if (OidIsValid(heapoid))
+        LockRelationOid(heapoid, AccessShareLock);
+
+    return heapoid;
+}
+
+/*
  * pg_index_logical_scan_init - prepare an executor-like scan of an index
  *
  * The index definition is evaluated on heap tuples.  The caller owns the
@@ -483,6 +509,13 @@ pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
         MemSet(scanstate, 0, sizeof(*scanstate));
         return false;
     }
+
+    /*
+     * The scan reads the table's pages as heap pages.  A table of another
+     * table access method is rejected here, as the table checksums do,
+     * instead of being misparsed.
+     */
+    pg_integrity_checksums_check_relation_kind(scanstate->heapRel, true, false);
 
     scanstate->context = AllocSetContextCreate(CurrentMemoryContext,
                                                "pg_integrity_checksums index logical",
@@ -715,8 +748,12 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     BlockNumber nblocks;
     int         workers;
     ChecksumOwnerContext owner_ctx;
+    Oid         heapoid;
 
     *is_null = false;
+
+    /* The table is locked before the index; see the helper. */
+    heapoid = pg_integrity_checksums_lock_index_table(indexoid);
 
     idxRel = index_open(indexoid, AccessShareLock);
 
@@ -725,9 +762,17 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
 
     if (idxRel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
     {
-        List       *parts = pg_integrity_checksums_leaf_indexes(indexoid);
+        List       *parts;
         ListCell   *lc;
         bool        any_null = false;
+
+        /*
+         * Lock the partitions before the leaf indexes, which
+         * pg_integrity_checksums_leaf_indexes() locks, for the same reason.
+         */
+        if (OidIsValid(heapoid))
+            list_free(find_all_inheritors(heapoid, AccessShareLock, NULL));
+        parts = pg_integrity_checksums_leaf_indexes(indexoid);
 
         foreach(lc, parts)
         {
@@ -745,6 +790,8 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
 
         list_free(parts);
         index_close(idxRel, AccessShareLock);
+        if (OidIsValid(heapoid))
+            UnlockRelationOid(heapoid, AccessShareLock);
 
         if (any_null)
             *is_null = true;
@@ -765,6 +812,8 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     if (!pg_index_logical_scan_init(indexoid, snapshot, &scanstate))
     {
         pg_integrity_checksums_restore_user(&owner_ctx);
+        if (OidIsValid(heapoid))
+            UnlockRelationOid(heapoid, AccessShareLock);
         *is_null = true;
         return;
     }
@@ -792,6 +841,8 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
     }
 
     pg_integrity_checksums_restore_user(&owner_ctx);
+    if (OidIsValid(heapoid))
+        UnlockRelationOid(heapoid, AccessShareLock);
 }
 
 /*

@@ -684,6 +684,7 @@ extern uint64 pg_table_logical_checksum_calc(Oid reloid,
 
 /* Partition helpers shared by table and index checksums. */
 extern List *pg_integrity_checksums_leaf_indexes(Oid indexoid);
+extern Oid pg_integrity_checksums_lock_index_table(Oid indexoid);
 
 /* Relation, page and tuple validation. */
 extern void pg_integrity_checksums_require_select(Oid reloid);

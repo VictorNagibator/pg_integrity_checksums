@@ -2,6 +2,21 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix (changes values): pg_database_logical_checksum() and
+      pg_database_physical_checksum() included the tables of
+      information_schema even with include_system = false (only pg_catalog
+      was left out).  initdb fills them with the server version
+      (sql_implementation_info) and the release's features (sql_features),
+      so the same data had a different database checksum on clusters of
+      different PostgreSQL versions, which defeated comparing a database
+      before and after a migration.  information_schema is now a system
+      schema like pg_catalog: only include_system = true includes it, in the
+      aggregate and the per-relation (pg_database_*_checksums) functions.
+      Database checksums computed without include_system change in every
+      database; recompute stored values.  Table, index and sequence
+      checksums do not change, nor do CLI baselines (the CLI already left
+      information_schema out).
+
     - Feature: the generic (algorithm) functions accept two more algorithms:
       crc32c, a 4-byte CRC-32C computed with PostgreSQL's hardware-
       accelerated implementation, and xxh3, an 8-byte XXH3-64 from the

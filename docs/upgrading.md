@@ -36,6 +36,7 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
+| 2.9 | `pg_database_logical_checksum` and `pg_database_physical_checksum` with `include_system = false` (the default) in every database: `information_schema` tables are no longer included.  Table, index, sequence and per-relation checksums do not change | Recompute stored database checksums; CLI baselines are not affected (the CLI already left `information_schema` out) |
 | 2.8 | Logical checksums of tables with `reg*` columns (`regclass`, `regtype`, ..., and arrays of them); of partitioned tables whose partitions declare their columns in another order; of text values hashed with a `client_encoding` other than the server encoding; physical checksums of indexes and TOAST tables whose pages hold stale bytes between `pd_lower` and `pd_upper`.  The new per-relation, bucket, row and block range functions change no values | Recompute the affected values; re-capture affected baselines |
 | 2.7 | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); physical checksums of mapped catalogs (`pg_class`, `pg_type`, `pg_proc`, `pg_attribute`, shared catalogs) and of indexes with metapages or non-B-tree page layouts, and the database physical checksums that include them; table and index logical checksums do not change | Recompute stored database logical checksums; re-capture physical baselines |
 | 2.6 | Physical checksums of indexes and TOAST relations | Re-capture physical baselines (`capture --kind physical`) |
@@ -65,9 +66,17 @@ ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0';
 
 What changes:
 
-- **No checksum value changes.**  `fnv32` and `fnv64` values, and the default
-  `integer` API, are unchanged; `crc32c` and `xxh3` are new values, not
-  comparable with them.
+- **Database checksums without `include_system` change.**  They used to
+  include the tables of `information_schema`, which initdb fills with the
+  server version (`sql_implementation_info`) and the features of the release
+  (`sql_features`).  The same data therefore had a different database
+  checksum on clusters of different PostgreSQL versions, which defeated
+  comparing a database before and after a migration.  `information_schema`
+  is now a system schema like `pg_catalog`: only `include_system = true`
+  includes it.  Recompute stored values of `pg_database_logical_checksum` and
+  `pg_database_physical_checksum`.  Table, index and sequence checksums,
+  `fnv32`/`fnv64` values and CLI baselines do not change; `crc32c` and
+  `xxh3` are new values, not comparable with them.
 - `pg_sequence_logical_checksum()` checksums a sequence's definition and
   `last_value`/`is_called` (see
   [Sequence Level Functions](functions.md#sequence-level-functions-logical-only)).

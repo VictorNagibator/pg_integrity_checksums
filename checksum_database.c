@@ -928,9 +928,20 @@ compute_database_checksum_internal(bool physical, bool include_system,
     uint32      skipped = 0;
     int         workers;
     uint32      nserial = 0;
+    Oid         infoschema_nsp;
 
     /* Use a consistent snapshot */
     snapshot = pg_integrity_checksums_get_snapshot();
+
+    /*
+     * information_schema is created by initdb, like pg_catalog, and is not
+     * part of what pg_dump restores.  Its tables hold the server version
+     * (sql_implementation_info) and the features of the release
+     * (sql_features), so including them made the checksum of the same data
+     * differ between clusters of different PostgreSQL versions.  It is a
+     * system schema: only include_system brings it in.
+     */
+    infoschema_nsp = get_namespace_oid("information_schema", true);
 
     /* Collect the matching relations first. */
     items = (ChecksumRelationItem *) palloc(capacity * sizeof(ChecksumRelationItem));
@@ -983,7 +994,9 @@ compute_database_checksum_internal(bool physical, bool include_system,
             if (!physical || !include_toast)
                 continue;
         }
-        else if (!include_system && relnamespace == PG_CATALOG_NAMESPACE)
+        else if (!include_system &&
+                 (relnamespace == PG_CATALOG_NAMESPACE ||
+                  (OidIsValid(infoschema_nsp) && relnamespace == infoschema_nsp)))
             continue;
 
         /* Skip non-table/index relations */
@@ -1154,7 +1167,8 @@ compute_database_checksum_internal(bool physical, bool include_system,
  * Requires superuser privileges for security.
  *
  * Parameters:
- *   include_system: Include system catalogs in checksum
+ *   include_system: Include system catalogs (pg_catalog and
+ *                   information_schema) in checksum
  *   include_toast: Include TOAST tables in checksum
  */
 PG_FUNCTION_INFO_V1(pg_database_physical_checksum);

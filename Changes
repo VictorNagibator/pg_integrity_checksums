@@ -1,5 +1,16 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Feature: pg_table_bucket_checksums() uses parallel workers when
+      pg_integrity_checksums.workers is above zero.  Chunks of heap blocks
+      are handed out like in a table checksum; each participant keeps its
+      own bucket accumulators and adds them to a shared array at the end.
+      Temporary tables, and partitions whose columns are in another order
+      than the partitioned table's, are still scanned serially.  Results are
+      identical to a serial scan; checksum values do not change.
+      pg_table_row_checksums() and pg_table_block_checksums() stay serial.
+
 2.8.0   2026-11-17
 
     - Feature: locate the rows that differ between two copies of a table,

@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.9.0   2026-11-17
 
     - Fix (changes values): pg_database_logical_checksum() and
       pg_database_physical_checksum() included the tables of

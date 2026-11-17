@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums CLI
 
-Unreleased
+0.7.0   2026-11-17
 
     - Feature: the CLI warns on stderr when it connects to a remote host
       without verifying the server certificate (sslmode other than

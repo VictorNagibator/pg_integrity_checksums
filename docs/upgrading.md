@@ -36,7 +36,7 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
-| 2.8 | Logical checksums of tables with `reg*` columns (`regclass`, `regtype`, `regproc`, ...: now hashed by object name); logical checksums of partitioned tables whose partitions declare their columns in another order than the parent; logical checksums computed with a `client_encoding` other than the server encoding (and not `SQL_ASCII`); physical checksums of indexes and TOAST tables whose pages hold stale bytes in their free space | Recompute or re-capture the affected logical baselines; re-capture physical baselines |
+| 2.8 | Logical checksums of tables with `reg*` columns (`regclass`, `regtype`, ..., and arrays of them); of partitioned tables whose partitions declare their columns in another order; of text values hashed with a `client_encoding` other than the server encoding; physical checksums of indexes and TOAST tables whose pages hold stale bytes between `pd_lower` and `pd_upper`.  The new per-relation, bucket, row and block range functions change no values | Recompute the affected values; re-capture affected baselines |
 | 2.7 | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); physical checksums of mapped catalogs (`pg_class`, `pg_type`, `pg_proc`, `pg_attribute`, shared catalogs) and of indexes with metapages or non-B-tree page layouts, and the database physical checksums that include them; table and index logical checksums do not change | Recompute stored database logical checksums; re-capture physical baselines |
 | 2.6 | Physical checksums of indexes and TOAST relations | Re-capture physical baselines (`capture --kind physical`) |
 | 2.4 | Logical checksums of tables with dropped columns or composite types with dropped attributes; user types when the baseline was taken with a non-default `search_path`; physical tuple and table checksums with `include_header = true` | Recompute the affected values and compare; recreate baselines that differ |
@@ -51,24 +51,21 @@ These notes cover what to check when upgrading.
 
 ### 2.8
 
-2.8 adds functions that find *which* rows differ between two copies of a
-table, and fixes several cases where a checksum depended on something other
-than the data.  Upgrade with:
+2.8 adds functions that show *where* two databases or two copies of a
+table differ: `pg_database_logical_checksums()` and
+`pg_database_physical_checksums()` return the checksum of every relation of a
+database scan (see
+[Database Level Functions](functions.md#database-level-functions-superuser-only)),
+and `pg_table_bucket_checksums()`, `pg_table_row_checksums()` and
+`pg_table_block_checksums()` split a logical table checksum by key bucket or
+block range down to single rows (see
+[Finding differing rows](functions.md#finding-differing-rows) and
+[Locating differing rows between two servers](operations.md#7-locating-differing-rows-between-two-servers)).
+Upgrade with:
 
 ```sql
 ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.8.0';
 ```
-
-The upgrade script adds three functions; install the new package first and
-reconnect clients.
-
-New:
-
-- `pg_table_bucket_checksums`, `pg_table_row_checksums` and
-  `pg_table_block_checksums` split a logical table checksum by key bucket or
-  block range and list the rows of a bucket; see
-  [Finding differing rows](functions.md#finding-differing-rows) and
-  [Locating differing rows between two servers](operations.md#7-locating-differing-rows-between-two-servers).
 
 What changes:
 

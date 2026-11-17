@@ -11,6 +11,11 @@ For the version in pg_integrity_checksums.control this verifies that
   * an upgrade script from the previous Changes version exists
     (pg_integrity_checksums--<previous>--<version>.sql).
 
+Between releases the newest section may be headed "Unreleased" instead: when
+the control version has no section of its own yet, that section stands for
+it.  The release PR renames it to "<version>   <date>"; the Release workflow
+fails without that section.
+
 It catches the usual mistakes of a release PR (a version bump without a
 Changes entry or without an upgrade script) before the tag is pushed, instead
 of in the Release workflow.  Exits with status 1 and prints every problem.
@@ -22,6 +27,7 @@ import sys
 from pathlib import Path
 
 HEADER = re.compile(r"^([0-9][0-9A-Za-z.\-]*)(?:\s.*)?$")
+UNRELEASED = "Unreleased"
 EXT = "pg_integrity_checksums"
 
 
@@ -62,6 +68,20 @@ def main() -> int:
         for index, line in enumerate(lines)
         if (m := HEADER.match(line))
     ]
+
+    # An "Unreleased" section above every version section stands for the
+    # control version when that version has no section yet (a version bump
+    # between releases).  Otherwise it collects changes for a later release
+    # and is not checked, as before.
+    unreleased = [
+        index for index, line in enumerate(lines) if line.strip() == UNRELEASED
+    ]
+    if (
+        unreleased
+        and (not headers or unreleased[0] < headers[0][0])
+        and not any(v == version for _, v in headers)
+    ):
+        headers.insert(0, (unreleased[0], version))
     if not headers:
         problems.append("Changes has no version sections")
     else:

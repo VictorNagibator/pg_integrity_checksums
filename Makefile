@@ -61,6 +61,7 @@ REGRESS = \
 	checksum_security \
 	checksum_robustness \
 	checksum_visibility \
+	checksum_relations \
 	checksum_diff
 
 REGRESS_OPTS = \

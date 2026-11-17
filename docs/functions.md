@@ -17,6 +17,7 @@ New to the extension? Read [Getting started](getting-started.md) and
 | Index logical | `pg_index_logical_checksum(regclass, text)` | `pg_index_logical_checksum(regclass)` |
 | Database physical | `pg_database_physical_checksum(boolean, boolean, text)` | `pg_database_physical_checksum(boolean, boolean)` |
 | Database logical | `pg_database_logical_checksum(boolean, boolean, text)` | `pg_database_logical_checksum(boolean, boolean)` |
+| Database, per relation | `pg_database_physical_checksums(boolean, boolean, regclass[], text)` / `pg_database_logical_checksums(boolean, boolean, regclass[], text)` | same functions (`algorithm` defaults to `fnv32`) |
 | Data/text | `pg_data_checksum(bytea, bigint, text)` / `pg_text_checksum(text, bigint, text)` | `pg_data_checksum(bytea, integer)` / `pg_text_checksum(text, integer)` |
 | Key buckets (logical) | `pg_table_bucket_checksums(regclass, integer, text[], text)` | — |
 | Rows of buckets (logical) | `pg_table_row_checksums(regclass, integer, integer[], text[], text)` | — |
@@ -298,6 +299,71 @@ SELECT pg_database_logical_checksum(false, true);
 
 -- Tables only
 SELECT pg_database_logical_checksum(false, false);
+```
+
+**`pg_database_logical_checksums(include_system, include_indexes, relations, algorithm)`**
+**`pg_database_physical_checksums(include_system, include_toast, relations, algorithm)`**
+
+Set-returning variants (since 2.8) that return the checksum of every relation
+of the database scan instead of one aggregate value, so a changed database
+checksum can be traced to the relations that changed.  All arguments are
+optional:
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `include_system` | `false` | Include `pg_catalog` relations, as in the aggregate functions |
+| `include_indexes` / `include_toast` | `true` / `false` | As in `pg_database_logical_checksum` / `pg_database_physical_checksum` |
+| `relations regclass[]` | `NULL` (all) | Only return these relations.  Listed relations that the scan would not include (a catalog without `include_system`, a view, a temporary table) return no row; `NULL` elements are ignored |
+| `algorithm text` | `'fnv32'` | `fnv32` or `fnv64` |
+
+Each row has these columns:
+
+| Column | Type | Content |
+|---|---|---|
+| `relid` | `regclass` | The relation |
+| `schema_name`, `rel_name` | `name` | Its qualified name, as of the scan snapshot |
+| `relkind` | `"char"` | `r` table, `m` materialized view, `i` index, `t` TOAST table |
+| `checksum` | `bytea` | The relation's checksum; `NULL` unless `status` is `ok` |
+| `status` | `text` | `ok`, `skipped` (no checksum in this mode, for example an invalid index) or `error` |
+| `reason` | `text` | Why the relation was skipped or failed; `NULL` for `ok` |
+
+`checksum` is exactly what the per-relation function with the same algorithm
+returns (`pg_table_logical_checksum(rel, algorithm)`,
+`pg_index_physical_checksum(rel, algorithm)`, ...), including its width:
+4 bytes for `fnv32` except physical table checksums, which are always 8
+bytes.  Use `pg_checksum_bigint(checksum)` for the integer form.  It is the
+relation's own checksum: the aggregate database checksum additionally folds in
+the relation identity.
+
+The scan is the one of the aggregate functions, with the same snapshot for
+every relation, the same relation selection, the same parallelism
+(`pg_integrity_checksums.workers` hands whole relations to workers) and, for a
+serial logical scan, one heap pass per table for the table and all of its
+indexes.  Strict mode applies: with `strict = on` a relation without a usable
+checksum fails the call; with `strict = off` it is returned with status
+`skipped` or `error` (the per-relation warning carries the error message).
+A relation dropped while the scan runs is left out.  Rows are ordered by
+schema and relation name.  Superuser-only (enforced in C).
+
+```sql
+-- Every relation of the database
+SELECT schema_name, rel_name, relkind, checksum, status
+FROM pg_database_logical_checksums();
+
+-- Two tables, 64-bit
+SELECT rel_name, checksum
+FROM pg_database_logical_checksums(
+         relations => ARRAY['public.orders', 'public.customers']::regclass[],
+         algorithm => 'fnv64');
+
+-- Store a snapshot, later list what changed
+CREATE TABLE checksums_before AS
+SELECT relid, checksum FROM pg_database_logical_checksums();
+-- ...
+SELECT n.relid, n.status
+FROM pg_database_logical_checksums() AS n
+FULL JOIN checksums_before AS b USING (relid)
+WHERE n.checksum IS DISTINCT FROM b.checksum;
 ```
 
 ### Utility Functions

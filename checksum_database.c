@@ -15,12 +15,16 @@
 #include "catalog/pg_namespace.h"
 #include "catalog/pg_class.h"
 #include "catalog/pg_index.h"
+#include "catalog/pg_type.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "storage/lmgr.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 
 #include "checksum_internal.h"
 
@@ -106,14 +110,15 @@ compute_database_item(Oid relid, char relkind, bool physical, ChecksumAlgo algo,
 }
 
 /*
- * skipped_relation_reason - why a relation has no usable checksum
+ * skipped_relation_status - why a relation has no usable checksum
  *
  * Only called for relations that compute_database_item() reported as skipped,
  * which is either an invalid index or a relation kind without a checksum for
- * the requested mode.
+ * the requested mode.  Returns CHECKSUM_REL_INVALID_INDEX or
+ * CHECKSUM_REL_UNSUPPORTED.
  */
-static const char *
-skipped_relation_reason(Oid relid)
+static uint8
+skipped_relation_status(Oid relid)
 {
     if (get_rel_relkind(relid) == RELKIND_INDEX)
     {
@@ -126,9 +131,21 @@ skipped_relation_reason(Oid relid)
             ReleaseSysCache(tuple);
 
             if (!valid)
-                return "The index is invalid and has no content to checksum";
+                return CHECKSUM_REL_INVALID_INDEX;
         }
     }
+
+    return CHECKSUM_REL_UNSUPPORTED;
+}
+
+/*
+ * skipped_status_reason - human-readable reason for a skipped status
+ */
+static const char *
+skipped_status_reason(uint8 status)
+{
+    if (status == CHECKSUM_REL_INVALID_INDEX)
+        return "The index is invalid and has no content to checksum";
 
     return "The relation kind or access method has no checksum in this mode";
 }
@@ -137,7 +154,7 @@ skipped_relation_reason(Oid relid)
  * pg_integrity_checksums_report_skipped_relation - strict-mode error for skipped relation
  */
 static void
-pg_integrity_checksums_report_skipped_relation(Oid relid)
+pg_integrity_checksums_report_skipped_relation(Oid relid, uint8 status)
 {
     char       *relname;
 
@@ -150,20 +167,26 @@ pg_integrity_checksums_report_skipped_relation(Oid relid)
             (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
              errmsg("relation \"%s\" cannot be checksummed",
                     relname ? relname : "?"),
-             errdetail("%s.", skipped_relation_reason(relid)),
+             errdetail("%s.", skipped_status_reason(status)),
              errhint("Set pg_integrity_checksums.strict = false to skip relations without a usable checksum.")));
 }
 
 /*
  * handle_skipped_relation - a relation has no usable checksum
  *
- * An error in strict mode; otherwise the relation is left out of the result
- * and counted, so the caller can report how many were skipped.
+ * An error in strict mode; otherwise the relation is left out of the result,
+ * marked with the reason, and counted, so the caller can report how many
+ * were skipped.
  */
 static void
-handle_skipped_relation(Oid relid, uint32 *skipped)
+handle_skipped_relation(ChecksumRelationItem *item, uint32 *skipped)
 {
-    pg_integrity_checksums_report_skipped_relation(relid);
+    uint8       status = skipped_relation_status(item->reloid);
+
+    pg_integrity_checksums_report_skipped_relation(item->reloid, status);
+
+    item->status = status;
+    item->checksum = 0;
 
     if (skipped != NULL)
         (*skipped)++;
@@ -217,10 +240,15 @@ relation_identity_hash(Oid relid)
  * in the qualified relation name instead; see relation_identity_hash().
  */
 static void
-add_relation_result(Oid relid, uint64 rel_checksum, ChecksumAccum64 *acc,
-                    ChecksumLogicalAccum *logical_acc,
+add_relation_result(ChecksumRelationItem *item, uint64 rel_checksum,
+                    ChecksumAccum64 *acc, ChecksumLogicalAccum *logical_acc,
                     ChecksumLogicalAccum64 *logical_acc64)
 {
+    Oid         relid = item->reloid;
+
+    item->status = CHECKSUM_REL_OK;
+    item->checksum = rel_checksum;
+
     if (logical_acc64 != NULL)
         logical_accum_add64(logical_acc64,
                             combine_checksums_64(relation_identity_hash(relid),
@@ -293,12 +321,14 @@ lock_relation_if_exists(Oid relid)
  * compute_database_relation_locked - checksum one relation, lock already held
  */
 static void
-compute_database_relation_locked(Oid relid, char relkind, bool physical,
+compute_database_relation_locked(ChecksumRelationItem *item, bool physical,
                                  ChecksumAlgo algo, ChecksumAccum64 *acc,
                                  ChecksumLogicalAccum *logical_acc,
                                  ChecksumLogicalAccum64 *logical_acc64,
                                  uint32 *skipped)
 {
+    Oid         relid = item->reloid;
+    char        relkind = item->relkind;
     uint64      rel_checksum = 0;
     bool        skip = false;
     MemoryContext oldcontext;
@@ -318,9 +348,9 @@ compute_database_relation_locked(Oid relid, char relkind, bool physical,
         compute_database_item(relid, relkind, physical, algo, &rel_checksum,
                               &skip);
         if (skip)
-            handle_skipped_relation(relid, skipped);
+            handle_skipped_relation(item, skipped);
         else
-            add_relation_result(relid, rel_checksum, acc, logical_acc,
+            add_relation_result(item, rel_checksum, acc, logical_acc,
                                 logical_acc64);
         return;
     }
@@ -346,7 +376,7 @@ compute_database_relation_locked(Oid relid, char relkind, bool physical,
                               &skip);
 
         if (!skip)
-            add_relation_result(relid, rel_checksum, acc, logical_acc,
+            add_relation_result(item, rel_checksum, acc, logical_acc,
                                 logical_acc64);
 
         /* Commit the inner transaction, return to outer xact context */
@@ -382,6 +412,14 @@ compute_database_relation_locked(Oid relid, char relkind, bool physical,
 
         if (skipped != NULL)
             (*skipped)++;
+
+        /*
+         * The subtransaction is gone, so a status recorded inside it (the
+         * item may already say ok) no longer holds.
+         */
+        item->status = CHECKSUM_REL_ERROR;
+        item->sqlerrcode = sqlerrcode;
+        item->checksum = 0;
 
         if (pg_integrity_checksums_strict || sqlerrcode == ERRCODE_QUERY_CANCELED)
         {
@@ -426,7 +464,7 @@ compute_database_relation_locked(Oid relid, char relkind, bool physical,
      * ordinary error and not one caught by the handler above.
      */
     if (skip)
-        handle_skipped_relation(relid, skipped);
+        handle_skipped_relation(item, skipped);
 }
 
 /*
@@ -438,19 +476,19 @@ compute_database_relation_locked(Oid relid, char relkind, bool physical,
  * (max_locks_per_transaction).
  */
 static void
-compute_database_relation(Oid relid, char relkind, bool physical,
+compute_database_relation(ChecksumRelationItem *item, bool physical,
                           ChecksumAlgo algo, ChecksumAccum64 *acc,
                           ChecksumLogicalAccum *logical_acc,
                           ChecksumLogicalAccum64 *logical_acc64,
                           uint32 *skipped)
 {
-    if (!lock_relation_if_exists(relid))
+    if (!lock_relation_if_exists(item->reloid))
         return;
 
-    compute_database_relation_locked(relid, relkind, physical, algo, acc,
+    compute_database_relation_locked(item, physical, algo, acc,
                                      logical_acc, logical_acc64, skipped);
 
-    UnlockRelationOid(relid, AccessShareLock);
+    UnlockRelationOid(item->reloid, AccessShareLock);
 }
 
 /*-------------------------------------------------------------------------
@@ -608,9 +646,9 @@ add_group_results(ChecksumRelationItem *items, int n, uint64 *results,
     for (i = 0; i < n; i++)
     {
         if (skip[i])
-            handle_skipped_relation(items[i].reloid, skipped);
+            handle_skipped_relation(&items[i], skipped);
         else
-            add_relation_result(items[i].reloid, results[i], NULL,
+            add_relation_result(&items[i], results[i], NULL,
                                 logical_acc, logical_acc64);
     }
 }
@@ -694,9 +732,8 @@ compute_database_group_locked(ChecksumRelationItem *items, int n,
     if (failed)
     {
         for (i = 0; i < n; i++)
-            compute_database_relation(items[i].reloid, items[i].relkind,
-                                      false, algo, NULL, logical_acc,
-                                      logical_acc64, skipped);
+            compute_database_relation(&items[i], false, algo, NULL,
+                                      logical_acc, logical_acc64, skipped);
     }
     else
         add_group_results(items, n, results, skip, logical_acc,
@@ -755,9 +792,8 @@ compute_database_items(ChecksumRelationItem *items, uint32 start, uint32 end,
                                    logical_acc, logical_acc64, skipped);
         }
         else
-            compute_database_relation(items[i].reloid, items[i].relkind,
-                                      physical, algo, acc, logical_acc,
-                                      logical_acc64, skipped);
+            compute_database_relation(&items[i], physical, algo, acc,
+                                      logical_acc, logical_acc64, skipped);
 
         CHECK_FOR_INTERRUPTS();
     }
@@ -847,6 +883,48 @@ group_database_items(ChecksumRelationItem *items, uint32 nitems)
  */
 
 /*
+ * DatabaseRelationName - qualified name of a relation, as of the scan snapshot
+ */
+typedef struct DatabaseRelationName
+{
+    Oid         reloid;
+    NameData    nspname;
+    NameData    relname;
+} DatabaseRelationName;
+
+/*
+ * DatabaseRelations - per-relation outcome of a database scan
+ *
+ * items holds every relation the scan considered, with the status and
+ * checksum recorded for it; names is sorted by OID.
+ */
+typedef struct DatabaseRelations
+{
+    ChecksumRelationItem *items;
+    uint32      nitems;
+    DatabaseRelationName *names;
+    uint32      nnames;
+} DatabaseRelations;
+
+static int
+oid_cmp_local(const void *a, const void *b)
+{
+    Oid         oa = *(const Oid *) a;
+    Oid         ob = *(const Oid *) b;
+
+    if (oa != ob)
+        return oa < ob ? -1 : 1;
+    return 0;
+}
+
+static int
+relation_name_cmp(const void *a, const void *b)
+{
+    return oid_cmp_local(&((const DatabaseRelationName *) a)->reloid,
+                         &((const DatabaseRelationName *) b)->reloid);
+}
+
+/*
  * compute_database_checksum_internal - Core database checksum calculation
  *
  * Computes a checksum for the entire database by aggregating checksums
@@ -864,7 +942,8 @@ group_database_items(ChecksumRelationItem *items, uint32 nitems)
 static uint64
 compute_database_checksum_internal(bool physical, bool include_system,
                                   bool include_toast, bool include_indexes,
-                                  ChecksumAlgo algo)
+                                  ChecksumAlgo algo, const Oid *filter,
+                                  int nfilter, DatabaseRelations *out)
 {
     Relation    pg_class_rel;
     SysScanDesc scan;
@@ -879,12 +958,16 @@ compute_database_checksum_internal(bool physical, bool include_system,
     ChecksumLogicalAccum64 lacc64 = {0, 0};
     uint32      skipped = 0;
     int         workers;
+    uint32      nserial = 0;
 
     /* Use a consistent snapshot */
     snapshot = pg_integrity_checksums_get_snapshot();
 
     /* Collect the matching relations first. */
     items = (ChecksumRelationItem *) palloc(capacity * sizeof(ChecksumRelationItem));
+    if (out != NULL)
+        out->names = (DatabaseRelationName *)
+            palloc(capacity * sizeof(DatabaseRelationName));
 
     pg_class_rel = table_open(RelationRelationId, AccessShareLock);
 
@@ -944,16 +1027,44 @@ compute_database_checksum_internal(bool physical, bool include_system,
         if (!include_indexes && relkind == RELKIND_INDEX)
             continue;
 
+        /* Optional relation list (sorted by the caller). */
+        if (filter != NULL &&
+            bsearch(&relid, filter, nfilter, sizeof(Oid), oid_cmp_local) == NULL)
+            continue;
+
         if (nitems >= capacity)
         {
             capacity *= 2;
             items = (ChecksumRelationItem *)
                 repalloc(items, capacity * sizeof(ChecksumRelationItem));
+            if (out != NULL)
+                out->names = (DatabaseRelationName *)
+                    repalloc(out->names, capacity * sizeof(DatabaseRelationName));
         }
 
         items[nitems].reloid = relid;
         items[nitems].relkind = relkind;
         items[nitems].group_size = 1;
+        items[nitems].status = CHECKSUM_REL_PENDING;
+        items[nitems].sqlerrcode = 0;
+        items[nitems].checksum = 0;
+
+        /*
+         * Remember the name as the scan snapshot sees it: the relation can
+         * be renamed or dropped once its lock is released.
+         */
+        if (out != NULL)
+        {
+            DatabaseRelationName *name = &out->names[nitems];
+            char       *nspname = get_namespace_name(relnamespace);
+
+            name->reloid = relid;
+            namestrcpy(&name->relname, NameStr(classForm->relname));
+            namestrcpy(&name->nspname, nspname ? nspname : "");
+            if (nspname != NULL)
+                pfree(nspname);
+        }
+
         nitems++;
 
         CHECK_FOR_INTERRUPTS();
@@ -961,6 +1072,14 @@ compute_database_checksum_internal(bool physical, bool include_system,
 
     systable_endscan(scan);
     table_close(pg_class_rel, AccessShareLock);
+
+    if (out != NULL)
+    {
+        out->nnames = nitems;
+        if (nitems > 1)
+            qsort(out->names, nitems, sizeof(DatabaseRelationName),
+                  relation_name_cmp);
+    }
 
     /* Indexes that a parallel scan must leave to the leader; see below. */
     serial_items = (ChecksumRelationItem *)
@@ -987,8 +1106,6 @@ compute_database_checksum_internal(bool physical, bool include_system,
                                &skipped);
     else
     {
-        uint32      nserial = 0;
-
         /*
          * Indexes whose expressions or predicate call functions that are not
          * PARALLEL SAFE cannot be evaluated in parallel mode, by the workers
@@ -1026,10 +1143,28 @@ compute_database_checksum_internal(bool physical, bool include_system,
                                &skipped);
     }
 
-    pfree(items);
+    if (out != NULL)
+    {
+        /* The serial leftovers of a parallel scan follow the others. */
+        if (nserial > 0)
+        {
+            items = (ChecksumRelationItem *)
+                repalloc(items, (nitems + nserial) * sizeof(ChecksumRelationItem));
+            memcpy(items + nitems, serial_items,
+                   nserial * sizeof(ChecksumRelationItem));
+        }
+        out->items = items;
+        out->nitems = nitems + nserial;
+    }
+    else
+        pfree(items);
     pfree(serial_items);
 
-    if (skipped > 0)
+    /*
+     * The per-relation functions report every skipped relation in their
+     * result, so the summary warning is only for the aggregate functions.
+     */
+    if (skipped > 0 && out == NULL)
         ereport(WARNING,
                 (errmsg("database checksum skipped %u relation(s)", skipped),
                  errhint("Set pg_integrity_checksums.strict = on to fail with the reason for the first skipped relation, or inspect the server log.")));
@@ -1077,7 +1212,8 @@ pg_database_physical_checksum(PG_FUNCTION_ARGS)
     /* Compute physical database checksum */
     db_checksum = compute_database_checksum_internal(true, include_system,
                                                      include_toast, true,
-                                                     CHECKSUM_ALGO_FNV32);
+                                                     CHECKSUM_ALGO_FNV32, NULL, 0,
+                                                     NULL);
 
     PG_RETURN_INT64((int64)db_checksum);
 }
@@ -1112,7 +1248,8 @@ pg_database_logical_checksum(PG_FUNCTION_ARGS)
     /* Compute logical database checksum */
     db_checksum = compute_database_checksum_internal(false, include_system,
                                                      false, include_indexes,
-                                                     CHECKSUM_ALGO_FNV32);
+                                                     CHECKSUM_ALGO_FNV32, NULL, 0,
+                                                     NULL);
 
     PG_RETURN_INT64((int64)db_checksum);
 }
@@ -1143,7 +1280,7 @@ pg_database_logical_checksum_algo(PG_FUNCTION_ARGS)
 
     db_checksum = compute_database_checksum_internal(false, include_system,
                                                      false, include_indexes,
-                                                     algorithm);
+                                                     algorithm, NULL, 0, NULL);
 
     PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
 }
@@ -1174,7 +1311,230 @@ pg_database_physical_checksum_algo(PG_FUNCTION_ARGS)
 
     db_checksum = compute_database_checksum_internal(true, include_system,
                                                      include_toast, true,
-                                                     algorithm);
+                                                     algorithm, NULL, 0, NULL);
 
     PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, 8));
+}
+
+/*-------------------------------------------------------------------------
+ * PER-RELATION DATABASE FUNCTIONS
+ *-------------------------------------------------------------------------
+ */
+
+/* Output columns of pg_database_{logical,physical}_checksums. */
+#define DATABASE_CHECKSUMS_COLS 7
+
+typedef struct DatabaseChecksumRow
+{
+    ChecksumRelationItem *item;
+    DatabaseRelationName *name;
+} DatabaseChecksumRow;
+
+static int
+database_checksum_row_cmp(const void *a, const void *b)
+{
+    const DatabaseChecksumRow *ra = (const DatabaseChecksumRow *) a;
+    const DatabaseChecksumRow *rb = (const DatabaseChecksumRow *) b;
+    int         cmp;
+
+    cmp = strcmp(NameStr(ra->name->nspname), NameStr(rb->name->nspname));
+    if (cmp != 0)
+        return cmp;
+    cmp = strcmp(NameStr(ra->name->relname), NameStr(rb->name->relname));
+    if (cmp != 0)
+        return cmp;
+    return oid_cmp_local(&ra->item->reloid, &rb->item->reloid);
+}
+
+/*
+ * relation_checksum_width - digest width of a relation checksum
+ *
+ * The same width as the per-relation function with an algorithm argument
+ * returns for the relation, so the value can be compared with it directly:
+ * physical table (and TOAST) checksums are always 8 bytes, everything else
+ * is 4 bytes for fnv32 and 8 bytes for fnv64.
+ */
+static int
+relation_checksum_width(char relkind, bool physical, ChecksumAlgo algo)
+{
+    if (algo == CHECKSUM_ALGO_FNV64)
+        return 8;
+    if (physical && relkind != RELKIND_INDEX)
+        return 8;
+    return 4;
+}
+
+/*
+ * database_checksums_srf - common body of the per-relation functions
+ *
+ * Arguments: include_system, include_indexes (logical) or include_toast
+ * (physical), relations regclass[] (NULL for every relation), algorithm.
+ * Returns one row per relation of the scan: the same relations, checksums
+ * and snapshot as the aggregate database function with the same options.
+ */
+static Datum
+database_checksums_srf(FunctionCallInfo fcinfo, bool physical)
+{
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    TupleDesc   tupdesc;
+    Tuplestorestate *tupstore;
+    MemoryContext oldcontext;
+    bool        include_system;
+    bool        include_flag;
+    ChecksumAlgo algo;
+    Oid        *filter = NULL;
+    int         nfilter = 0;
+    DatabaseRelations rels;
+    DatabaseChecksumRow *rows;
+    uint32      nrows = 0;
+    uint32      i;
+
+    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("set-valued function called in context that cannot accept a set")));
+    if (!(rsinfo->allowedModes & SFRM_Materialize))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("materialize mode required, but it is not allowed in this context")));
+
+    if (PG_ARGISNULL(0) || PG_ARGISNULL(1) || PG_ARGISNULL(3))
+        ereport(ERROR,
+                (errcode(ERRCODE_NULL_VALUE_NOT_ALLOWED),
+                 errmsg("only the relations argument can be NULL")));
+
+    include_system = PG_GETARG_BOOL(0);
+    include_flag = PG_GETARG_BOOL(1);
+    algo = checksum_algorithm(PG_GETARG_TEXT_PP(3));
+
+    if (!superuser())
+        ereport(ERROR,
+                (errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+                 errmsg("must be superuser to compute database checksum")));
+
+    if (!PG_ARGISNULL(2))
+    {
+        ArrayType  *arr = PG_GETARG_ARRAYTYPE_P(2);
+        Datum      *elems;
+        bool       *elem_nulls;
+        int         nelems;
+        int         j;
+
+        deconstruct_array(arr, REGCLASSOID, sizeof(Oid), true, 'i',
+                          &elems, &elem_nulls, &nelems);
+
+        filter = (Oid *) palloc(sizeof(Oid) * Max(nelems, 1));
+        for (j = 0; j < nelems; j++)
+        {
+            if (!elem_nulls[j])
+                filter[nfilter++] = DatumGetObjectId(elems[j]);
+        }
+        if (nfilter > 1)
+            qsort(filter, nfilter, sizeof(Oid), oid_cmp_local);
+    }
+
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+        elog(ERROR, "return type must be a row type");
+
+    oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+    tupdesc = CreateTupleDescCopy(tupdesc);
+    tupstore = tuplestore_begin_heap(true, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = tupstore;
+    rsinfo->setDesc = tupdesc;
+    MemoryContextSwitchTo(oldcontext);
+
+    memset(&rels, 0, sizeof(rels));
+    (void) compute_database_checksum_internal(physical, include_system,
+                                              physical ? include_flag : false,
+                                              physical ? true : include_flag,
+                                              algo, filter, nfilter, &rels);
+
+    /* Rows in name order; relations dropped during the scan are left out. */
+    rows = (DatabaseChecksumRow *) palloc(sizeof(DatabaseChecksumRow) *
+                                          Max(rels.nitems, 1));
+    for (i = 0; i < rels.nitems; i++)
+    {
+        ChecksumRelationItem *item = &rels.items[i];
+        DatabaseRelationName *name;
+
+        if (item->status == CHECKSUM_REL_PENDING)
+            continue;
+
+        name = bsearch(&item->reloid, rels.names, rels.nnames,
+                       sizeof(DatabaseRelationName), relation_name_cmp);
+        if (name == NULL)
+            elog(ERROR, "relation %u missing from the database scan", item->reloid);
+
+        rows[nrows].item = item;
+        rows[nrows].name = name;
+        nrows++;
+    }
+    if (nrows > 1)
+        qsort(rows, nrows, sizeof(DatabaseChecksumRow),
+              database_checksum_row_cmp);
+
+    for (i = 0; i < nrows; i++)
+    {
+        ChecksumRelationItem *item = rows[i].item;
+        Datum       values[DATABASE_CHECKSUMS_COLS];
+        bool        nulls[DATABASE_CHECKSUMS_COLS];
+
+        memset(nulls, 0, sizeof(nulls));
+
+        values[0] = ObjectIdGetDatum(item->reloid);
+        values[1] = NameGetDatum(&rows[i].name->nspname);
+        values[2] = NameGetDatum(&rows[i].name->relname);
+        values[3] = CharGetDatum(item->relkind);
+
+        switch (item->status)
+        {
+            case CHECKSUM_REL_OK:
+                values[4] = PointerGetDatum(checksum_bytea(item->checksum,
+                                                           relation_checksum_width(item->relkind,
+                                                                                   physical,
+                                                                                   algo)));
+                values[5] = CStringGetTextDatum("ok");
+                nulls[6] = true;
+                break;
+            case CHECKSUM_REL_INVALID_INDEX:
+            case CHECKSUM_REL_UNSUPPORTED:
+                nulls[4] = true;
+                values[5] = CStringGetTextDatum("skipped");
+                values[6] = CStringGetTextDatum(skipped_status_reason(item->status));
+                break;
+            default:
+                nulls[4] = true;
+                values[5] = CStringGetTextDatum("error");
+                values[6] = CStringGetTextDatum(psprintf("The checksum failed with SQLSTATE %s; the warning or the server log has the message",
+                                                         unpack_sql_state(item->sqlerrcode)));
+                break;
+        }
+
+        tuplestore_putvalues(tupstore, tupdesc, values, nulls);
+    }
+
+    return (Datum) 0;
+}
+
+/*
+ * pg_database_logical_checksums - logical checksum of every relation
+ */
+PG_FUNCTION_INFO_V1(pg_database_logical_checksums);
+
+Datum
+pg_database_logical_checksums(PG_FUNCTION_ARGS)
+{
+    return database_checksums_srf(fcinfo, false);
+}
+
+/*
+ * pg_database_physical_checksums - physical checksum of every relation
+ */
+PG_FUNCTION_INFO_V1(pg_database_physical_checksums);
+
+Datum
+pg_database_physical_checksums(PG_FUNCTION_ARGS)
+{
+    return database_checksums_srf(fcinfo, true);
 }

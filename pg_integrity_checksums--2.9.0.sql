@@ -156,6 +156,32 @@ COMMENT ON FUNCTION pg_index_logical_checksum(regclass) IS
  checksums remain the tool for detecting missing or corrupt index entries.';
 
 /*-----------------------------------------------------------
+ * SEQUENCE FUNCTIONS (Logical)
+ *-----------------------------------------------------------
+ */
+
+-- Logical sequence checksum: definition and current state
+CREATE FUNCTION pg_sequence_logical_checksum(relname regclass)
+RETURNS integer
+AS 'MODULE_PATHNAME', 'pg_sequence_logical_checksum'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_sequence_logical_checksum(regclass) IS
+'Logical checksum of a sequence: data type, start, increment, minimum,
+ maximum, cache and cycle from pg_sequence, plus last_value and is_called, the
+ state pg_dump restores with setval(). log_cnt is not included. The state is
+ read as it is now, not as of the transaction snapshot: sequences are not
+ transactional. Returns NULL for an unlogged sequence on a standby.';
+
+CREATE FUNCTION pg_sequence_logical_checksum(regclass, text)
+RETURNS bytea
+AS 'MODULE_PATHNAME', 'pg_sequence_logical_checksum_algo'
+LANGUAGE C STRICT;
+
+COMMENT ON FUNCTION pg_sequence_logical_checksum(regclass, text) IS
+'Generic logical sequence checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+
+/*-----------------------------------------------------------
  * DATABASE LEVEL FUNCTIONS (Physical and Logical)
  *-----------------------------------------------------------
  */

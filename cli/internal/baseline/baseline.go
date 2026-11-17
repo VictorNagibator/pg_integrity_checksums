@@ -45,6 +45,9 @@ const (
 	ObjectTable = "table"
 	// ObjectIndex covers indexes, including partitioned parent indexes.
 	ObjectIndex = "index"
+	// ObjectSequence covers sequences, including those behind serial and
+	// identity columns. Only logical baselines contain sequences.
+	ObjectSequence = "sequence"
 
 	// SchemaHashVersion identifies how schema_hash values are computed.
 	// Version 1 (recorded as an absent field) depended on the session's
@@ -75,16 +78,21 @@ type Scope struct {
 
 	IncludeSystem  bool `json:"include_system"`
 	IncludeIndexes bool `json:"include_indexes"`
+	// IncludeSequences is false in baselines written before sequences were
+	// supported, so verifying them does not report every sequence as new.
+	IncludeSequences bool `json:"include_sequences"`
 }
 
-// Object is one table or index in a baseline. Identity is name based rather
+// Object is one table, index or sequence in a baseline. Identity is name based rather
 // than OID based so a baseline survives a dump/restore into another database.
 type Object struct {
 	Kind   string `json:"kind"`
 	Schema string `json:"schema"`
 	Name   string `json:"name"`
 
-	// Indexes record their table so a diff can say what the index belongs to.
+	// Indexes record their table so a diff can say what the index belongs to;
+	// a sequence owned by a column (serial, identity, OWNED BY) records the
+	// table that owns it.
 	TableSchema string `json:"table_schema,omitempty"`
 	TableName   string `json:"table_name,omitempty"`
 
@@ -136,15 +144,16 @@ type Baseline struct {
 }
 
 // NewScope returns the default discovery scope: every non-system schema,
-// including indexes. Empty slices (not nil) keep the JSON schema happy and
+// including indexes and sequences. Empty slices (not nil) keep the JSON schema happy and
 // make captured baselines deterministic.
 func NewScope() Scope {
 	return Scope{
-		Schemas:        []string{},
-		ExcludeSchemas: []string{},
-		Tables:         []string{},
-		ExcludeTables:  []string{},
-		IncludeIndexes: true,
+		Schemas:          []string{},
+		ExcludeSchemas:   []string{},
+		Tables:           []string{},
+		ExcludeTables:    []string{},
+		IncludeIndexes:   true,
+		IncludeSequences: true,
 	}
 }
 
@@ -310,7 +319,7 @@ func (b *Baseline) Validate() error {
 	seen := make(map[string]bool, len(b.Objects))
 	for i := range b.Objects {
 		o := &b.Objects[i]
-		if o.Kind != ObjectTable && o.Kind != ObjectIndex {
+		if o.Kind != ObjectTable && o.Kind != ObjectIndex && o.Kind != ObjectSequence {
 			return fmt.Errorf("object %d: invalid kind %q", i, o.Kind)
 		}
 		if strings.TrimSpace(o.Schema) == "" || strings.TrimSpace(o.Name) == "" {
@@ -318,6 +327,9 @@ func (b *Baseline) Validate() error {
 		}
 		if o.Kind == ObjectIndex && (o.TableSchema == "" || o.TableName == "") {
 			return fmt.Errorf("index %s: missing table identity", o.Identity())
+		}
+		if o.Kind == ObjectSequence && b.Kind != KindLogical {
+			return fmt.Errorf("sequence %s: sequences are only valid in logical baselines", o.Identity())
 		}
 		if o.Status != StatusOK && o.Status != StatusSkipped {
 			return fmt.Errorf("object %s: invalid status %q", o.Identity(), o.Status)

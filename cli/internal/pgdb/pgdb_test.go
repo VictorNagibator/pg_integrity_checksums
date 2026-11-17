@@ -138,3 +138,49 @@ func TestIsSystemSchema(t *testing.T) {
 		}
 	}
 }
+
+func TestMatchesScopeSequences(t *testing.T) {
+	owned := Candidate{Kind: baseline.ObjectSequence, Schema: "app", Name: "orders_id_seq", TableSchema: "app", TableName: "orders"}
+	free := Candidate{Kind: baseline.ObjectSequence, Schema: "app", Name: "invoice_no"}
+
+	scope := baseline.NewScope()
+	if !matchesScope(owned, scope) || !matchesScope(free, scope) {
+		t.Fatal("sequences are in the default scope")
+	}
+
+	// Table filters apply to the owning table, like for indexes.
+	scope.Tables = []string{"app.orders"}
+	if !matchesScope(owned, scope) {
+		t.Fatal("owned sequence should follow its table")
+	}
+	if matchesScope(free, scope) {
+		t.Fatal("unowned sequence matches by its own name only")
+	}
+	scope.Tables = []string{"app.invoice_no"}
+	if !matchesScope(free, scope) {
+		t.Fatal("unowned sequence should match by name")
+	}
+	scope.Tables = nil
+	scope.ExcludeTables = []string{"app.orders"}
+	if matchesScope(owned, scope) {
+		t.Fatal("excluding a table excludes its sequences")
+	}
+
+	scope = baseline.NewScope()
+	scope.IncludeSequences = false
+	if matchesScope(owned, scope) || matchesScope(free, scope) {
+		t.Fatal("sequences should be disabled")
+	}
+}
+
+func TestObjectKind(t *testing.T) {
+	for relkind, want := range map[string]string{
+		"r": baseline.ObjectTable, "p": baseline.ObjectTable, "m": baseline.ObjectTable,
+		"i": baseline.ObjectIndex, "I": baseline.ObjectIndex,
+		"S": baseline.ObjectSequence, "v": "", "f": "",
+	} {
+		if got := objectKind(relkind); got != want {
+			t.Errorf("objectKind(%q) = %q, want %q", relkind, got, want)
+		}
+	}
+}

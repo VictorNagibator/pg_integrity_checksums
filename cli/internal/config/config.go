@@ -38,6 +38,7 @@ type Profile struct {
 	ExcludeTablesPlural  []string `yaml:"exclude_tables"`
 	IncludeSystem        *bool    `yaml:"include_system"`
 	IncludeIndexes       *bool    `yaml:"include_indexes"`
+	IncludeSequences     *bool    `yaml:"include_sequences"`
 	Workers              *int     `yaml:"workers"`
 	Timeout              string   `yaml:"timeout"`
 	Strict               *bool    `yaml:"strict"`

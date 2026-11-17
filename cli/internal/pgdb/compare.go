@@ -118,6 +118,7 @@ func (s *CompareSide) Close() error {
 // schema and name.
 func (s *CompareSide) Tables(ctx context.Context, scope baseline.Scope) ([]CompareTable, error) {
 	scope.IncludeIndexes = false
+	scope.IncludeSequences = false
 	candidates, err := Discover(ctx, s.tx, scope)
 	if err != nil {
 		return nil, err

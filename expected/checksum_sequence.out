@@ -1,0 +1,201 @@
+-- Logical sequence checksums: definition plus last_value/is_called.
+CREATE SEQUENCE seq_a;
+CREATE SEQUENCE seq_b;
+-- Not null, and repeatable while nothing changes.
+SELECT pg_sequence_logical_checksum('seq_a') IS NOT NULL AS not_null;
+ not_null 
+----------
+ t
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_a') = pg_sequence_logical_checksum('seq_a')
+       AS repeatable;
+ repeatable 
+------------
+ t
+(1 row)
+
+-- Identity is name and OID independent: equal definitions and states match.
+SELECT pg_sequence_logical_checksum('seq_a') = pg_sequence_logical_checksum('seq_b')
+       AS fresh_equal;
+ fresh_equal 
+-------------
+ t
+(1 row)
+
+-- nextval() changes the checksum.
+CREATE TEMP TABLE seq_before AS
+    SELECT pg_sequence_logical_checksum('seq_a') AS c;
+SELECT nextval('seq_a');
+ nextval 
+---------
+       1
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_a') <> (SELECT c FROM seq_before)
+       AS changed_by_nextval;
+ changed_by_nextval 
+--------------------
+ t
+(1 row)
+
+-- log_cnt is ignored: nextval() pre-logs values (log_cnt > 0), setval()
+-- resets log_cnt to 0, and the two sequences are still equal.
+SELECT setval('seq_b', 1, true);
+ setval 
+--------
+      1
+(1 row)
+
+SELECT (SELECT log_cnt FROM seq_a) <> (SELECT log_cnt FROM seq_b) AS log_cnt_differs,
+       pg_sequence_logical_checksum('seq_a') = pg_sequence_logical_checksum('seq_b')
+       AS equal_after_setval;
+ log_cnt_differs | equal_after_setval 
+-----------------+--------------------
+ t               | t
+(1 row)
+
+-- is_called is part of the state.
+SELECT setval('seq_a', 5, true);
+ setval 
+--------
+      5
+(1 row)
+
+SELECT setval('seq_b', 5, false);
+ setval 
+--------
+      5
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_a') <> pg_sequence_logical_checksum('seq_b')
+       AS is_called_matters;
+ is_called_matters 
+-------------------
+ t
+(1 row)
+
+SELECT setval('seq_b', 5, true);
+ setval 
+--------
+      5
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_a') = pg_sequence_logical_checksum('seq_b')
+       AS same_state_equal;
+ same_state_equal 
+------------------
+ t
+(1 row)
+
+-- Every definition parameter is part of the checksum.
+CREATE TEMP TABLE seq_defs (param text, changed boolean);
+DO $$
+DECLARE
+    base integer;
+    alter_cmd text;
+BEGIN
+    FOREACH alter_cmd IN ARRAY ARRAY[
+        'AS integer', 'START 2', 'INCREMENT 2', 'MINVALUE 0',
+        'MAXVALUE 1000', 'CACHE 10', 'CYCLE']
+    LOOP
+        EXECUTE 'CREATE SEQUENCE seq_def';
+        PERFORM setval('seq_def', 5, true);
+        base := pg_sequence_logical_checksum('seq_def');
+        EXECUTE 'ALTER SEQUENCE seq_def ' || alter_cmd;
+        -- ALTER SEQUENCE ... START does not move last_value, but keep the
+        -- state identical anyway.
+        PERFORM setval('seq_def', 5, true);
+        INSERT INTO seq_defs
+            VALUES (alter_cmd, pg_sequence_logical_checksum('seq_def') <> base);
+        EXECUTE 'DROP SEQUENCE seq_def';
+    END LOOP;
+END
+$$;
+SELECT param, changed FROM seq_defs ORDER BY param;
+     param     | changed 
+---------------+---------
+ AS integer    | t
+ CACHE 10      | t
+ CYCLE         | t
+ INCREMENT 2   | t
+ MAXVALUE 1000 | t
+ MINVALUE 0    | t
+ START 2       | t
+(7 rows)
+
+-- A pinned value: the encoding must be identical on every PostgreSQL
+-- version and byte order.  Changing it invalidates user baselines.
+CREATE SEQUENCE seq_fixed START 10 INCREMENT 5;
+SELECT setval('seq_fixed', 42, true);
+ setval 
+--------
+     42
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_fixed') AS fnv32,
+       pg_sequence_logical_checksum('seq_fixed', 'fnv32') AS fnv32_bytes,
+       pg_sequence_logical_checksum('seq_fixed', 'fnv64') AS fnv64_bytes;
+   fnv32    | fnv32_bytes |    fnv64_bytes     
+------------+-------------+--------------------
+ -473581419 | \xe3c5b895  | \x1d4b1d4fdc8a8607
+(1 row)
+
+SELECT pg_sequence_logical_checksum('seq_fixed', 'fnv32')
+       = int4send(pg_sequence_logical_checksum('seq_fixed')) AS fnv32_overload_agrees;
+ fnv32_overload_agrees 
+-----------------------
+ t
+(1 row)
+
+-- Sequences behind serial and identity columns.
+CREATE TABLE seq_owner (id serial, ident bigint GENERATED ALWAYS AS IDENTITY, v text);
+INSERT INTO seq_owner (v) VALUES ('a'), ('b');
+SELECT pg_sequence_logical_checksum(pg_get_serial_sequence('seq_owner', 'id')::regclass)
+       IS NOT NULL AS serial_ok,
+       pg_sequence_logical_checksum(pg_get_serial_sequence('seq_owner', 'ident')::regclass)
+       IS NOT NULL AS identity_ok;
+ serial_ok | identity_ok 
+-----------+-------------
+ t         | t
+(1 row)
+
+-- Temporary sequences of the own session.
+CREATE TEMP SEQUENCE seq_temp;
+CREATE SEQUENCE seq_c;
+SELECT pg_sequence_logical_checksum('seq_temp') = pg_sequence_logical_checksum('seq_c')
+       AS temp_matches_fresh;
+ temp_matches_fresh 
+--------------------
+ t
+(1 row)
+
+-- Errors.
+SELECT pg_sequence_logical_checksum('seq_owner');
+ERROR:  relation "seq_owner" is not a sequence
+SELECT pg_sequence_logical_checksum('seq_a', 'md5');
+ERROR:  unknown checksum algorithm "md5"
+SELECT pg_sequence_logical_checksum(NULL::regclass) IS NULL AS strict_null;
+ strict_null 
+-------------
+ t
+(1 row)
+
+-- SELECT is required; USAGE (enough for nextval) is not.
+CREATE ROLE checksum_seq_role;
+GRANT USAGE ON SEQUENCE seq_a TO checksum_seq_role;
+GRANT SELECT ON SEQUENCE seq_b TO checksum_seq_role;
+SET ROLE checksum_seq_role;
+SELECT pg_sequence_logical_checksum('seq_a');
+ERROR:  permission denied for sequence seq_a
+SELECT pg_sequence_logical_checksum('seq_b') IS NOT NULL AS select_ok;
+ select_ok 
+-----------
+ t
+(1 row)
+
+RESET ROLE;
+DROP OWNED BY checksum_seq_role;
+DROP ROLE checksum_seq_role;
+DROP TABLE seq_owner;
+DROP SEQUENCE seq_a, seq_b, seq_c, seq_fixed;

@@ -46,6 +46,12 @@ type Options struct {
 	Prior       map[string]baseline.Object
 	Reused      *int
 
+	// SequencesOptional lets Snapshot drop sequences from the scope, with a
+	// warning, when the extension predates pg_sequence_logical_checksum.
+	// capture sets it when sequences were not asked for explicitly; verify
+	// leaves it false, because the baseline's scope must be honoured.
+	SequencesOptional bool
+
 	// Precheck, when set, is called before any relation is checksummed with
 	// a baseline that has only the identity fields filled in (kind, hash,
 	// extension and PostgreSQL versions, database, cluster identity and
@@ -132,7 +138,9 @@ func OpenWithOptions(ctx context.Context, dsn string, opts ConnectOptions) (*sql
 }
 
 // Snapshot discovers objects and computes their checksums in one
-// repeatable-read, read-only transaction. It returns a fully populated
+// repeatable-read, read-only transaction. Sequences are the exception to
+// the single snapshot: they are not transactional, so their state is read
+// as it is when each one is checksummed. It returns a fully populated
 // baseline; the caller decides whether and where to save it.
 func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline, error) {
 	if opts.Kind == "" {
@@ -143,6 +151,10 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 	}
 	if opts.Hash != "" && opts.Hash != baseline.HashFNV32 && opts.Hash != baseline.HashFNV64 {
 		return nil, fmt.Errorf("invalid hash %q", opts.Hash)
+	}
+	// Sequences have a logical checksum only.
+	if opts.Kind == baseline.KindPhysical {
+		opts.Scope.IncludeSequences = false
 	}
 
 	// Table statistics are read before the snapshot transaction starts, on
@@ -213,6 +225,23 @@ func Snapshot(ctx context.Context, db *sql.DB, opts Options) (*baseline.Baseline
 			"SELECT oid::bigint FROM pg_database WHERE datname = current_database()").
 			Scan(&databaseOID); err != nil {
 			return nil, fmt.Errorf("read database oid: %w", err)
+		}
+	}
+
+	if opts.Scope.IncludeSequences {
+		ok, err := hasSequenceChecksum(ctx, tx)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			if !opts.SequencesOptional {
+				return nil, fmt.Errorf("extension %s %s has no pg_sequence_logical_checksum (needs 2.9.0 or later; run ALTER EXTENSION %s UPDATE)",
+					extensionName, extVersion, extensionName)
+			}
+			opts.Scope.IncludeSequences = false
+			if opts.Warning != nil {
+				opts.Warning(fmt.Sprintf("extension %s %s cannot checksum sequences (needs 2.9.0 or later); capturing without sequences", extensionName, extVersion))
+			}
 		}
 	}
 
@@ -410,7 +439,7 @@ func ReadInfo(ctx context.Context, db *sql.DB) (Info, error) {
 	return i, nil
 }
 
-// Discover enumerates top-level tables and indexes in pg_class. It does not
+// Discover enumerates top-level tables, indexes and sequences in pg_class. It does not
 // checksum anything, which keeps doctor cheap and lets capture apply the scope
 // filters before any expensive work starts.
 //
@@ -422,10 +451,8 @@ func Discover(ctx context.Context, q Querier, scope baseline.Scope) ([]Candidate
 		"COALESCE(tn.nspname, ''), COALESCE(tc.relname, '') " +
 		"FROM pg_class c " +
 		"JOIN pg_namespace n ON n.oid = c.relnamespace " +
-		"LEFT JOIN pg_index ix ON ix.indexrelid = c.oid " +
-		"LEFT JOIN pg_class tc ON tc.oid = ix.indrelid " +
-		"LEFT JOIN pg_namespace tn ON tn.oid = tc.relnamespace " +
-		"WHERE c.relkind IN ('r', 'p', 'm', 'i', 'I') " +
+		ownerJoins +
+		"WHERE c.relkind IN ('r', 'p', 'm', 'i', 'I', 'S') " +
 		"AND NOT c.relispartition " +
 		"ORDER BY n.nspname, c.relname"
 	rows, err := q.QueryContext(ctx, query)
@@ -443,13 +470,8 @@ func Discover(ctx context.Context, q Querier, scope baseline.Scope) ([]Candidate
 			return nil, err
 		}
 		// r = ordinary table, p = partitioned table, m = materialized view;
-		// i/I = ordinary/partitioned index.
-		switch relkind {
-		case "r", "p", "m":
-			c.Kind = baseline.ObjectTable
-		case "i", "I":
-			c.Kind = baseline.ObjectIndex
-		default:
+		// i/I = ordinary/partitioned index; S = sequence.
+		if c.Kind = objectKind(relkind); c.Kind == "" {
 			continue
 		}
 		if matchesScope(c, scope) {
@@ -490,10 +512,8 @@ func Inspect(ctx context.Context, q Querier, scope baseline.Scope) ([]Inspection
 		"CASE WHEN c.relkind IN ('r', 'p', 'm') THEN c.relrowsecurity ELSE false END " +
 		"FROM pg_class c " +
 		"JOIN pg_namespace n ON n.oid = c.relnamespace " +
-		"LEFT JOIN pg_index ix ON ix.indexrelid = c.oid " +
-		"LEFT JOIN pg_class tc ON tc.oid = ix.indrelid " +
-		"LEFT JOIN pg_namespace tn ON tn.oid = tc.relnamespace " +
-		"WHERE c.relkind IN ('r', 'p', 'm', 'i', 'I') " +
+		ownerJoins +
+		"WHERE c.relkind IN ('r', 'p', 'm', 'i', 'I', 'S') " +
 		"AND NOT c.relispartition " +
 		"ORDER BY n.nspname, c.relname"
 	rows, err := q.QueryContext(ctx, query)
@@ -509,12 +529,7 @@ func Inspect(ctx context.Context, q Querier, scope baseline.Scope) ([]Inspection
 			&item.TableSchema, &item.TableName, &item.CanSelect, &item.RLS); err != nil {
 			return nil, err
 		}
-		switch relkind {
-		case "r", "p", "m":
-			item.Kind = baseline.ObjectTable
-		case "i", "I":
-			item.Kind = baseline.ObjectIndex
-		default:
+		if item.Kind = objectKind(relkind); item.Kind == "" {
 			continue
 		}
 		if !matchesScope(item.Candidate, scope) {
@@ -542,6 +557,47 @@ func Inspect(ctx context.Context, q Querier, scope baseline.Scope) ([]Inspection
 	return out, nil
 }
 
+// ownerJoins resolves the table an object belongs to: the indexed table of
+// an index, and the table owning a sequence through a serial or identity
+// column or OWNED BY (an 'a' or 'i' dependency on a table column).
+const ownerJoins = "LEFT JOIN pg_index ix ON ix.indexrelid = c.oid " +
+	"LEFT JOIN pg_depend dep ON c.relkind = 'S' " +
+	"AND dep.classid = 'pg_class'::regclass AND dep.objid = c.oid AND dep.objsubid = 0 " +
+	"AND dep.refclassid = 'pg_class'::regclass AND dep.refobjsubid > 0 " +
+	"AND dep.deptype IN ('a', 'i') " +
+	"LEFT JOIN pg_class tc ON tc.oid = COALESCE(ix.indrelid, dep.refobjid) " +
+	"LEFT JOIN pg_namespace tn ON tn.oid = tc.relnamespace "
+
+// objectKind maps a pg_class relkind to a baseline object kind, or "" for a
+// relation kind that baselines do not contain.
+func objectKind(relkind string) string {
+	switch relkind {
+	case "r", "p", "m":
+		return baseline.ObjectTable
+	case "i", "I":
+		return baseline.ObjectIndex
+	case "S":
+		return baseline.ObjectSequence
+	}
+	return ""
+}
+
+// hasSequenceChecksum reports whether the installed extension version has
+// pg_sequence_logical_checksum (2.9.0 and later).
+func hasSequenceChecksum(ctx context.Context, tx *sql.Tx) (bool, error) {
+	var ok bool
+	if err := tx.QueryRowContext(ctx,
+		"SELECT EXISTS (SELECT 1 FROM pg_depend d "+
+			"JOIN pg_extension e ON e.oid = d.refobjid "+
+			"JOIN pg_proc p ON p.oid = d.objid "+
+			"WHERE d.classid = 'pg_proc'::regclass AND d.deptype = 'e' "+
+			"AND e.extname = $1 AND p.proname = 'pg_sequence_logical_checksum')",
+		extensionName).Scan(&ok); err != nil {
+		return false, fmt.Errorf("check extension functions: %w", err)
+	}
+	return ok, nil
+}
+
 // Querier is implemented by both *sql.DB and *sql.Tx. Discover must work
 // inside the snapshot transaction and from doctor's plain connection.
 type Querier interface {
@@ -553,6 +609,9 @@ type Querier interface {
 // table, so --table app.orders also captures its indexes.
 func matchesScope(c Candidate, scope baseline.Scope) bool {
 	if c.Kind == baseline.ObjectIndex && !scope.IncludeIndexes {
+		return false
+	}
+	if c.Kind == baseline.ObjectSequence && !scope.IncludeSequences {
 		return false
 	}
 	if isSystemSchema(c.Schema) {
@@ -567,9 +626,10 @@ func matchesScope(c Candidate, scope baseline.Scope) bool {
 		return false
 	}
 
+	// Indexes, and sequences owned by a table column, follow their table.
 	tableSchema := c.Schema
 	tableName := c.Name
-	if c.Kind == baseline.ObjectIndex {
+	if c.TableName != "" {
 		tableSchema = c.TableSchema
 		tableName = c.TableName
 	}
@@ -809,6 +869,17 @@ func schemaHash(ctx context.Context, tx *sql.Tx, c Candidate) (string, error) {
 		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&spec); err != nil {
 			return "", err
 		}
+	case baseline.ObjectSequence:
+		// The parameters pg_dump restores with CREATE SEQUENCE; the owning
+		// column is covered by the owning table's identity in the object.
+		query := "SELECT c.relpersistence::text || '|' || format_type(s.seqtypid, NULL) || '|' || " +
+			"s.seqstart::text || '|' || s.seqincrement::text || '|' || " +
+			"s.seqmin::text || '|' || s.seqmax::text || '|' || " +
+			"s.seqcache::text || '|' || s.seqcycle::text " +
+			"FROM pg_class c JOIN pg_sequence s ON s.seqrelid = c.oid WHERE c.oid = $1"
+		if err := tx.QueryRowContext(ctx, query, c.OID).Scan(&spec); err != nil {
+			return "", err
+		}
 	default:
 		return "", fmt.Errorf("unknown object kind %q", c.Kind)
 	}
@@ -859,6 +930,11 @@ func checksumObject(ctx context.Context, tx *sql.Tx, extSchema string, c Candida
 		} else {
 			function = "pg_index_logical_checksum"
 		}
+	case baseline.ObjectSequence:
+		if kind == baseline.KindPhysical {
+			return "", "", errors.New("sequences have no physical checksum")
+		}
+		function = "pg_sequence_logical_checksum"
 	default:
 		return "", "", fmt.Errorf("unknown object kind %q", c.Kind)
 	}
@@ -898,6 +974,8 @@ func checksumObject(ctx context.Context, tx *sql.Tx, extSchema string, c Candida
 		} else {
 			function = "pg_index_logical_checksum"
 		}
+		args += ", $2"
+	case baseline.ObjectSequence:
 		args += ", $2"
 	default:
 		return "", "", fmt.Errorf("unknown object kind %q", c.Kind)

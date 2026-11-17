@@ -20,6 +20,7 @@ corruption within one cluster.
 | Tuple | yes | yes | Physical or logical row fingerprint |
 | Table | yes | yes | Data change detection, restore checks |
 | Index | yes | yes | Missing index entries vs corrupt pages |
+| Sequence | — | yes | Sequence carried over by a migration |
 | Database | yes | yes | Whole-database fingerprint |
 
 Page checksums are PostgreSQL’s built-in 16-bit page checksum.  Use

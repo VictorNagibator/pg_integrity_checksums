@@ -16,6 +16,7 @@ New to the extension? Read [Getting started](getting-started.md) and
 | Table logical | `pg_table_logical_checksum(regclass, text)` | `pg_table_logical_checksum(regclass)` |
 | Index physical | `pg_index_physical_checksum(regclass, text)` | `pg_index_physical_checksum(regclass)` |
 | Index logical | `pg_index_logical_checksum(regclass, text)` | `pg_index_logical_checksum(regclass)` |
+| Sequence logical | `pg_sequence_logical_checksum(regclass, text)` | `pg_sequence_logical_checksum(regclass)` |
 | Database physical | `pg_database_physical_checksum(boolean, boolean, text)` | `pg_database_physical_checksum(boolean, boolean)` |
 | Database logical | `pg_database_logical_checksum(boolean, boolean, text)` | `pg_database_logical_checksum(boolean, boolean)` |
 | Database, per relation | `pg_database_physical_checksums(boolean, boolean, regclass[], text)` / `pg_database_logical_checksums(boolean, boolean, regclass[], text)` | same functions (`algorithm` defaults to `fnv32`) |
@@ -283,6 +284,47 @@ the index should contain from the table data; it does not inspect physical
 index pages.  A missing or corrupt index entry is therefore detected by
 `pg_index_physical_checksum`, not by the logical value.
 
+### Sequence Level Functions (Logical Only)
+
+**`pg_sequence_logical_checksum(regclass) -> integer`**
+
+Checksums a sequence: its definition (data type, start, increment, minimum,
+maximum, cache and cycle, from `pg_sequence`) and its state (`last_value`
+and `is_called`).  This is what `pg_dump` restores with `CREATE SEQUENCE` and
+`setval()`, so after a dump/restore or a migration the checksum matches the
+source only if the sequence was carried over: a sequence left at its start
+value, while the table rows were copied, hands out keys that already exist.
+
+```sql
+SELECT pg_sequence_logical_checksum('orders_id_seq'::regclass);
+
+-- Every sequence of a schema, to compare between two databases
+SELECT c.relname, pg_sequence_logical_checksum(c.oid)
+FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+WHERE c.relkind = 'S' AND n.nspname = 'public'
+ORDER BY 1;
+```
+
+* The value does not depend on the sequence's name or OID: two sequences
+  with the same definition and state have the same checksum.
+* `log_cnt` (the number of values pre-logged to WAL) is not included; it
+  changes on `nextval()` and `setval()` without telling anything new.
+* Sequences are not transactional, so the state is read as it is at the
+  call, not as of the transaction snapshot.  Compare sequences while nothing
+  calls `nextval()`, as for any migration cut-over.
+* A physical standby does not match its primary: WAL replay applies the
+  pre-logged value, so `last_value` on a standby is ahead by up to 32 values
+  (and a primary's own value jumps the same way after a crash).  Use it to
+  check migrations, dumps and logical copies, not physical replicas.
+* Requires `SELECT` on the sequence (`USAGE`, which allows `nextval()`, is
+  not enough).  Returns NULL for an unlogged sequence on a standby, which has
+  no state to read.  Fails for a relation that is not a sequence.
+
+Sequences are not part of `pg_database_logical_checksum` or
+`pg_database_logical_checksums`; including them would change existing
+database checksum values.  The [CLI](cli.md) captures them as objects of
+their own.
+
 ### Database Level Functions (Superuser Only)
 
 **`pg_database_physical_checksum(boolean, boolean) -> bigint`**
@@ -451,6 +493,7 @@ pg_table_physical_checksum(regclass, boolean, text)
 pg_table_logical_checksum(regclass, text)
 pg_index_physical_checksum(regclass, text)
 pg_index_logical_checksum(regclass, text)
+pg_sequence_logical_checksum(regclass, text)
 pg_database_physical_checksum(boolean, boolean, text)
 pg_database_logical_checksum(boolean, boolean, text)
 ```

@@ -16,6 +16,13 @@ Unreleased
       warns and leaves sequences out unless they were requested explicitly.
       Older CLI versions cannot read baselines that contain sequences.
 
+    - Feature: capture --hash accepts crc32c and xxh3, which write v2
+      baselines (also as the hash of a config profile); verify and update
+      use the baseline's algorithm as before.  Needs extension 2.9.0 or
+      later: capture fails before the scan on an older extension.  The v2
+      baseline schema lists the new values.  Older CLI releases reject such
+      baselines.
+
     - Feature: new compare command compares the tables of two live
       databases (--source and --target) row by row and reports each
       missing, extra and changed row by key, without copying table data to

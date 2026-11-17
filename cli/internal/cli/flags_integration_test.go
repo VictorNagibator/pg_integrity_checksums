@@ -12,6 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/stdlib"
+
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/baseline"
 	"github.com/VictorNagibator/pg_integrity_checksums/cli/internal/pgdb"
 )
@@ -307,6 +310,112 @@ func TestIntegrationFNV64Baseline(t *testing.T) {
 	capturePath(t, schema, physicalPath, "--hash", "fnv64", "--kind", "physical")
 	if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--quiet"); code != 0 {
 		t.Fatalf("physical v2 verify: code=%d err=%s", code, errOut)
+	}
+}
+
+// TestIntegrationCRC32CAndXXH3Baselines captures, verifies and updates v2
+// baselines with the crc32c and xxh3 algorithms (extension 2.9.0).
+func TestIntegrationCRC32CAndXXH3Baselines(t *testing.T) {
+	if os.Getenv("PGICS_TEST_DSN") == "" {
+		t.Skip("PGICS_TEST_DSN is not set")
+	}
+	db, schema := setupCLITestSchema(t)
+	ctx := context.Background()
+	dir := t.TempDir()
+
+	paths := map[string]string{}
+	for _, hash := range []string{baseline.HashCRC32C, baseline.HashXXH3} {
+		path := filepath.Join(dir, hash+".json")
+		capturePath(t, schema, path, "--hash", hash)
+		b := loadBaselineForTest(t, path)
+		if b.Format != baseline.FormatV2 || b.Hash != hash {
+			t.Fatalf("%s: bad metadata: format=%q hash=%q", hash, b.Format, b.Hash)
+		}
+		if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", path, "--quiet"); code != 0 {
+			t.Fatalf("%s verify: code=%d err=%s", hash, code, errOut)
+		}
+		paths[hash] = path
+	}
+	// Baselines of different algorithms cannot be compared.
+	if code, _, errOut := runCLI("diff", paths[baseline.HashCRC32C], paths[baseline.HashXXH3]); code != 3 {
+		t.Fatalf("crc32c/xxh3 diff: code=%d err=%s", code, errOut)
+	}
+
+	if _, err := db.ExecContext(ctx, "UPDATE "+schema+".accounts SET amount = amount + 1 WHERE id = 1"); err != nil {
+		t.Fatal(err)
+	}
+	for hash, path := range paths {
+		if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", path, "--quiet"); code != 1 {
+			t.Fatalf("%s changed verify: code=%d err=%s", hash, code, errOut)
+		}
+		if code, _, errOut := runCLI("update", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", path, "--yes", "--quiet"); code != 0 {
+			t.Fatalf("%s update: code=%d err=%s", hash, code, errOut)
+		}
+		if after := loadBaselineForTest(t, path); after.Hash != hash {
+			t.Fatalf("%s: update changed the hash to %q", hash, after.Hash)
+		}
+	}
+
+	physicalPath := filepath.Join(dir, "physical-xxh3.json")
+	capturePath(t, schema, physicalPath, "--hash", "xxh3", "--kind", "physical")
+	if code, _, errOut := runCLI("verify", "--db", os.Getenv("PGICS_TEST_DSN"), "--baseline", physicalPath, "--quiet"); code != 0 {
+		t.Fatalf("physical xxh3 verify: code=%d err=%s", code, errOut)
+	}
+}
+
+// TestIntegrationNewHashOldExtension checks that capture with crc32c or xxh3
+// fails with a clear message on an extension older than 2.9.0.
+func TestIntegrationNewHashOldExtension(t *testing.T) {
+	dsn := os.Getenv("PGICS_TEST_DSN")
+	if dsn == "" {
+		t.Skip("PGICS_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	admin, err := pgdb.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+
+	dbname := fmt.Sprintf("pgics_oldhash_%d", time.Now().UnixNano())
+	if _, err := admin.ExecContext(ctx, "CREATE DATABASE "+dbname); err != nil {
+		t.Skipf("cannot create a second database: %v", err)
+	}
+	defer admin.ExecContext(ctx, "DROP DATABASE "+dbname)
+
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Database = dbname
+	oldDSN := stdlib.RegisterConnConfig(cfg)
+	defer stdlib.UnregisterConnConfig(oldDSN)
+	old, err := pgdb.Open(ctx, oldDSN)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Close()
+	for _, stmt := range []string{
+		"CREATE EXTENSION pg_integrity_checksums VERSION '2.8.0'",
+		"CREATE TABLE t (id int PRIMARY KEY)",
+	} {
+		if _, err := old.ExecContext(ctx, stmt); err != nil {
+			t.Skipf("cannot set up extension 2.8.0: %v", err)
+		}
+	}
+
+	for _, hash := range []string{baseline.HashCRC32C, baseline.HashXXH3} {
+		code, _, errOut := runCLI("capture", "--db", oldDSN, "--hash", hash,
+			"--output", filepath.Join(t.TempDir(), hash+".json"), "--quiet")
+		if code == 0 || !strings.Contains(errOut, "needs extension pg_integrity_checksums 2.9.0 or later") ||
+			!strings.Contains(errOut, "2.8.0") {
+			t.Fatalf("%s capture on 2.8.0: code=%d err=%s", hash, code, errOut)
+		}
+	}
+	// fnv64 still works there.
+	if code, _, errOut := runCLI("capture", "--db", oldDSN, "--hash", "fnv64",
+		"--output", filepath.Join(t.TempDir(), "fnv64.json"), "--quiet"); code != 0 {
+		t.Fatalf("fnv64 capture on 2.8.0: code=%d err=%s", code, errOut)
 	}
 }
 

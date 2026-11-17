@@ -409,6 +409,7 @@ SELECT * FROM pg_table_bucket_checksums('diff_a', 4, '{{id}}');
 ERROR:  key columns must be a one-dimensional array
 SELECT * FROM pg_table_bucket_checksums('diff_a', 4, NULL, 'md5');
 ERROR:  unknown checksum algorithm "md5"
+HINT:  Supported algorithms are fnv32, fnv64, crc32c and xxh3.
 SELECT * FROM pg_table_bucket_checksums('diff_a', 4, NULL, NULL);
 ERROR:  checksum algorithm must not be NULL
 SELECT * FROM pg_table_row_checksums('diff_a', 4, '{4}');

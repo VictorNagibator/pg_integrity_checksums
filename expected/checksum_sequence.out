@@ -175,6 +175,7 @@ SELECT pg_sequence_logical_checksum('seq_owner');
 ERROR:  relation "seq_owner" is not a sequence
 SELECT pg_sequence_logical_checksum('seq_a', 'md5');
 ERROR:  unknown checksum algorithm "md5"
+HINT:  Supported algorithms are fnv32, fnv64, crc32c and xxh3.
 SELECT pg_sequence_logical_checksum(NULL::regclass) IS NULL AS strict_null;
  strict_null 
 -------------

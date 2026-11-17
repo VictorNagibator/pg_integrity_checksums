@@ -366,3 +366,43 @@ func TestOldScopeHasNoSequences(t *testing.T) {
 		t.Fatal("a scope written before sequences were supported must not include them")
 	}
 }
+
+func TestNewWithHashCRC32CAndXXH3(t *testing.T) {
+	for _, hash := range []string{HashCRC32C, HashXXH3} {
+		b := NewWithHash("0.7.0", KindLogical, hash, "2.9.0", 160009, "app", testScope(), []Object{{
+			Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "-1",
+		}})
+		if b.Format != FormatV2 || b.Hash != hash {
+			t.Fatalf("%s: bad v2 metadata: format=%q hash=%q", hash, b.Format, b.Hash)
+		}
+		if err := b.Validate(); err != nil {
+			t.Fatalf("%s: v2 validation: %v", hash, err)
+		}
+	}
+}
+
+func TestValidHash(t *testing.T) {
+	for _, h := range []string{"fnv32", "fnv64", "crc32c", "xxh3"} {
+		if !ValidHash(h) {
+			t.Fatalf("ValidHash(%q) = false", h)
+		}
+	}
+	for _, h := range []string{"", "FNV32", "crc32", "xxh64", "sha256"} {
+		if ValidHash(h) {
+			t.Fatalf("ValidHash(%q) = true", h)
+		}
+	}
+}
+
+func TestHashMinExtension(t *testing.T) {
+	for hash, want := range map[string]string{
+		HashFNV32:  "",
+		HashFNV64:  "",
+		HashCRC32C: "2.9.0",
+		HashXXH3:   "2.9.0",
+	} {
+		if got := HashMinExtension(hash); got != want {
+			t.Fatalf("HashMinExtension(%q) = %q, want %q", hash, got, want)
+		}
+	}
+}

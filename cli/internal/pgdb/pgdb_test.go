@@ -184,3 +184,27 @@ func TestObjectKind(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionLess(t *testing.T) {
+	for _, tc := range []struct {
+		a, b string
+		want bool
+	}{
+		{"2.8.0", "2.9.0", true},
+		{"2.9.0", "2.9.0", false},
+		{"2.10.0", "2.9.0", false},
+		{"2.9.1", "2.9.0", false},
+		{"2.2", "2.9.0", true},
+		{"3.0.0", "2.9.0", false},
+		{"2.9", "2.9.0", false},
+		{"1.99.99", "2.0.0", true},
+		// A non-numeric component stops the comparison: equal from there on.
+		{"2.9.0dev", "2.9.0", false},
+		{"2.8.0", "2.x.0", false},
+		{"1.0.0", "2.x", true},
+	} {
+		if got := versionLess(tc.a, tc.b); got != tc.want {
+			t.Fatalf("versionLess(%q, %q) = %v, want %v", tc.a, tc.b, got, tc.want)
+		}
+	}
+}

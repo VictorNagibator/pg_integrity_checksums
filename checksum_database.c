@@ -50,62 +50,31 @@ compute_database_item(Oid relid, char relkind, bool physical, ChecksumAlgo algo,
     if (relkind == RELKIND_INDEX)
     {
         bool        is_null = false;
-        uint32      value = 0;
+        uint64      value;
 
-        if (physical && algo == CHECKSUM_ALGO_FNV64)
-        {
-            uint64      value64 = pg_index_physical_checksum_calc64(relid,
-                                                                    false,
-                                                                    &is_null);
-
-            if (!is_null)
-                *rel_checksum = value64;
-        }
-        else if (physical)
-            value = pg_index_physical_checksum_calc(relid, false, &is_null);
-        else if (algo == CHECKSUM_ALGO_FNV64)
-        {
-            uint64      value64 = pg_index_logical_checksum_calc64(relid,
-                                                                   false,
-                                                                   &is_null);
-
-            if (!is_null)
-                *rel_checksum = value64;
-        }
+        if (physical)
+            value = pg_index_physical_checksum_calc(relid, false, algo,
+                                                    &is_null);
         else
-            value = pg_index_logical_checksum_calc(relid, false, &is_null);
+            value = pg_index_logical_checksum_calc(relid, false, algo,
+                                                   &is_null);
 
         if (is_null)
             *skip = true;
-        else if (algo == CHECKSUM_ALGO_FNV32)
-            *rel_checksum = (uint64) value;
+        else
+            *rel_checksum = value;
     }
+    else if (physical)
+        *rel_checksum = pg_table_physical_checksum_calc(relid, false, false,
+                                                        algo);
     else
     {
-        if (physical && algo == CHECKSUM_ALGO_FNV64)
-            *rel_checksum = pg_table_physical_checksum_calc64(relid, false,
-                                                              false);
-        else if (physical)
-            *rel_checksum = pg_table_physical_checksum_calc(relid, false,
-                                                            false);
-        else
-        {
-            bool        is_null = false;
+        bool        is_null = false;
 
-            if (algo == CHECKSUM_ALGO_FNV64)
-                *rel_checksum = pg_table_logical_checksum_calc64(relid, false,
-                                                                 &is_null);
-            else
-            {
-                int64       value = pg_table_logical_checksum_calc(relid,
-                                                                   false,
-                                                                   &is_null);
-
-                *rel_checksum = (uint64) value;
-            }
-            if (is_null)
-                *skip = true;
-        }
+        *rel_checksum = pg_table_logical_checksum_calc(relid, false, algo,
+                                                       &is_null);
+        if (is_null)
+            *skip = true;
     }
 }
 
@@ -516,7 +485,7 @@ typedef struct LogicalGroupState
 static inline void
 group_accum_add(ChecksumLogicalAccum64 *acc, uint64 h, ChecksumAlgo algo)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         acc->sum += hash_mix64((uint64) (uint32) h);
     else
         acc->sum += hash_mix64(h);
@@ -526,7 +495,7 @@ group_accum_add(ChecksumLogicalAccum64 *acc, uint64 h, ChecksumAlgo algo)
 static uint64
 group_accum_finalize(ChecksumLogicalAccum64 *acc, ChecksumAlgo algo)
 {
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
     {
         ChecksumLogicalAccum acc32 = {acc->sum, acc->count};
 
@@ -1102,7 +1071,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     if (workers < 1)
         compute_database_items(items, 0, nitems, physical, algo, &acc,
                                physical ? NULL : &lacc,
-                               (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                               (!physical && !checksum_algo_is32(algo)) ? &lacc64 : NULL,
                                &skipped);
     else
     {
@@ -1134,12 +1103,12 @@ compute_database_checksum_internal(bool physical, bool include_system,
                                                 Min(workers, (int) nitems),
                                                 algo, &acc,
                                                 physical ? NULL : &lacc,
-                                                (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                                                (!physical && !checksum_algo_is32(algo)) ? &lacc64 : NULL,
                                                 &skipped);
 
         compute_database_items(serial_items, 0, nserial, physical, algo, &acc,
                                physical ? NULL : &lacc,
-                               (!physical && algo == CHECKSUM_ALGO_FNV64) ? &lacc64 : NULL,
+                               (!physical && !checksum_algo_is32(algo)) ? &lacc64 : NULL,
                                &skipped);
     }
 
@@ -1172,7 +1141,7 @@ compute_database_checksum_internal(bool physical, bool include_system,
     if (physical)
         return checksum_accum64_finalize(&acc);
 
-    if (algo == CHECKSUM_ALGO_FNV64)
+    if (!checksum_algo_is32(algo))
         return logical_accum_finalize64(&lacc64);
 
     return (uint64) logical_accum_finalize(&lacc);
@@ -1282,7 +1251,7 @@ pg_database_logical_checksum_algo(PG_FUNCTION_ARGS)
                                                      false, include_indexes,
                                                      algorithm, NULL, 0, NULL);
 
-    PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+    PG_RETURN_BYTEA_P(checksum_bytea(db_checksum, checksum_algo_len(algorithm)));
 }
 
 /*
@@ -1357,7 +1326,7 @@ database_checksum_row_cmp(const void *a, const void *b)
 static int
 relation_checksum_width(char relkind, bool physical, ChecksumAlgo algo)
 {
-    if (algo == CHECKSUM_ALGO_FNV64)
+    if (!checksum_algo_is32(algo))
         return 8;
     if (physical && relkind != RELKIND_INDEX)
         return 8;

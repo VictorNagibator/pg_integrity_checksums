@@ -11,6 +11,13 @@
 --   fnv32: BE4(fnv32(type tag)) || BE4(attnum) || send bytes
 -- and a row as FNV-1a over the concatenated column hashes (LE8 for fnv64,
 -- BE4 for fnv32), where attnum is the position among the live columns.
+-- crc32c is a CRC-32C, continued from the 32-bit FNV offset basis, over
+--   LE4(crc32c(type tag)) || LE4(attnum) || send bytes
+-- and a row over the concatenated LE4 column hashes.  xxh3 is not a
+-- streaming hash: every step is one XXH3 call seeded with the previous
+-- result, starting from the 64-bit FNV offset basis:
+--   xxh3(send bytes, seed => xxh3(LE8(attnum), seed => xxh3(LE8(tag hash))))
+-- and a row folds xxh3(LE8(column hash), seed => running hash).
 
 SET TimeZone = 'UTC';
 SET DateStyle = 'ISO, YMD';
@@ -25,6 +32,22 @@ LANGUAGE sql IMMUTABLE AS $$
     FROM generate_series(1, 8) AS i
 $$;
 
+-- bytea little-endian copy of a 4-byte big-endian value
+CREATE FUNCTION pg_temp.le4(b bytea) RETURNS bytea
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT string_agg(substr(b, i, 1), ''::bytea ORDER BY i DESC)
+    FROM generate_series(1, 4) AS i
+$$;
+
+-- one XXH3 step: hash data seeded with a previous digest
+CREATE FUNCTION pg_temp.xxh3_step(seed bytea, data bytea) RETURNS bytea
+LANGUAGE sql IMMUTABLE AS $$
+    SELECT pg_data_checksum(data, pg_checksum_bigint(seed), 'xxh3')
+$$;
+
+-- The starting state of a value is the FNV offset basis of its width:
+-- 2166136261 (32-bit) or 14695981039346656037, as a bigint
+-- -3750763034362895579 (64-bit).
 CREATE FUNCTION pg_temp.expected_cell(tag text, attnum int, payload bytea,
                                       algo text) RETURNS bytea
 LANGUAGE sql IMMUTABLE AS $$
@@ -33,6 +56,20 @@ LANGUAGE sql IMMUTABLE AS $$
             pg_data_checksum(pg_temp.le8(pg_text_checksum(tag, 0, 'fnv64')) ||
                              pg_temp.le8(int8send(attnum::bigint)) || payload,
                              0, 'fnv64')
+        WHEN 'crc32c' THEN
+            pg_data_checksum(pg_temp.le4(pg_text_checksum(tag, 2166136261,
+                                                          'crc32c')) ||
+                             pg_temp.le4(int4send(attnum)) || payload,
+                             2166136261, 'crc32c')
+        WHEN 'xxh3' THEN
+            pg_temp.xxh3_step(
+                pg_temp.xxh3_step(
+                    pg_data_checksum(pg_temp.le8(pg_text_checksum(tag,
+                                                                  -3750763034362895579,
+                                                                  'xxh3')),
+                                     -3750763034362895579, 'xxh3'),
+                    pg_temp.le8(int8send(attnum::bigint))),
+                payload)
         ELSE
             pg_data_checksum(pg_text_checksum(tag, 0, 'fnv32') ||
                              int4send(attnum) || payload,
@@ -132,9 +169,23 @@ SELECT c.tag, a.algo,
                         = pg_temp.expected_cell(c.tag, c.ordinal, c.payload,
                                                 a.algo)) AS matching
 FROM pg_temp.fastpath_cells() AS c,
-     (VALUES ('fnv32'), ('fnv64')) AS a(algo)
+     (VALUES ('fnv32'), ('fnv64'), ('crc32c'), ('xxh3')) AS a(algo)
 GROUP BY c.ordinal, c.tag, a.algo
 ORDER BY c.ordinal, a.algo;
+
+-- The row fold of xxh3: one seeded step per column hash, in order.
+CREATE FUNCTION pg_temp.xxh3_row(cells bytea[]) RETURNS bytea
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE
+    h bytea := int8send(-3750763034362895579);
+    c bytea;
+BEGIN
+    FOREACH c IN ARRAY cells LOOP
+        h := pg_temp.xxh3_step(h, pg_temp.le8(c));
+    END LOOP;
+    RETURN h;
+END
+$$;
 
 -- Tuple checksums: the deformed row hashes the same cells in order.
 SELECT t.tid,
@@ -145,7 +196,15 @@ SELECT t.tid,
        pg_tuple_logical_checksum('fastpath'::regclass, t.tid, 'fnv32')
          = pg_data_checksum(string_agg(
                pg_temp.expected_cell(t.tag, t.ordinal, t.payload, 'fnv32'),
-               ''::bytea ORDER BY t.ordinal), 0, 'fnv32') AS fnv32_matches
+               ''::bytea ORDER BY t.ordinal), 0, 'fnv32') AS fnv32_matches,
+       pg_tuple_logical_checksum('fastpath'::regclass, t.tid, 'crc32c')
+         = pg_data_checksum(string_agg(pg_temp.le4(
+               pg_temp.expected_cell(t.tag, t.ordinal, t.payload, 'crc32c')),
+               ''::bytea ORDER BY t.ordinal), 2166136261, 'crc32c') AS crc32c_matches,
+       pg_tuple_logical_checksum('fastpath'::regclass, t.tid, 'xxh3')
+         = pg_temp.xxh3_row(array_agg(
+               pg_temp.expected_cell(t.tag, t.ordinal, t.payload, 'xxh3')
+               ORDER BY t.ordinal)) AS xxh3_matches
 FROM pg_temp.fastpath_cells() AS t
 GROUP BY t.tid
 ORDER BY t.tid;

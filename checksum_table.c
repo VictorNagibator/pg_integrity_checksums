@@ -140,14 +140,15 @@ pg_table_physical_checksum(PG_FUNCTION_ARGS)
 
     PG_RETURN_INT64((int64)
                     pg_table_physical_checksum_calc(reloid, include_header,
-                                                    true));
+                                                    true,
+                                                    CHECKSUM_ALGO_FNV32));
 }
 
 /*
  * pg_table_physical_checksum_algo - generic physical table checksum
  *
  * Physical table checksums include relation identity, so their SQL shape is
- * an 8-byte digest for both fnv32 and fnv64.
+ * an 8-byte digest for every algorithm.
  */
 PG_FUNCTION_INFO_V1(pg_table_physical_checksum_algo);
 
@@ -261,14 +262,11 @@ pg_table_physical_checksum_common(Oid reloid, bool include_header,
 
         nblocks = RelationGetNumberOfBlocks(rel);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
-            scan_relation_raw_pages(rel, 0, nblocks, &acc32);
-        else
-            scan_relation_raw_pages64(rel, 0, nblocks, &acc64);
+        scan_relation_raw_pages(rel, 0, nblocks, algo, &acc32, &acc64);
 
         relation_close(rel, AccessShareLock);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
+        if (checksum_algo_is32(algo))
         {
             uint32      aggregate32;
 
@@ -311,12 +309,8 @@ pg_table_physical_checksum_common(Oid reloid, bool include_header,
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
-            scan_table_blocks_physical(rel, 0, nblocks, include_header,
-                                       snapshot, &acc32, bstrategy);
-        else
-            scan_table_blocks_physical64(rel, 0, nblocks, include_header,
-                                         snapshot, &acc64, bstrategy);
+        scan_table_blocks_physical(rel, 0, nblocks, include_header,
+                                   snapshot, algo, &acc32, &acc64, bstrategy);
         FreeAccessStrategy(bstrategy);
     }
     else
@@ -327,7 +321,7 @@ pg_table_physical_checksum_common(Oid reloid, bool include_header,
 
     relation_close(rel, AccessShareLock);
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
     {
         uint32      aggregate32;
 
@@ -345,27 +339,14 @@ pg_table_physical_checksum_common(Oid reloid, bool include_header,
 }
 
 /*
- * pg_table_physical_checksum_calc - 32-bit physical table checksum
+ * pg_table_physical_checksum_calc - physical table checksum for one algo
  */
 uint64
 pg_table_physical_checksum_calc(Oid reloid, bool include_header,
-                                bool check_privileges)
+                                bool check_privileges, ChecksumAlgo algo)
 {
     return pg_table_physical_checksum_common(reloid, include_header,
-                                             check_privileges,
-                                             CHECKSUM_ALGO_FNV32);
-}
-
-/*
- * pg_table_physical_checksum_calc64 - 64-bit physical table checksum
- */
-uint64
-pg_table_physical_checksum_calc64(Oid reloid, bool include_header,
-                                  bool check_privileges)
-{
-    return pg_table_physical_checksum_common(reloid, include_header,
-                                             check_privileges,
-                                             CHECKSUM_ALGO_FNV64);
+                                             check_privileges, algo);
 }
 
 /*
@@ -388,7 +369,9 @@ pg_table_logical_checksum(PG_FUNCTION_ARGS)
 
     reloid = PG_GETARG_OID(0);
 
-    result = pg_table_logical_checksum_calc(reloid, true, &is_null);
+    result = (int64) pg_table_logical_checksum_calc(reloid, true,
+                                                    CHECKSUM_ALGO_FNV32,
+                                                    &is_null);
 
     if (is_null)
         PG_RETURN_NULL();
@@ -418,7 +401,7 @@ pg_table_logical_checksum_algo(PG_FUNCTION_ARGS)
         PG_RETURN_NULL();
 
     PG_RETURN_BYTEA_P(checksum_bytea(result,
-                                     algorithm == CHECKSUM_ALGO_FNV32 ? 4 : 8));
+                                     checksum_algo_len(algorithm)));
 }
 
 /*
@@ -512,12 +495,8 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-        if (algo == CHECKSUM_ALGO_FNV32)
-            scan_table_blocks_logical(rel, 0, nblocks, snapshot, acc32,
-                                      bstrategy, order_desc);
-        else
-            scan_table_blocks_logical64(rel, 0, nblocks, snapshot, acc64,
-                                        bstrategy, order_desc);
+        scan_table_blocks_logical(rel, 0, nblocks, snapshot, algo, acc32,
+                                  acc64, bstrategy, order_desc);
         FreeAccessStrategy(bstrategy);
     }
     else
@@ -547,31 +526,19 @@ pg_table_logical_checksum_common(Oid reloid, bool check_privileges,
     if (*is_null)
         return 0;
 
-    if (algo == CHECKSUM_ALGO_FNV32)
+    if (checksum_algo_is32(algo))
         return logical_accum_finalize(&acc32);
 
     return logical_accum_finalize64(&acc64);
 }
 
 /*
- * pg_table_logical_checksum_calc - 32-bit logical table checksum
- */
-int64
-pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
-                               bool *is_null)
-{
-    return (int64) pg_table_logical_checksum_common(reloid, check_privileges,
-                                                    CHECKSUM_ALGO_FNV32,
-                                                    is_null);
-}
-
-/*
- * pg_table_logical_checksum_calc64 - 64-bit logical table checksum
+ * pg_table_logical_checksum_calc - logical table checksum for one algo
  */
 uint64
-pg_table_logical_checksum_calc64(Oid reloid, bool check_privileges,
-                                 bool *is_null)
+pg_table_logical_checksum_calc(Oid reloid, bool check_privileges,
+                               ChecksumAlgo algo, bool *is_null)
 {
-    return pg_table_logical_checksum_common(reloid, check_privileges,
-                                            CHECKSUM_ALGO_FNV64, is_null);
+    return pg_table_logical_checksum_common(reloid, check_privileges, algo,
+                                            is_null);
 }

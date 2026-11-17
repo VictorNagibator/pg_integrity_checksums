@@ -27,7 +27,8 @@
  * physical checksums.
  *
  * The default functions return 32-bit FNV-1a values; overloads with an
- * algorithm argument ('fnv32' or 'fnv64') return big-endian bytea digests.
+ * algorithm argument ('fnv32', 'fnv64', 'crc32c' or 'xxh3') return
+ * big-endian bytea digests.
  * Page-level functions use PostgreSQL's own 16-bit page checksum.  The
  * pg_integrity_checksums.strict GUC makes database scans fail instead of
  * skipping relations without a usable checksum.
@@ -179,7 +180,7 @@ AS 'MODULE_PATHNAME', 'pg_sequence_logical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_sequence_logical_checksum(regclass, text) IS
-'Generic logical sequence checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical sequence checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 /*-----------------------------------------------------------
  * DATABASE LEVEL FUNCTIONS (Physical and Logical)
@@ -303,7 +304,7 @@ AS 'MODULE_PATHNAME', 'pg_data_checksum_algo'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION pg_data_checksum(bytea, bigint, text) IS
-'Generic binary data checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes, both big-endian.';
+'Generic binary data checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes, all big-endian. For crc32c the seed is a previous CRC-32C to continue (0 starts a new one).';
 
 CREATE FUNCTION pg_text_checksum(text, bigint, text)
 RETURNS bytea
@@ -311,7 +312,7 @@ AS 'MODULE_PATHNAME', 'pg_text_checksum_algo'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION pg_text_checksum(text, bigint, text) IS
-'Generic text checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes, both big-endian.';
+'Generic text checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes, all big-endian. For crc32c the seed is a previous CRC-32C to continue (0 starts a new one).';
 
 CREATE FUNCTION pg_checksum_bigint(bytea)
 RETURNS bigint
@@ -327,7 +328,7 @@ AS 'MODULE_PATHNAME', 'pg_table_logical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_table_logical_checksum(regclass, text) IS
-'Generic logical table checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical table checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_index_logical_checksum(regclass, text)
 RETURNS bytea
@@ -335,7 +336,7 @@ AS 'MODULE_PATHNAME', 'pg_index_logical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_index_logical_checksum(regclass, text) IS
-'Generic logical index checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical index checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_cell_checksum(regclass, tid, integer, text)
 RETURNS bytea
@@ -343,7 +344,7 @@ AS 'MODULE_PATHNAME', 'pg_cell_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_cell_checksum(regclass, tid, integer, text) IS
-'Generic logical cell checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical cell checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_tuple_logical_checksum(regclass, tid, text)
 RETURNS bytea
@@ -351,7 +352,7 @@ AS 'MODULE_PATHNAME', 'pg_tuple_logical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_tuple_logical_checksum(regclass, tid, text) IS
-'Generic logical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical tuple checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_database_logical_checksum(boolean, boolean, text)
 RETURNS bytea
@@ -359,7 +360,7 @@ AS 'MODULE_PATHNAME', 'pg_database_logical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_database_logical_checksum(boolean, boolean, text) IS
-'Generic logical database checksum. Requires superuser. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic logical database checksum. Requires superuser. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 REVOKE EXECUTE ON FUNCTION pg_database_logical_checksum(boolean, boolean, text) FROM PUBLIC;
 
@@ -369,7 +370,7 @@ AS 'MODULE_PATHNAME', 'pg_checksum_bigint'
 LANGUAGE C STRICT IMMUTABLE PARALLEL SAFE;
 
 COMMENT ON FUNCTION pg_checksum_bigint(bytea, boolean) IS
-'Convert a digest to bigint. The second argument selects unsigned interpretation for 4-byte fnv32 digests.';
+'Convert a digest to bigint. The second argument selects unsigned interpretation for 4-byte (fnv32, crc32c) digests.';
 
 CREATE FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean, text)
 RETURNS bytea
@@ -377,7 +378,7 @@ AS 'MODULE_PATHNAME', 'pg_tuple_physical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_tuple_physical_checksum(regclass, tid, boolean, text) IS
-'Generic physical tuple checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic physical tuple checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_table_physical_checksum(regclass, boolean, text)
 RETURNS bytea
@@ -385,7 +386,7 @@ AS 'MODULE_PATHNAME', 'pg_table_physical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_table_physical_checksum(regclass, boolean, text) IS
-'Generic physical table checksum. Returns an 8-byte digest for fnv32 and fnv64.';
+'Generic physical table checksum. Returns an 8-byte digest for every algorithm (fnv32, fnv64, crc32c, xxh3).';
 
 CREATE FUNCTION pg_index_physical_checksum(regclass, text)
 RETURNS bytea
@@ -393,7 +394,7 @@ AS 'MODULE_PATHNAME', 'pg_index_physical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_index_physical_checksum(regclass, text) IS
-'Generic physical index checksum. Algorithm fnv32 returns 4 bytes, fnv64 returns 8 bytes.';
+'Generic physical index checksum. Algorithms fnv32 and crc32c return 4 bytes, fnv64 and xxh3 return 8 bytes.';
 
 CREATE FUNCTION pg_database_physical_checksum(boolean, boolean, text)
 RETURNS bytea
@@ -401,7 +402,7 @@ AS 'MODULE_PATHNAME', 'pg_database_physical_checksum_algo'
 LANGUAGE C STRICT;
 
 COMMENT ON FUNCTION pg_database_physical_checksum(boolean, boolean, text) IS
-'Generic physical database checksum. Requires superuser. Returns an 8-byte digest for fnv32 and fnv64.';
+'Generic physical database checksum. Requires superuser. Returns an 8-byte digest for every algorithm (fnv32, fnv64, crc32c, xxh3).';
 
 REVOKE EXECUTE ON FUNCTION pg_database_physical_checksum(boolean, boolean, text) FROM PUBLIC;
 

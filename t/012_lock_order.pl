@@ -12,6 +12,7 @@ use warnings FATAL => 'all';
 use PostgreSQL::Test::Utils;
 use Test::More;
 use PostgreSQL::Test::Cluster;
+use Time::HiRes qw(usleep);
 
 my $pg_config_version = qx{pg_config --version};
 my ($pg_major) = $pg_config_version =~ /(\d+)/;
@@ -42,9 +43,23 @@ sub checksum_during_ddl
     $s1->query_safe("LOCK TABLE $lock_table IN ACCESS EXCLUSIVE MODE");
 
     $s2->query_until(qr/started/, "\\echo started\n$checksum;\n");
-    $node->poll_query_until('postgres',
-        "SELECT count(*) > 0 FROM pg_locks WHERE NOT granted")
-      or die 'the checksum did not wait for the lock';
+
+    # Wait until the checksum waits for the lock.  Not poll_query_until():
+    # under MSYS Perl on Windows its output keeps a trailing \r and never
+    # equals the expected value.
+    my $waiting = 0;
+    foreach my $i (1 .. 10 * $PostgreSQL::Test::Utils::timeout_default)
+    {
+        my $out = $node->safe_psql('postgres',
+            'SELECT count(*) > 0 FROM pg_locks WHERE NOT granted');
+        if ($out =~ /^t\s*$/)
+        {
+            $waiting = 1;
+            last;
+        }
+        usleep(100_000);
+    }
+    die 'the checksum did not wait for the lock' unless $waiting;
 
     # Each query clears the stderr of the previous one: collect it as we go.
     my $errors = '';

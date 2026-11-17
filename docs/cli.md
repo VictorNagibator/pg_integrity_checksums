@@ -111,6 +111,7 @@ pg_integrity_checksums config    validate|show [options]
 pg_integrity_checksums capture   [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums verify    [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums diff      OLD.json NEW.json [options]
+pg_integrity_checksums compare   --source DSN --target DSN [options]
 pg_integrity_checksums show      FILE [options]
 pg_integrity_checksums update    [--config FILE] [--profile NAME] [options]
 pg_integrity_checksums doctor    [--config FILE] [--profile NAME] [options]
@@ -265,6 +266,60 @@ Flags and the two files may appear in any order.  `--format` accepts `text`,
 changes are found and `0` when the object maps match.  `--no-fail` makes a
 change-only diff exit 0.
 
+### `compare`
+
+Compares the tables of two live databases row by row, for example a primary
+and a logical replica, or a database and its restored dump.  It needs
+extension 2.8.0 or later on both servers.  Table data is not copied to the
+client: for each table present on both sides the CLI compares
+`pg_table_bucket_checksums` per bucket of the key hash, then fetches
+`pg_table_row_checksums` for the differing buckets only and reports each
+missing (source only), extra (target only) or changed row by key.
+
+```bash
+pg_integrity_checksums compare \
+  --source "postgresql://primary/app" --target "postgresql://replica/app" \
+  --schema public --workers 4
+```
+
+```text
+DIFFERENT      public.orders source_rows=200000 target_rows=200000 differing_buckets=3/3125
+  CHANGED  (777)
+  EXTRA    (300000)
+  MISSING  (12345)
+ONLY_IN_TARGET public.audit_tmp
+tables=2 equal=0 different=1 only_in_source=0 only_in_target=1 schema_differs=0 errors=0 missing_rows=1 extra_rows=1 changed_rows=1
+```
+
+- Tables (ordinary, partitioned and materialized views; partitions through
+  their parent) are matched by `schema.table`; `--schema`, `--exclude-schema`,
+  `--table`, `--exclude-table` and `--include-system` select them as in
+  `capture`.
+- The key is the source table's primary key, or the whole row when it has
+  none (a changed row then shows up as a missing and an extra row).
+  `--key schema.table=col1,col2` sets it per table; `--key schema.table=`
+  selects the whole row.
+- A table whose columns (names and types, in order) differ is reported as
+  `schema_differs` and not compared.  An error in one table (missing
+  privilege, row-level security, unknown key column) is reported as `error`
+  and the other tables are still compared.
+- `--buckets` is the number of buckets per table; the default (0) aims at
+  about 64 rows per bucket from the planner estimate.  Rows are listed when
+  the differing buckets of a table hold at most `--max-rows` rows (default
+  10000); otherwise only the bucket counts are reported.
+- Each side is read in one repeatable-read, read-only transaction, but the
+  two snapshots are taken independently: compare databases that are not
+  being written to, or expect rows in flight to show up.
+- Checksums use FNV-1a 64-bit.  `--workers` sets
+  `pg_integrity_checksums.workers` on both servers, which parallelizes the
+  bucket scans.  `--timeout`, `--connect-timeout` and `--application-name`
+  apply to both connections.
+
+`--format` accepts `text` or `json`; `--show-ok` lists equal tables in the
+text report.  Exit code is `1` when anything differs (including tables only
+on one side, schema differences and per-table errors) unless `--no-fail` is
+given, `0` when the databases match and `2` for operational errors.
+
 ### `show`
 
 Prints baseline metadata and a compact object summary.  With `--format json`
@@ -363,7 +418,7 @@ release tag; `main` may contain unreleased changes.
 | Code | Meaning |
 |---:|---|
 | 0 | Success / no blocking differences |
-| 1 | Differences found (according to `--fail-on`), or diff found changes |
+| 1 | Differences found (according to `--fail-on`), or diff/compare found differences |
 | 2 | Operational error: connection, SQL, permissions, corrupt page |
 | 3 | Invalid baseline: format, JSON, kind or incompatible version |
 | 4 | `update`/destructive operation refused without `--yes` |

@@ -215,6 +215,9 @@ in:
    FROM pg_table_row_checksums('orders', 1024, '{17,512}');
    ```
 
+   The CLI does both steps for every table of two databases:
+   `pg_integrity_checksums compare --source DSN --target DSN`.
+
 5. **If the data is identical but the storage is suspect**, verify the pages
    against their stored checksums (needs `data_checksums = on`).  The check
    reads the on-disk copy of each page, so run `CHECKPOINT` first; pages that

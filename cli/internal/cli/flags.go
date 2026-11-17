@@ -74,6 +74,7 @@ func usage(w io.Writer) {
 		"  pg_integrity_checksums capture [options]\n" +
 		"  pg_integrity_checksums verify  [options]\n" +
 		"  pg_integrity_checksums diff    OLD.json NEW.json [options]\n" +
+		"  pg_integrity_checksums compare --source DSN --target DSN [options]\n" +
 		"  pg_integrity_checksums show    FILE [options]\n" +
 		"  pg_integrity_checksums update  [options]\n" +
 		"  pg_integrity_checksums doctor  [options]\n" +

@@ -42,6 +42,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runVerify(ctx, args[1:], stdout, stderr)
 	case "diff":
 		return runDiff(ctx, args[1:], stdout, stderr)
+	case "compare":
+		return runCompare(ctx, args[1:], stdout, stderr)
 	case "show":
 		return runShow(ctx, args[1:], stdout, stderr)
 	case "update":

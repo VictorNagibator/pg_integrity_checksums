@@ -120,6 +120,7 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	fs.Var(&excludeTables, "exclude-table", "exclude schema.table (repeatable; globs allowed)")
 	includeSystem := fs.Bool("include-system", false, "include system schemas")
 	noIndexes := fs.Bool("no-indexes", false, "do not capture indexes")
+	noSequences := fs.Bool("no-sequences", false, "do not capture sequences")
 	workers := fs.Int("workers", 0, "pg_integrity_checksums.workers")
 	timeout := fs.Duration("timeout", 0, "statement timeout, e.g. 5m")
 	strict := fs.Bool("strict", false, "fail when an object cannot be checksummed")
@@ -170,6 +171,9 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	if !set["no-indexes"] && profile.IncludeIndexes != nil {
 		*noIndexes = !*profile.IncludeIndexes
 	}
+	if !set["no-sequences"] && profile.IncludeSequences != nil {
+		*noSequences = !*profile.IncludeSequences
+	}
 	*workers = intValue(set, "workers", *workers, profile.Workers)
 	if !set["timeout"] && profile.Timeout != "" {
 		parsed, err := profileDuration(profile.Timeout)
@@ -219,6 +223,7 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 	scope.ExcludeTables = append(scope.ExcludeTables, excludeTables...)
 	scope.IncludeSystem = *includeSystem
 	scope.IncludeIndexes = !*noIndexes
+	scope.IncludeSequences = !*noSequences
 
 	db, err := pgdb.OpenWithOptions(ctx, *dsn, pgdb.ConnectOptions{
 		Timeout:         *connectTimeout,
@@ -238,6 +243,12 @@ func runCapture(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		Timeout:     *timeout,
 		Strict:      *strict,
 		Progress:    progress(*quiet, stderr),
+		// Sequences are captured by default; only an explicit request
+		// fails on an extension that cannot checksum them.
+		SequencesOptional: !set["no-sequences"] && profile.IncludeSequences == nil,
+		Warning: func(msg string) {
+			fmt.Fprintln(stderr, "warning: "+msg)
+		},
 	})
 	if err != nil {
 		return commandError(stderr, err)
@@ -964,6 +975,9 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	if profile.IncludeIndexes != nil {
 		scope.IncludeIndexes = *profile.IncludeIndexes
+	}
+	if profile.IncludeSequences != nil {
+		scope.IncludeSequences = *profile.IncludeSequences
 	}
 	items, err := pgdb.Inspect(ctx, db, scope)
 	if err != nil {

@@ -41,7 +41,9 @@ These limitations are documented rather than silently ignored.
   `pg_index_physical_checksum` for actual index storage.
 * **Coverage gaps.** The database physical checksum does not include TOAST
   content by default, and never includes sequences, large objects (unless
-  `include_system = true`), FSM/VM forks or relation free space.  Foreign
+  `include_system = true`), FSM/VM forks or relation free space.  The
+  database logical checksum does not include sequences either; check them
+  with `pg_sequence_logical_checksum` or the CLI, which captures them.  Foreign
   table partitions are skipped by partitioned table checksums because they
   have no local storage in this database.
 * **Non-cryptographic hashes.** The default SQL API uses 32-bit FNV-1a;

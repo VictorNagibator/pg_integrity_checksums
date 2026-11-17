@@ -24,6 +24,20 @@ Unreleased
       ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0'.  Checksum
       values do not change.
 
+    - Feature: pg_sequence_logical_checksum(regclass) and the generic
+      pg_sequence_logical_checksum(regclass, text) checksum a sequence: its
+      data type, start, increment, minimum, maximum, cache and cycle, and
+      its last_value and is_called (what pg_dump restores with setval()).
+      log_cnt is left out.  Comparing sequences after a migration catches
+      rows copied with the sequence left behind, which a table checksum
+      cannot see.  The state is read at the call, not as of the snapshot
+      (sequences are not transactional), and a physical standby is ahead of
+      its primary by the pre-logged values.  Requires SELECT on the
+      sequence; returns NULL for an unlogged sequence on a standby.
+      Database checksums do not include sequences, so no existing checksum
+      value changes.  New SQL functions: run ALTER EXTENSION
+      pg_integrity_checksums UPDATE TO '2.9.0'.
+
     - Fix: pg_page_checksum_status() reported a modified page of a temporary
       table as mismatch: it compared the local buffer, whose pd_checksum is
       only set when the page is written out.  Temporary tables are now read

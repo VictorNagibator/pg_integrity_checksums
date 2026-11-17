@@ -64,6 +64,12 @@ ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0';
 What changes:
 
 - **No checksum value changes.**
+- `pg_sequence_logical_checksum()` checksums a sequence's definition and
+  `last_value`/`is_called` (see
+  [Sequence Level Functions](functions.md#sequence-level-functions-logical-only)).
+  Database checksums still do not include sequences, so their values do not
+  change.  The CLI captures sequences in new logical baselines; baselines
+  captured before do not cover them until they are captured again.
 - `pg_page_checksum_status()` on a temporary table reads the page from the
   table's file, like for other relations.  It used to compare the local buffer,
   whose `pd_checksum` is only set when the page is written out, so a modified

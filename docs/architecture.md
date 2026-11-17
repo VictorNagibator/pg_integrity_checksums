@@ -6,7 +6,7 @@ It is intended for contributors and advanced users; start with
 
 ## Scope
 
-The extension exposes six levels of checksums:
+The extension exposes six levels of checksums, plus sequences:
 
 | Level | Physical | Logical |
 |---|---:|---:|
@@ -15,6 +15,7 @@ The extension exposes six levels of checksums:
 | Tuple | yes | yes |
 | Table | yes | yes |
 | Index | yes | yes |
+| Sequence | — | yes |
 | Database | yes | yes |
 
 Page checksums are PostgreSQL's built-in checksum and do not use the
@@ -221,6 +222,7 @@ The implementation is split into a small set of translation units:
 | `checksum_database.c` | database enumeration and database SQL entry points |
 | `checksum_utility.c` | generic data/text checksum helpers |
 | `checksum_diff.c` | key bucket, row and block range checksums for locating differing rows |
+| `checksum_sequence.c` | logical sequence checksums (definition plus `last_value`/`is_called`) |
 | `checksum_internal.h` | internal interfaces and state shared by the modules |
 
 The split is a maintainability refactor, not a behavioral change.

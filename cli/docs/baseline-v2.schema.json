@@ -141,6 +141,9 @@
         },
         "include_indexes": {
           "type": "boolean"
+        },
+        "include_sequences": {
+          "type": "boolean"
         }
       }
     },
@@ -185,7 +188,8 @@
         "kind": {
           "enum": [
             "table",
-            "index"
+            "index",
+            "sequence"
           ]
         },
         "schema": {

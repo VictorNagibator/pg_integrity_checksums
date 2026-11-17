@@ -209,6 +209,7 @@ Options:
 | `--table` | all | `schema.table` or table glob to include |
 | `--exclude-table` | | `schema.table` or table glob to exclude |
 | `--no-indexes` | false | Do not discover indexes |
+| `--no-sequences` | false | Do not discover sequences |
 | `--include-system` | false | Include system schemas |
 | `--workers` | 0 | Extension parallel workers (GUC) |
 | `--timeout` | 0 | `statement_timeout`, e.g. `5m` |
@@ -217,6 +218,12 @@ Options:
 
 `--kind physical` is opt-in.  A physical baseline is tied to one cluster;
 it records `system_identifier` and cannot be used against another cluster.
+Physical baselines contain no sequences.
+
+Sequences need extension 2.9.0 or later.  With an older extension, a capture
+that did not ask for sequences explicitly (with `--no-sequences=false` or
+`include_sequences: true` in the profile) warns and writes a baseline
+without them (`include_sequences: false`).
 
 `--hash fnv64` writes a **v2** baseline.  The default `--hash fnv32` keeps
 writing the historical **v1** format.  `verify` and `update` inherit the
@@ -454,7 +461,8 @@ Example:
     "tables": [],
     "exclude_tables": [],
     "include_system": false,
-    "include_indexes": true
+    "include_indexes": true,
+    "include_sequences": true
   },
   "objects": [
     {
@@ -557,6 +565,10 @@ Different tables are never read from separate snapshots or separate
 connections.  Parallelism is provided by the extension's
 `pg_integrity_checksums.workers` GUC inside that transaction.
 
+Sequences are the exception: they are not transactional, so their state is
+read when each one is checksummed, not as of the snapshot.  A `nextval()`
+during a capture can therefore make a sequence look ahead of the tables.
+
 A long repeatable-read transaction holds an `xmin` horizon and can delay
 `VACUUM`.  Keep capture/verify windows bounded and monitor long-running
 sessions on busy databases.
@@ -568,12 +580,30 @@ By default the CLI discovers:
 - ordinary tables (`r`), partitioned tables (`p`) and materialized views (`m`);
 - top-level relations only: partition leaves are not duplicated;
 - indexes (`i`) and partitioned indexes (`I`) when indexes are enabled;
+- sequences (`S`) in logical baselines, unless `--no-sequences` is given;
 - non-system schemas (`pg_catalog`, `information_schema`, `pg_toast` and
   temporary schemas are excluded).
 
 A partitioned table/index is checksummed through its parent, which aggregates
 its leaves.  `--include-system` includes system schemas.  Foreign tables,
-views, sequences and TOAST relations are not captured as separate objects.
+views and TOAST relations are not captured as separate objects.
+
+Sequences are checksummed with `pg_sequence_logical_checksum`: their
+definition and `last_value`/`is_called`.  This catches the classic migration
+gap of copied rows with a sequence left at its start value.  A change of the
+definition (`ALTER SEQUENCE ... INCREMENT`, data type, ...) is reported as
+`schema_changed`; a new `last_value` as `changed`.  A sequence owned by a
+column (`serial`, identity, `OWNED BY`) records its table in `table_schema`
+and `table_name`, and `--table`/`--exclude-table` apply to that table as they
+do for indexes; other sequences match by their own name.  Sequences on a
+physical standby are ahead of the primary (values are pre-logged to WAL), so
+verifying a standby against a primary's baseline reports them as changed;
+capture with `--no-sequences` for that use.
+
+Baselines written before sequences were supported have no
+`include_sequences` field: `verify` and `update` read it as false and do not
+report the database's sequences as new.  Capture a new baseline to cover
+them.  Older CLI versions reject baselines that contain sequences.
 
 ### Logical vs physical
 

@@ -2,6 +2,20 @@ Revision history for pg_integrity_checksums CLI
 
 Unreleased
 
+    - Feature: logical baselines include sequences (kind "sequence"),
+      checksummed with pg_sequence_logical_checksum(): definition plus
+      last_value/is_called, so verify after a migration reports a sequence
+      that was not carried over with its table.  A definition change is
+      schema_changed.  A sequence owned by a column (serial, identity, OWNED
+      BY) records its table, and --table/--exclude-table follow that table;
+      other sequences match by name.  New --no-sequences flag and
+      include_sequences profile key; the scope records include_sequences.
+      Baselines without that field (all earlier ones) are verified and
+      updated without sequences.  Physical baselines never contain
+      sequences.  Needs extension 2.9.0; with an older extension capture
+      warns and leaves sequences out unless they were requested explicitly.
+      Older CLI versions cannot read baselines that contain sequences.
+
     - Feature: new compare command compares the tables of two live
       databases (--source and --target) row by row and reports each
       missing, extra and changed row by key, without copying table data to

@@ -5,7 +5,7 @@ This page explains the ideas behind the functions.  Read it once, then use the
 
 ## Checksum levels
 
-The extension works at six levels:
+The extension works at six levels, plus sequences:
 
 | Level | Physical | Logical | Typical question |
 |---|---:|---:|---|
@@ -14,6 +14,7 @@ The extension works at six levels:
 | Tuple | yes | yes | Does this row still match its expected bytes or content? |
 | Table | yes | yes | Did the table’s storage or logical content change? |
 | Index | yes | yes | Is the physical index intact, or does it contain the expected entries? |
+| Sequence | — | yes | Was the sequence (definition and `last_value`) carried over? |
 | Database | yes | yes | Did anything in the database change? |
 
 A logical table checksum can also be split by key bucket or block range to

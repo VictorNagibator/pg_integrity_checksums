@@ -130,6 +130,12 @@ func TestValidateRejectsBadDocuments(t *testing.T) {
 		{"physical-system", func(b *Baseline) { b.Kind = KindPhysical }},
 		{"schema-hash-version-future", func(b *Baseline) { b.SchemaHashVersion = SchemaHashVersion + 1 }},
 		{"schema-hash-version-negative", func(b *Baseline) { b.SchemaHashVersion = -1 }},
+		{"physical-sequence", func(b *Baseline) {
+			b.Kind = KindPhysical
+			b.SystemIdentifier = "1"
+			b.DatabaseOID = 1
+			b.Objects[0] = Object{Kind: ObjectSequence, Schema: "public", Name: "s", Status: StatusOK, Checksum: "1"}
+		}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -317,5 +323,46 @@ func TestCompareBaselinesSchemaHashVersions(t *testing.T) {
 
 	if mk(0, hashA, "1").EffectiveSchemaHashVersion() != 1 {
 		t.Fatal("absent schema_hash_version must mean 1")
+	}
+}
+
+func TestSequenceObjects(t *testing.T) {
+	b := New("0.1.0", KindLogical, "2.9.0", 160009, "app", testScope(), []Object{
+		{Kind: ObjectSequence, Schema: "public", Name: "free_seq", Status: StatusOK, Checksum: "-7"},
+		{Kind: ObjectSequence, Schema: "public", Name: "t_id_seq", TableSchema: "public", TableName: "t", Status: StatusOK, Checksum: "3"},
+		{Kind: ObjectTable, Schema: "public", Name: "t_id_seq", Status: StatusOK, Checksum: "1"},
+	})
+	if err := b.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if !b.Scope.IncludeSequences {
+		t.Fatal("NewScope should include sequences")
+	}
+
+	// A table and a sequence with the same name are distinct objects.
+	cur := append([]Object{}, b.Objects...)
+	for i := range cur {
+		if cur[i].Kind == ObjectSequence && cur[i].Name == "t_id_seq" {
+			cur[i].Checksum = "4"
+		}
+	}
+	changes, summary := Compare(b.Objects, cur)
+	if summary.Changed != 1 || summary.OK != 2 {
+		t.Fatalf("summary = %+v", summary)
+	}
+	for _, c := range changes {
+		if c.Status == "changed" && (c.Kind != ObjectSequence || c.TableName != "t") {
+			t.Fatalf("unexpected change %+v", c)
+		}
+	}
+}
+
+func TestOldScopeHasNoSequences(t *testing.T) {
+	var s Scope
+	if err := json.Unmarshal([]byte(`{"schemas":[],"exclude_schemas":[],"tables":[],"exclude_tables":[],"include_system":false,"include_indexes":true}`), &s); err != nil {
+		t.Fatal(err)
+	}
+	if s.IncludeSequences {
+		t.Fatal("a scope written before sequences were supported must not include them")
 	}
 }

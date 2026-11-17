@@ -33,16 +33,17 @@
  */
 
 /*
- * pg_integrity_checksums_consume - claim the next range of items
+ * pg_integrity_checksums_parallel_consume - claim the next range of items
  *
  * Atomically advances the shared counter and returns the resulting range
  * [start, end). Returns false when all items have been claimed. This
  * self-balancing scheme keeps all participants busy regardless of how many
  * workers actually started.
  */
-static bool
-pg_integrity_checksums_consume(ChecksumParallelState *state, uint32 chunk,
-                     uint32 *start, uint32 *end)
+bool
+pg_integrity_checksums_parallel_consume(ChecksumParallelState *state,
+                                        uint32 chunk, uint32 *start,
+                                        uint32 *end)
 {
     uint32      first = pg_atomic_fetch_add_u32(&state->next_item, chunk);
 
@@ -108,7 +109,7 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                 Relation    rel = relation_open(state->reloid, AccessShareLock);
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_integrity_checksums_consume(state,
+                while (pg_integrity_checksums_parallel_consume(state,
                                                       PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                       &start, &end))
                 {
@@ -147,7 +148,7 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                 bool        is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_integrity_checksums_consume(state,
+                while (pg_integrity_checksums_parallel_consume(state,
                                                       PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                       &start, &end))
                 {
@@ -176,7 +177,7 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                     elog(ERROR, "could not initialize logical index scan for index %u",
                          state->reloid);
 
-                while (pg_integrity_checksums_consume(state,
+                while (pg_integrity_checksums_parallel_consume(state,
                                                       PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
                                                       &start, &end))
                     pg_index_logical_scan_blocks(&scanstate, start, end, algo,
@@ -256,6 +257,25 @@ fold_result(ChecksumTaskType task_type, ChecksumAlgo algo, uint64 partial,
 }
 
 /*
+ * unpack_key_names - split the NUL-separated key column names of a bucket
+ * scan into an array
+ */
+static char **
+unpack_key_names(char *buf, int nkeys)
+{
+    char      **names = palloc(sizeof(char *) * Max(nkeys, 1));
+    int         k;
+
+    for (k = 0; k < nkeys; k++)
+    {
+        names[k] = buf;
+        buf += strlen(buf) + 1;
+    }
+
+    return names;
+}
+
+/*
  * pg_integrity_checksums_parallel_worker_main - entry point for parallel workers
  *
  * Restores the shared scan state and snapshot, then consumes items from the
@@ -312,6 +332,26 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                                  &myresult->partial, &myresult->count);
                 break;
             }
+        case CHECKSUM_TASK_TABLE_BUCKETS:
+            {
+                char      **keynames;
+
+                keynames = unpack_key_names(shm_toc_lookup(toc, CHECKSUM_KEY_KEYNAMES,
+                                                           false),
+                                            state->nkeys);
+
+                if (snapshot != NULL)
+                    PushActiveSnapshot(snapshot);
+
+                pg_table_bucket_parallel_task(state, keynames,
+                                              shm_toc_lookup(toc, CHECKSUM_KEY_BUCKETS,
+                                                             false),
+                                              snapshot);
+
+                if (snapshot != NULL)
+                    PopActiveSnapshot();
+                break;
+            }
         case CHECKSUM_TASK_DATABASE_PHYSICAL:
         case CHECKSUM_TASK_DATABASE_LOGICAL:
             {
@@ -333,7 +373,7 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc)
                     pushed = true;
                 }
 
-                while (pg_integrity_checksums_consume(state, 1, &start, &end))
+                while (pg_integrity_checksums_parallel_consume(state, 1, &start, &end))
                     compute_database_items(items, start, end, physical,
                                            state->algo, &acc64,
                                            physical ? NULL : &lacc,
@@ -613,7 +653,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
          * workers, it records the per-relation outcome in the shared copy of
          * the items, which is copied back once everybody has finished.
          */
-        while (pg_integrity_checksums_consume(state, 1, &start, &end))
+        while (pg_integrity_checksums_parallel_consume(state, 1, &start, &end))
             compute_database_items(ditems, start, end, physical, algo, acc,
                                    logical_acc, logical_acc64, &local_skipped);
 
@@ -661,3 +701,147 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
         *skipped = local_skipped;
 }
 
+
+/*
+ * pg_integrity_checksums_parallel_scan_buckets - bucket checksums of one heap
+ * relation in parallel
+ *
+ * The leader and the workers claim chunks of blocks like a table scan.  Each
+ * participant accumulates its rows into private per-bucket accumulators and
+ * adds them, once, into a shared array of (sum, count) pairs with atomic
+ * additions; the logical accumulator is a plain sum, so the order does not
+ * matter.  The result is added to the caller's acc32 or acc64 array (the one
+ * that matches algo, nbuckets entries), which may already hold the rows of
+ * other partitions.  The caller must have checked that workers > 0, that
+ * the relation can use parallel workers and that its rows are hashed in
+ * their own column order.
+ */
+void
+pg_integrity_checksums_parallel_scan_buckets(Oid reloid, uint32 nblocks,
+                                             int workers, ChecksumAlgo algo,
+                                             uint32 nbuckets, int nkeys,
+                                             char **keynames,
+                                             Snapshot snapshot,
+                                             ChecksumLogicalAccum *acc32,
+                                             ChecksumLogicalAccum64 *acc64)
+{
+    ParallelContext *pcxt;
+    ParallelContext *volatile pcxt_cleanup = NULL;
+    shm_toc_estimator e;
+    ChecksumParallelState *state;
+    ChecksumWorkerResult *results;
+    pg_atomic_uint64 *shared;
+    Size        names_size = 1;
+    Size        shared_size = sizeof(pg_atomic_uint64) * 2 * (Size) nbuckets;
+    uint32      snapshot_size = (uint32) EstimateSnapshotSpace(snapshot);
+    int         k;
+    uint32      b;
+
+    for (k = 0; k < nkeys; k++)
+        names_size += strlen(keynames[k]) + 1;
+
+    EnterParallelMode();
+
+    PG_TRY();
+    {
+        char       *names;
+        char       *p;
+
+        pcxt = CreateParallelContext("pg_integrity_checksums",
+                                     "pg_integrity_checksums_parallel_worker_main",
+                                     workers);
+        pcxt_cleanup = pcxt;
+
+        shm_toc_initialize_estimator(&e);
+        shm_toc_estimate_chunk(&e, sizeof(ChecksumParallelState));
+        shm_toc_estimate_chunk(&e, sizeof(ChecksumWorkerResult) * workers);
+        shm_toc_estimate_chunk(&e, snapshot_size);
+        shm_toc_estimate_chunk(&e, names_size);
+        shm_toc_estimate_chunk(&e, shared_size);
+        shm_toc_estimate_keys(&e, 5);
+        pcxt->estimator = e;
+
+        InitializeParallelDSM(pcxt);
+
+        state = shm_toc_allocate(pcxt->toc, sizeof(ChecksumParallelState));
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_STATE, state);
+        memset(state, 0, sizeof(ChecksumParallelState));
+        state->task_type = CHECKSUM_TASK_TABLE_BUCKETS;
+        state->reloid = reloid;
+        state->include_header = false;
+        state->algo = algo;
+        state->nitems = nblocks;
+        state->snapshot_size = snapshot_size;
+        state->nbuckets = nbuckets;
+        state->nkeys = nkeys;
+        pg_atomic_init_u32(&state->next_item, 0);
+
+        /* Not used by bucket scans, but every worker looks it up. */
+        results = shm_toc_allocate(pcxt->toc, sizeof(ChecksumWorkerResult) * workers);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_RESULTS, results);
+        memset(results, 0, sizeof(ChecksumWorkerResult) * workers);
+
+        {
+            char       *snap = shm_toc_allocate(pcxt->toc, snapshot_size);
+
+            SerializeSnapshot(snapshot, snap);
+            shm_toc_insert(pcxt->toc, CHECKSUM_KEY_SNAPSHOT, snap);
+        }
+
+        names = shm_toc_allocate(pcxt->toc, names_size);
+        p = names;
+        for (k = 0; k < nkeys; k++)
+        {
+            Size        len = strlen(keynames[k]) + 1;
+
+            memcpy(p, keynames[k], len);
+            p += len;
+        }
+        *p = '\0';
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_KEYNAMES, names);
+
+        shared = shm_toc_allocate(pcxt->toc, shared_size);
+        for (b = 0; b < 2 * nbuckets; b++)
+            pg_atomic_init_u64(&shared[b], 0);
+        shm_toc_insert(pcxt->toc, CHECKSUM_KEY_BUCKETS, shared);
+
+        LaunchParallelWorkers(pcxt);
+
+        if (pcxt->nworkers_launched > 0)
+            WaitForParallelWorkersToAttach(pcxt);
+
+        /* The leader scans its own share like a worker. */
+        pg_table_bucket_parallel_task(state, keynames, shared, snapshot);
+
+        if (pcxt->nworkers_launched > 0)
+            WaitForParallelWorkersToFinish(pcxt);
+
+        for (b = 0; b < nbuckets; b++)
+        {
+            uint64      sum = pg_atomic_read_u64(&shared[2 * b]);
+            uint64      count = pg_atomic_read_u64(&shared[2 * b + 1]);
+
+            if (algo == CHECKSUM_ALGO_FNV32)
+            {
+                acc32[b].sum += sum;
+                acc32[b].count += count;
+            }
+            else
+            {
+                acc64[b].sum += sum;
+                acc64[b].count += count;
+            }
+        }
+    }
+    PG_CATCH();
+    {
+        if (pcxt_cleanup != NULL)
+            DestroyParallelContext(pcxt_cleanup);
+        ExitParallelMode();
+        PG_RE_THROW();
+    }
+    PG_END_TRY();
+
+    DestroyParallelContext(pcxt);
+    ExitParallelMode();
+}

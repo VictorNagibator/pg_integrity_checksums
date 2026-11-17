@@ -1,5 +1,20 @@
 Revision history for pg_integrity_checksums CLI
 
+Unreleased
+
+    - Feature: new compare command compares the tables of two live
+      databases (--source and --target) row by row and reports each
+      missing, extra and changed row by key, without copying table data to
+      the client.  It compares pg_table_bucket_checksums() per bucket of the
+      key hash and fetches pg_table_row_checksums() only for the buckets
+      that differ.  The key is the primary key, the whole row for tables
+      without one, or set per table with --key schema.table=col1,col2.
+      Tables only on one side, with different columns, or that fail are
+      reported too.  Supports the capture scope filters, --buckets,
+      --max-rows, --workers, --timeout, --format text|json, --output,
+      --show-ok and --no-fail.  Needs extension 2.8.0 or later on both
+      servers.
+
 0.6.0   2026-11-17
 
     - Feature: update accepts --allow-version-mismatch, so a baseline can be

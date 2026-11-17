@@ -199,6 +199,8 @@ and statement timeout are propagated instead of returning a partial result.
 It does not compare the result with the stored `pd_checksum` and returns `0`
 for a new page.  `pg_page_checksum_status` performs the comparison and reports
 `ok`, `mismatch`, `new` or `checksums_disabled`; it is the verification API.
+`pg_relation_page_checksum_status` runs the same check for every block of
+every fork of a relation.
 
 ## Source layout
 

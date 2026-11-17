@@ -23,7 +23,8 @@ corruption within one cluster.
 | Database | yes | yes | Whole-database fingerprint |
 
 Page checksums are PostgreSQL’s built-in 16-bit page checksum.  Use
-`pg_page_checksum_status` to compare a page with its stored checksum.  The
+`pg_page_checksum_status` to compare a page with its stored checksum, or
+`pg_relation_page_checksum_status` to check every page of a relation.  The
 other levels use FNV-1a 32-bit by default and optionally expose 64-bit
 digests through the generic API.
 

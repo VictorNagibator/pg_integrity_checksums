@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 #include "fmgr.h"
+#include "funcapi.h"
 #include "access/htup_details.h"
 #include "access/xact.h"
 #include "catalog/pg_class.h"
@@ -21,6 +22,7 @@
 #include "utils/inval.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "utils/tuplestore.h"
 
 #include "pg_integrity_checksums.h"
 #include "checksum_internal.h"
@@ -215,4 +217,43 @@ pg_integrity_checksums_restore_user(ChecksumOwnerContext *ctx)
 {
     AtEOXact_GUC(false, ctx->save_nestlevel);
     SetUserIdAndSecContext(ctx->save_userid, ctx->save_sec_context);
+}
+
+/*
+ * pg_integrity_checksums_begin_srf - set up a materialized set-returning
+ * function result
+ *
+ * Returns the tuplestore to fill and its descriptor (the function's declared
+ * result type).  InitMaterializedSRF() only exists from PostgreSQL 15 on.
+ */
+Tuplestorestate *
+pg_integrity_checksums_begin_srf(FunctionCallInfo fcinfo, TupleDesc *resultdesc)
+{
+    ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+    MemoryContext oldcontext;
+    Tuplestorestate *store;
+    TupleDesc   tupdesc;
+
+    if (rsinfo == NULL || !IsA(rsinfo, ReturnSetInfo))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("set-valued function called in context that cannot accept a set")));
+    if (!(rsinfo->allowedModes & SFRM_Materialize))
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("materialize mode required, but it is not allowed in this context")));
+
+    if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+        elog(ERROR, "return type must be a row type");
+
+    oldcontext = MemoryContextSwitchTo(rsinfo->econtext->ecxt_per_query_memory);
+    tupdesc = CreateTupleDescCopy(tupdesc);
+    store = tuplestore_begin_heap(true, false, work_mem);
+    rsinfo->returnMode = SFRM_Materialize;
+    rsinfo->setResult = store;
+    rsinfo->setDesc = tupdesc;
+    MemoryContextSwitchTo(oldcontext);
+
+    *resultdesc = tupdesc;
+    return store;
 }

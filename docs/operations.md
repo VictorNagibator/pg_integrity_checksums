@@ -221,11 +221,11 @@ in:
    have not been written yet are reported as `new`:
 
    ```sql
-   SELECT blk, pg_page_checksum_status('orders'::regclass, blk) AS status
-   FROM generate_series(0,
-        (pg_relation_size('orders') / current_setting('block_size')::int)::int - 1) AS blk
-   WHERE pg_page_checksum_status('orders'::regclass, blk) = 'mismatch';
+   SELECT fork, blkno, stored_checksum, calculated_checksum
+   FROM pg_relation_page_checksum_status('orders');
    ```
+
+   No rows means every page of every fork matches its stored checksum.
 
 6. **If a database call fails instead of returning a value**, see
    [`relation "..." cannot be checksummed`](troubleshooting.md).

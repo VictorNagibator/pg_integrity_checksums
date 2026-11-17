@@ -10,6 +10,7 @@
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/xlog.h"
+#include "common/relpath.h"
 #include "miscadmin.h"
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
@@ -17,6 +18,7 @@
 #include "storage/smgr.h"
 #include "utils/builtins.h"
 #include "utils/rel.h"
+#include "utils/tuplestore.h"
 
 #include "checksum_internal.h"
 
@@ -32,40 +34,21 @@
 #define PAGE_CHECKSUM_READ_ATTEMPTS 5
 
 /*
- * pg_page_checksum_read - shared page read and checksum calculation
- *
- * Returns the calculated 16-bit checksum and the checksum stored in the page
- * header.  *is_new is true for an uninitialized page; in that case both
- * checksum values are zero.  The stored value is captured before the page is
- * copied, because pg_checksum_page() zeroes pd_checksum in its input.
+ * smgrread() requires an I/O-aligned buffer on PostgreSQL 16 and later
+ * (direct I/O); a plain palloc() is only MAXALIGNed.
+ */
+#if PG_VERSION_NUM >= 160000
+typedef PGIOAlignedBlock PageChecksumBlock;
+#else
+typedef PGAlignedBlock PageChecksumBlock;
+#endif
+
+/*
+ * page_checksum_require_storage - reject relations without storage
  */
 static void
-pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
-                      uint16 *calculated, uint16 *stored, bool *is_new)
+page_checksum_require_storage(Relation rel)
 {
-    Relation    rel;
-    Buffer      buffer;
-    Page        page;
-    BlockNumber nblocks;
-    /*
-     * smgrread() requires an I/O-aligned buffer on PostgreSQL 16 and later
-     * (direct I/O); a plain palloc() is only MAXALIGNed.
-     */
-#if PG_VERSION_NUM >= 160000
-    PGIOAlignedBlock pagebuf;
-#else
-    PGAlignedBlock pagebuf;
-#endif
-    char       *pagecopy = pagebuf.data;
-
-    *calculated = 0;
-    *stored = 0;
-    *is_new = false;
-
-    rel = relation_open(reloid, AccessShareLock);
-
-    pg_integrity_checksums_require_select(reloid);
-
     if (!pg_integrity_checksums_relation_has_storage(rel))
     {
         char       *relname = pstrdup(RelationGetRelationName(rel));
@@ -75,6 +58,141 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
                 (errcode(ERRCODE_WRONG_OBJECT_TYPE),
                  errmsg("relation \"%s\" has no storage", relname)));
     }
+}
+
+/*
+ * page_checksum_require_own_temp - reject temporary relations of other sessions
+ *
+ * Their pages live in the other backend's local buffers, so the file is not
+ * a meaningful copy to verify.
+ */
+static void
+page_checksum_require_own_temp(Relation rel)
+{
+    if (RELATION_IS_OTHER_TEMP(rel))
+    {
+        relation_close(rel, AccessShareLock);
+        ereport(ERROR,
+                (errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+                 errmsg("cannot access temporary tables of other sessions")));
+    }
+}
+
+/*
+ * page_checksum_read_block - checksum one block of an open relation
+ *
+ * Returns the calculated 16-bit checksum and the checksum stored in the page
+ * header.  *is_new is true for an uninitialized page; in that case both
+ * checksum values are zero.  The stored value is captured before the page is
+ * copied, because pg_checksum_page() zeroes pd_checksum in its input.
+ * pagecopy is a BLCKSZ buffer, I/O-aligned for the disk path.  The caller
+ * holds a lock on the relation and has checked that the block exists.
+ */
+static void
+page_checksum_read_block(Relation rel, ForkNumber forknum, BlockNumber blkno,
+                         bool from_disk, char *pagecopy,
+                         uint16 *calculated, uint16 *stored, bool *is_new)
+{
+    Buffer      buffer;
+    Page        page;
+
+    *calculated = 0;
+    *stored = 0;
+    *is_new = false;
+
+    /*
+     * Verification must inspect the on-disk checksum, not a possibly dirty
+     * buffer whose pd_checksum has not been updated yet.  That holds for
+     * temporary relations too: a local buffer gets its checksum only when it
+     * is written out, so a dirty one does not match.  Their file is private
+     * to this backend and is read the same way.
+     */
+    if (from_disk)
+    {
+        int         attempt;
+
+        /*
+         * The read takes no buffer lock, so it can overlap with the write of
+         * the same block by the checkpointer or a backend and return a torn
+         * page: part old, part new, with a checksum that matches neither.
+         * pg_basebackup handles this by reading the block again.  Do the
+         * same: report a mismatch only when every read disagrees.  A
+         * corrupt page fails each time, while a torn read does not repeat,
+         * because the write in progress completes within moments.
+         */
+        for (attempt = 1;; attempt++)
+        {
+            smgrread(RelationGetSmgr(rel), forknum, blkno, pagecopy);
+
+            /*
+             * A new page is all zeroes.  pd_upper == 0 alone is a corrupt
+             * header and falls through to the checksum comparison.
+             */
+            if (PageIsNew((Page) pagecopy) &&
+                pg_integrity_checksums_page_is_zero(pagecopy))
+            {
+                *stored = 0;
+                *calculated = 0;
+                *is_new = true;
+                return;
+            }
+
+            *stored = ((PageHeader) pagecopy)->pd_checksum;
+            *calculated = pg_checksum_page(pagecopy, blkno);
+
+            if (*calculated == *stored || !DataChecksumsEnabled() ||
+                attempt >= PAGE_CHECKSUM_READ_ATTEMPTS)
+                break;
+
+            /* Give a concurrent write time to finish. */
+            pg_usleep(10000L * attempt);
+            CHECK_FOR_INTERRUPTS();
+        }
+        return;
+    }
+
+    buffer = ReadBufferExtended(rel, forknum, blkno, RBM_NORMAL, NULL);
+    LockBuffer(buffer, BUFFER_LOCK_SHARE);
+    page = BufferGetPage(buffer);
+
+    if (PageIsNew(page))
+    {
+        UnlockReleaseBuffer(buffer);
+        *is_new = true;
+        return;
+    }
+
+    *stored = ((PageHeader) page)->pd_checksum;
+
+    /*
+     * pg_checksum_page() transiently zeroes pd_checksum.  It must not run on
+     * a page from the shared buffer pool: a concurrent caller could observe
+     * the zeroed field, and an error between the two stores would leave the
+     * page with a bogus checksum.  Copy the page and compute on the copy.
+     */
+    memcpy(pagecopy, page, BLCKSZ);
+    UnlockReleaseBuffer(buffer);
+
+    *calculated = pg_checksum_page(pagecopy, blkno);
+}
+
+/*
+ * pg_page_checksum_read - open a relation and checksum one main-fork block
+ */
+static void
+pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
+                      uint16 *calculated, uint16 *stored, bool *is_new)
+{
+    Relation    rel;
+    BlockNumber nblocks;
+    PageChecksumBlock pagebuf;
+
+    rel = relation_open(reloid, AccessShareLock);
+
+    pg_integrity_checksums_require_select(reloid);
+    page_checksum_require_storage(rel);
+    if (from_disk)
+        page_checksum_require_own_temp(rel);
 
     nblocks = RelationGetNumberOfBlocks(rel);
 
@@ -100,83 +218,9 @@ pg_page_checksum_read(Oid reloid, int32 blkno, bool from_disk,
                         blkno, relname, nblocks - 1)));
     }
 
-    /*
-     * Verification must inspect the on-disk checksum, not a possibly dirty
-     * buffer whose pd_checksum has not been updated yet.  Temporary relations
-     * have no shared storage, so they keep the buffer path.
-     */
-    if (from_disk && !RelationUsesLocalBuffers(rel))
-    {
-        int         attempt;
-
-        /*
-         * The read takes no buffer lock, so it can overlap with the write of
-         * the same block by the checkpointer or a backend and return a torn
-         * page: part old, part new, with a checksum that matches neither.
-         * pg_basebackup handles this by reading the block again.  Do the
-         * same: report a mismatch only when every read disagrees.  A
-         * corrupt page fails each time, while a torn read does not repeat,
-         * because the write in progress completes within moments.
-         */
-        for (attempt = 1;; attempt++)
-        {
-            smgrread(RelationGetSmgr(rel), MAIN_FORKNUM, (BlockNumber) blkno,
-                     pagecopy);
-
-            /*
-             * A new page is all zeroes.  pd_upper == 0 alone is a corrupt
-             * header and falls through to the checksum comparison.
-             */
-            if (PageIsNew((Page) pagecopy) &&
-                pg_integrity_checksums_page_is_zero(pagecopy))
-            {
-                relation_close(rel, AccessShareLock);
-                *stored = 0;
-                *calculated = 0;
-                *is_new = true;
-                return;
-            }
-
-            *stored = ((PageHeader) pagecopy)->pd_checksum;
-            *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
-
-            if (*calculated == *stored || !DataChecksumsEnabled() ||
-                attempt >= PAGE_CHECKSUM_READ_ATTEMPTS)
-                break;
-
-            /* Give a concurrent write time to finish. */
-            pg_usleep(10000L * attempt);
-            CHECK_FOR_INTERRUPTS();
-        }
-
-        relation_close(rel, AccessShareLock);
-        return;
-    }
-
-    buffer = ReadBuffer(rel, (BlockNumber) blkno);
-    LockBuffer(buffer, BUFFER_LOCK_SHARE);
-    page = BufferGetPage(buffer);
-
-    if (PageIsNew(page))
-    {
-        UnlockReleaseBuffer(buffer);
-        relation_close(rel, AccessShareLock);
-        *is_new = true;
-        return;
-    }
-
-    *stored = ((PageHeader) page)->pd_checksum;
-
-    /*
-     * pg_checksum_page() transiently zeroes pd_checksum.  It must not run on
-     * a page from the shared buffer pool: a concurrent caller could observe
-     * the zeroed field, and an error between the two stores would leave the
-     * page with a bogus checksum.  Copy the page and compute on the copy.
-     */
-    memcpy(pagecopy, page, BLCKSZ);
-    UnlockReleaseBuffer(buffer);
-
-    *calculated = pg_checksum_page(pagecopy, (BlockNumber) blkno);
+    page_checksum_read_block(rel, MAIN_FORKNUM, (BlockNumber) blkno,
+                             from_disk, pagebuf.data,
+                             calculated, stored, is_new);
 
     relation_close(rel, AccessShareLock);
 }
@@ -238,6 +282,119 @@ pg_page_checksum_status(PG_FUNCTION_ARGS)
         status = "mismatch";
 
     PG_RETURN_TEXT_P(cstring_to_text(status));
+}
+
+/*
+ * pg_relation_page_checksum_status - verify every page of a relation
+ *
+ * Arguments: relation, fork name (NULL for every fork that exists) and
+ * include_ok.  Returns one row per block (fork, blkno, status,
+ * stored_checksum, calculated_checksum) whose status is mismatch, or of
+ * every block when include_ok is true.  Each block is checked like
+ * pg_page_checksum_status() does it: the on-disk copy, read again before a
+ * mismatch is reported.  Fails when data checksums are disabled, since no
+ * page could then be verified.
+ */
+PG_FUNCTION_INFO_V1(pg_relation_page_checksum_status);
+
+Datum
+pg_relation_page_checksum_status(PG_FUNCTION_ARGS)
+{
+    Oid         reloid;
+    bool        include_ok;
+    bool        all_forks;
+    ForkNumber  only_fork = MAIN_FORKNUM;
+    ForkNumber  forknum;
+    Relation    rel;
+    Tuplestorestate *store;
+    TupleDesc   resultdesc;
+    PageChecksumBlock pagebuf;
+
+    store = pg_integrity_checksums_begin_srf(fcinfo, &resultdesc);
+
+    /* A NULL relation has no pages: return an empty set. */
+    if (PG_ARGISNULL(0))
+        return (Datum) 0;
+    reloid = PG_GETARG_OID(0);
+    all_forks = PG_ARGISNULL(1);
+    if (!all_forks)
+    {
+        char       *forkname = text_to_cstring(PG_GETARG_TEXT_PP(1));
+
+        /* Raises "invalid fork name" for anything but main/fsm/vm/init. */
+        only_fork = forkname_to_number(forkname);
+    }
+    include_ok = PG_ARGISNULL(2) ? false : PG_GETARG_BOOL(2);
+
+    rel = relation_open(reloid, AccessShareLock);
+    pg_integrity_checksums_require_select(reloid);
+    page_checksum_require_storage(rel);
+    page_checksum_require_own_temp(rel);
+
+    if (!DataChecksumsEnabled())
+    {
+        relation_close(rel, AccessShareLock);
+        ereport(ERROR,
+                (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+                 errmsg("data checksums are not enabled in this cluster"),
+                 errhint("Page checksums are only maintained when the cluster was initialized with data checksums (initdb --data-checksums) or they were enabled with pg_checksums --enable.")));
+    }
+
+    for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
+    {
+        BlockNumber nblocks;
+        BlockNumber blkno;
+
+        if (!all_forks && forknum != only_fork)
+            continue;
+        if (!smgrexists(RelationGetSmgr(rel), forknum))
+            continue;
+
+        /*
+         * Blocks added after this point are not checked.  The lock keeps
+         * VACUUM from truncating the relation underneath the scan.
+         */
+        nblocks = smgrnblocks(RelationGetSmgr(rel), forknum);
+
+        for (blkno = 0; blkno < nblocks; blkno++)
+        {
+            uint16      calculated;
+            uint16      stored;
+            bool        is_new;
+            const char *status;
+            Datum       values[5];
+            bool        nulls[5] = {false, false, false, false, false};
+
+            CHECK_FOR_INTERRUPTS();
+
+            page_checksum_read_block(rel, forknum, blkno, true, pagebuf.data,
+                                     &calculated, &stored, &is_new);
+
+            if (is_new)
+                status = "new";
+            else if (calculated == stored)
+                status = "ok";
+            else
+                status = "mismatch";
+
+            if (!include_ok && strcmp(status, "mismatch") != 0)
+                continue;
+
+            values[0] = CStringGetTextDatum(forkNames[forknum]);
+            values[1] = Int64GetDatum((int64) blkno);
+            values[2] = CStringGetTextDatum(status);
+            values[3] = Int32GetDatum((int32) stored);
+            values[4] = Int32GetDatum((int32) calculated);
+            if (is_new)
+                nulls[3] = nulls[4] = true;
+
+            tuplestore_putvalues(store, resultdesc, values, nulls);
+        }
+    }
+
+    relation_close(rel, AccessShareLock);
+
+    return (Datum) 0;
 }
 
 /*-------------------------------------------------------------------------

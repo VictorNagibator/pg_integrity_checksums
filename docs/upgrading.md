@@ -49,6 +49,28 @@ The complete history is in
 [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 These notes cover what to check when upgrading.
 
+### 2.9
+
+2.9 adds `pg_relation_page_checksum_status()`, which verifies every page of a
+relation (all forks, or one) against its stored `pd_checksum` in one call,
+instead of calling `pg_page_checksum_status()` for each block (see
+[Page Level Functions](functions.md#page-level-functions-physical-only)).
+Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.0';
+```
+
+What changes:
+
+- **No checksum value changes.**
+- `pg_page_checksum_status()` on a temporary table reads the page from the
+  table's file, like for other relations.  It used to compare the local buffer,
+  whose `pd_checksum` is only set when the page is written out, so a modified
+  page of a temporary table was reported as `mismatch`; such a page is now
+  `new` (not written yet) or `ok`.  Temporary tables of other sessions are
+  rejected.
+
 ### 2.8
 
 2.8 adds functions that show *where* two databases or two copies of a

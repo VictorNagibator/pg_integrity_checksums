@@ -8,6 +8,7 @@ New to the extension? Read [Getting started](getting-started.md) and
 | Level | Generic API (optional) | Default 32-bit API |
 |---|---|---|
 | Page | — | `pg_page_checksum(regclass, integer)` / `pg_page_checksum_status(regclass, integer)` |
+| Pages of a relation | — | `pg_relation_page_checksum_status(regclass, text, boolean)` |
 | Cell | `pg_cell_checksum(regclass, tid, integer, text)` | `pg_cell_checksum(regclass, tid, integer)` |
 | Tuple physical | `pg_tuple_physical_checksum(regclass, tid, boolean, text)` | `pg_tuple_physical_checksum(regclass, tid, boolean)` |
 | Tuple logical | `pg_tuple_logical_checksum(regclass, tid, text)` | `pg_tuple_logical_checksum(regclass, tid)` |
@@ -83,6 +84,56 @@ fails every read.
 ```sql
 -- Get checksum for page 5 of a table
 SELECT pg_page_checksum('my_table'::regclass, 5);
+```
+
+Temporary tables are verified the same way, from their file: a page of a
+temporary table that is still only in this session's local buffers is `new`.
+Temporary tables of other sessions are rejected.
+
+**`pg_relation_page_checksum_status(relname regclass, fork_name text DEFAULT NULL, include_ok boolean DEFAULT false)`**
+**`-> SETOF (fork text, blkno bigint, status text, stored_checksum integer, calculated_checksum integer)`**
+
+Verifies every page of a relation (table, index, materialized view, sequence
+or TOAST table) against its stored checksum, in one call.  Each block is
+checked exactly as `pg_page_checksum_status` checks it: the on-disk copy is
+read, bypassing shared buffers, and a mismatching block is read again before
+it is reported.
+
+- `fork_name`: `main`, `fsm`, `vm` or `init`.  `NULL` (the default) checks
+  every fork that exists, like the `pg_checksums` utility does; the free space
+  map and visibility map pages carry checksums as well.
+- `include_ok`: by default only blocks with status `mismatch` are returned, so
+  an empty result means the relation verified.  With `true`, every block is
+  returned with status `ok`, `mismatch` or `new`.
+
+`stored_checksum` and `calculated_checksum` are the 16-bit values (NULL for a
+`new` page).  The function fails if the cluster runs without data checksums,
+since no page could be verified.  It requires `SELECT` on the relation;
+relations without storage (views, partitioned tables) raise an error, so check
+each partition separately.  The relation is locked with `AccessShareLock` for
+the duration of the scan; blocks added after the scan started are not checked.
+The scan reads the whole relation from disk, so run it outside peak hours on
+large relations.  A page changed in shared buffers but not yet written is
+verified in its previous on-disk version; run `CHECKPOINT` first to verify the
+newest state.
+
+```sql
+-- Corrupt blocks of a table, any fork
+SELECT fork, blkno, stored_checksum, calculated_checksum
+FROM pg_relation_page_checksum_status('orders');
+
+-- Summary of every block of the table's main fork
+SELECT status, count(*)
+FROM pg_relation_page_checksum_status('orders', 'main', include_ok => true)
+GROUP BY status;
+
+-- Every table and index of a schema
+SELECT c.oid::regclass AS relation, s.fork, s.blkno
+FROM pg_class c
+CROSS JOIN LATERAL pg_relation_page_checksum_status(c.oid) s
+WHERE c.relnamespace = 'public'::regnamespace
+  AND c.relkind IN ('r', 'i', 'm', 't', 'S')
+  AND c.relpersistence <> 't';
 ```
 
 ### Cell Level Functions (Logical Only)

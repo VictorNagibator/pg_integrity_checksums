@@ -23,6 +23,7 @@
 #include "storage/shm_toc.h"
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
+#include "utils/tuplestore.h"
 
 /*
  * lnext() gained the list argument in PostgreSQL 13.  Keep the extension
@@ -233,6 +234,8 @@ pg_integrity_checksums_parallel_worker_main(dsm_segment *seg, shm_toc *toc);
 extern int pg_integrity_checksums_worker_count(void);
 extern int pg_integrity_checksums_worker_count_for(Relation rel);
 extern Snapshot pg_integrity_checksums_get_snapshot(void);
+extern Tuplestorestate *pg_integrity_checksums_begin_srf(FunctionCallInfo fcinfo,
+                                                         TupleDesc *resultdesc);
 
 /*
  * ChecksumOwnerContext - saved security state while running as a table owner

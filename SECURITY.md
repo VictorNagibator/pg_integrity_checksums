@@ -9,7 +9,7 @@ CLI.  Older releases are not patched; upgrade instead (see
 | Component | Supported | Not supported |
 | --- | --- | --- |
 | Extension `pg_integrity_checksums` | 2.8.x | 2.7 and older |
-| CLI `pg_integrity_checksums` | 0.5.x | 0.4 and older |
+| CLI `pg_integrity_checksums` | 0.6.x | 0.5 and older |
 
 The extension supports PostgreSQL 12 to 19, the versions tested in CI.
 Please reproduce a report on one of them.

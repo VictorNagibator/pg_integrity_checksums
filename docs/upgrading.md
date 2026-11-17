@@ -90,6 +90,12 @@ What changes:
   relation's lock when done, so large databases no longer run out of lock
   table space.
 
+The CLI 0.6 that ships alongside records `schema_hash_version 3` in new
+baselines (columns are numbered among live columns, so a dropped column no
+longer makes `schema_changed` appear after a dump and restore): re-capture
+baselines (`update --yes`) to compare the schema again; until then `verify`
+compares data only and warns.
+
 ### 2.7
 
 2.7 is a fix and security release; it also makes logical checksums 2-5x
@@ -125,10 +131,6 @@ What changes:
   locks like a sequential scan, so write skew through a checksum is detected.
 - A relation dropped while a database checksum runs is left out with a
   `NOTICE` instead of failing the whole check, in strict mode too.
-
-The CLI 0.5 that ships alongside records `schema_hash_version 3` in new
-baselines: re-capture baselines (`update --yes`) to compare the schema again;
-until then `verify` compares data only and warns.
 
 ### 2.6
 

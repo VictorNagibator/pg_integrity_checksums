@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums CLI
 
-Unreleased
+0.6.0   2026-11-17
 
     - Feature: update accepts --allow-version-mismatch, so a baseline can be
       refreshed with its scope kept after a PostgreSQL major upgrade.
@@ -11,6 +11,7 @@ Unreleased
       connection error.  The report is now only replaced once there is output.
     - Docs: --changed-since can reuse a stale checksum for a change committed
       just before the run (statistics are published with a delay).
+    - Dependencies: github.com/jackc/pgx/v5 5.13.0.
 
     - Fix: the CLI failed with "function pg_table_logical_checksum(regclass)
       does not exist" when the (relocatable) extension was installed in a

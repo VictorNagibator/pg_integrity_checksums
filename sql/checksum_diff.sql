@@ -120,6 +120,22 @@ CREATE TABLE diff_pk2 (a integer, b text, c integer, PRIMARY KEY (b, a));
 INSERT INTO diff_pk2 VALUES (1, 'x', 10), (2, 'y', 20);
 SELECT key FROM pg_table_row_checksums('diff_pk2') ORDER BY key;
 
+-- The key text is what ROW(...)::text prints, quoting included.
+CREATE TABLE diff_quote (id integer, t text, d date, a integer[]);
+INSERT INTO diff_quote VALUES
+    (1, 'plain', '2026-01-02', '{1,2}'), (2, '', NULL, NULL),
+    (3, 'a b', '2026-01-02', '{}'), (4, 'x"y\z', NULL, '{3}'),
+    (5, '(,)', NULL, NULL), (NULL, NULL, NULL, NULL);
+SET DateStyle = 'ISO, YMD';
+SELECT count(*) AS rows,
+       count(*) FILTER (WHERE r.key = ROW(q.id, q.t, q.d, q.a)::text) AS same
+FROM pg_table_row_checksums('diff_quote', 1, NULL, '{}') r
+JOIN diff_quote q ON q.ctid = r.ctid;
+SELECT key FROM pg_table_row_checksums('diff_quote', 1, NULL, '{t,id}')
+ORDER BY key COLLATE "C";
+RESET DateStyle;
+DROP TABLE diff_quote;
+
 -- NULL key values and duplicate rows are kept apart.
 CREATE TABLE diff_dup (k integer, v text);
 INSERT INTO diff_dup VALUES (NULL, 'a'), (NULL, 'a'), (1, NULL), (1, 'b');

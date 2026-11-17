@@ -33,6 +33,9 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+
+#include <ctype.h>
+
 #include "fmgr.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -42,10 +45,10 @@
 #include "catalog/pg_index.h"
 #include "catalog/pg_inherits.h"
 #include "catalog/pg_type.h"
+#include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
-#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -94,10 +97,8 @@ typedef struct DiffScanState
     bool       *wanted;         /* NULL means every bucket */
     Tuplestorestate *store;
     TupleDesc   resultdesc;
-    TupleDesc   keydesc;        /* blessed row type of the key columns */
-    FmgrInfo    record_out;
-    Datum      *keyvalues;
-    bool       *keynulls;
+    int         nkeyout;        /* number of columns in the key text */
+    FmgrInfo   *keyout;         /* output function of each key column */
 } DiffScanState;
 
 /*-------------------------------------------------------------------------
@@ -326,47 +327,38 @@ diff_resolve_key(Relation rel, ArrayType *key_columns, DiffScanState *state)
 }
 
 /*
- * diff_build_key_desc - row type used to print the key as a record
+ * diff_init_key_output - look up the output functions of the key columns
  *
- * Built from the queried table; partitions have the same column types.
+ * Done on the queried table; partitions have the same column types.  The
+ * key text is built from them like record_out() would, without creating a
+ * row type for the key.
  */
 static void
-diff_build_key_desc(Relation rel, DiffScanState *state)
+diff_init_key_output(Relation rel, DiffScanState *state)
 {
     TupleDesc   tupdesc = RelationGetDescr(rel);
-    int        *cols;
-    int         ncols = 0;
-    TupleDesc   keydesc;
     int         k;
 
-    cols = palloc(sizeof(int) * Max(tupdesc->natts, 1));
-    if (state->nkeys > 0)
-    {
-        for (k = 0; k < state->nkeys; k++)
-            cols[ncols++] = diff_find_column(tupdesc, state->keynames[k]);
-    }
-    else
-    {
-        for (k = 0; k < tupdesc->natts; k++)
-            if (!TupleDescAttr(tupdesc, k)->attisdropped)
-                cols[ncols++] = k;
-    }
+    state->keyout = palloc(sizeof(FmgrInfo) * Max(tupdesc->natts, 1));
+    state->nkeyout = 0;
 
-    keydesc = CreateTemplateTupleDesc(ncols);
-    for (k = 0; k < ncols; k++)
+    for (k = 0; k < (state->nkeys > 0 ? state->nkeys : tupdesc->natts); k++)
     {
-        Form_pg_attribute attr = TupleDescAttr(tupdesc, cols[k]);
+        int         idx = k;
+        Form_pg_attribute attr;
+        Oid         outfunc;
+        bool        isvarlena;
 
-        TupleDescInitEntry(keydesc, (AttrNumber) (k + 1),
-                           NameStr(attr->attname), attr->atttypid,
-                           attr->atttypmod, 0);
+        if (state->nkeys > 0)
+            idx = diff_find_column(tupdesc, state->keynames[k]);
+
+        attr = TupleDescAttr(tupdesc, idx);
+        if (attr->attisdropped)
+            continue;
+
+        getTypeOutputInfo(attr->atttypid, &outfunc, &isvarlena);
+        fmgr_info(outfunc, &state->keyout[state->nkeyout++]);
     }
-    pfree(cols);
-
-    state->keydesc = BlessTupleDesc(keydesc);
-    state->keyvalues = palloc(sizeof(Datum) * Max(ncols, 1));
-    state->keynulls = palloc(sizeof(bool) * Max(ncols, 1));
-    fmgr_info(F_RECORD_OUT, &state->record_out);
 }
 
 /*
@@ -417,33 +409,70 @@ diff_key_hash(DiffScanState *state, uint64 row_hash64)
 }
 
 /*
- * diff_key_text - the key of the row last deformed, as record_out() text
+ * diff_key_text - the key of the row last deformed, as record text
+ *
+ * Produces what record_out() prints for a row of the key columns: values in
+ * parentheses separated by commas, NULL as nothing, and a value quoted (with
+ * quotes and backslashes doubled) when it is empty or contains a quote,
+ * backslash, parenthesis, comma or white space.
  */
 static text *
 diff_key_text(DiffScanState *state)
 {
     LogicalRowHasher *hasher = &state->hasher;
     MemoryContext oldcontext;
-    HeapTuple   keytuple;
+    StringInfoData buf;
     text       *result;
-    int         nkeys = state->keydesc->natts;
     int         k;
 
     oldcontext = MemoryContextSwitchTo(hasher->rowcxt);
 
-    for (k = 0; k < nkeys; k++)
+    initStringInfo(&buf);
+    appendStringInfoChar(&buf, '(');
+
+    for (k = 0; k < state->nkeyout; k++)
     {
         int         i = state->nkeys > 0 ? state->keyidx[k] : hasher->attidx[k];
+        char       *value;
+        char       *p;
+        bool        quote;
 
-        state->keyvalues[k] = hasher->values[i];
-        state->keynulls[k] = hasher->nulls[i];
+        if (k > 0)
+            appendStringInfoChar(&buf, ',');
+
+        if (hasher->nulls[i])
+            continue;
+
+        value = OutputFunctionCall(&state->keyout[k], hasher->values[i]);
+
+        quote = (value[0] == '\0');
+        for (p = value; *p && !quote; p++)
+        {
+            char        ch = *p;
+
+            if (ch == '"' || ch == '\\' || ch == '(' || ch == ')' ||
+                ch == ',' || isspace((unsigned char) ch))
+                quote = true;
+        }
+
+        if (!quote)
+        {
+            appendStringInfoString(&buf, value);
+            continue;
+        }
+
+        appendStringInfoChar(&buf, '"');
+        for (p = value; *p; p++)
+        {
+            if (*p == '"' || *p == '\\')
+                appendStringInfoChar(&buf, *p);
+            appendStringInfoChar(&buf, *p);
+        }
+        appendStringInfoChar(&buf, '"');
     }
 
-    /* HeapTupleGetDatum() flattens external TOAST pointers. */
-    keytuple = heap_form_tuple(state->keydesc, state->keyvalues,
-                               state->keynulls);
-    result = cstring_to_text(OutputFunctionCall(&state->record_out,
-                                                HeapTupleGetDatum(keytuple)));
+    appendStringInfoChar(&buf, ')');
+    result = cstring_to_text_with_len(buf.data, buf.len);
 
     MemoryContextSwitchTo(oldcontext);
 
@@ -740,7 +769,7 @@ pg_table_row_checksums(PG_FUNCTION_ARGS)
     rel = diff_open_table(PG_GETARG_OID(0), true);
     diff_resolve_key(rel, PG_ARGISNULL(3) ? NULL : PG_GETARG_ARRAYTYPE_P(3),
                      &state);
-    diff_build_key_desc(rel, &state);
+    diff_init_key_output(rel, &state);
 
     diff_scan_relation(rel, NULL, pg_integrity_checksums_get_snapshot(),
                        &state);

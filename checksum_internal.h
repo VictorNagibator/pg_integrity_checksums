@@ -646,6 +646,9 @@ extern void logical_row_hasher_init(LogicalRowHasher *hasher,
 extern bool logical_columns_same_order(TupleDesc tupdesc, TupleDesc order_desc);
 extern uint64 logical_row_hash(LogicalRowHasher *hasher, HeapTuple tuple,
                                ChecksumAlgo algo);
+extern void logical_row_deform(LogicalRowHasher *hasher, HeapTuple tuple);
+extern uint64 logical_row_hash_values(LogicalRowHasher *hasher,
+                                      ChecksumAlgo algo);
 extern void logical_row_hasher_free(LogicalRowHasher *hasher);
 
 /*

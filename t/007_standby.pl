@@ -51,6 +51,32 @@ my $standby_checksums = $standby->safe_psql('postgres', $checksum_sql);
 is($standby_checksums, $primary_checksums,
     'logical table, index and database checksums match on standby');
 
+# Rows live at the same TIDs on a physical standby, so block range checksums
+# are comparable; leave dead tuples behind so visibility matters.
+$primary->safe_psql('postgres',
+    "UPDATE standby_items SET payload = payload || '_u' WHERE id % 7 = 0;");
+$primary->safe_psql('postgres', 'DELETE FROM standby_items WHERE id % 11 = 0;');
+$primary_lsn = $primary->safe_psql('postgres', 'SELECT pg_current_wal_lsn()');
+$standby->poll_query_until('postgres',
+    "SELECT '$primary_lsn'::pg_lsn <= pg_last_wal_replay_lsn()");
+
+my $ranges_sql = q{
+    SELECT string_agg(start_block || ':' || row_count || ':' ||
+                      encode(checksum, 'hex'), ',' ORDER BY start_block)
+      FROM pg_table_block_checksums('standby_items'::regclass, 1)
+    UNION ALL
+    SELECT string_agg(bucket || ':' || row_count || ':' ||
+                      encode(checksum, 'hex'), ',' ORDER BY bucket)
+      FROM pg_table_bucket_checksums('standby_items'::regclass, 16)
+};
+
+my $primary_ranges = $primary->safe_psql('postgres', $ranges_sql);
+my $standby_ranges = $standby->safe_psql('postgres', $ranges_sql);
+
+isnt($primary_ranges, '', 'block and bucket checksums are not empty');
+is($standby_ranges, $primary_ranges,
+    'block range and bucket checksums match on standby');
+
 $standby->stop;
 $primary->stop;
 

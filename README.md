@@ -32,6 +32,10 @@ SELECT pg_table_logical_checksum('public.orders'::regclass);
 SELECT pg_table_physical_checksum('public.orders'::regclass, false);
 ```
 
+When two copies of a table differ, the logical checksum can be split by key
+bucket (or, on a physical standby, by block range) to find the rows that
+differ; see [Finding differing rows](docs/functions.md#finding-differing-rows).
+
 A generic API with explicit FNV-1a 32-bit or 64-bit digests is available when a
 wider checksum or a raw `bytea` value is required.  It is described in the
 [function reference](docs/functions.md).

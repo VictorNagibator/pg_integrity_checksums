@@ -522,14 +522,44 @@ logical_row_hasher_free(LogicalRowHasher *hasher)
 uint64
 logical_row_hash(LogicalRowHasher *hasher, HeapTuple tuple, ChecksumAlgo algo)
 {
+    uint64      checksum;
+
+    logical_row_deform(hasher, tuple);
+    checksum = logical_row_hash_values(hasher, algo);
+    MemoryContextReset(hasher->rowcxt);
+
+    return checksum;
+}
+
+/*
+ * logical_row_deform - deform a row into hasher->values / hasher->nulls
+ *
+ * The first step of logical_row_hash(), for callers that hash the same row
+ * more than once (with logical_row_hash_values()) or read other values from
+ * it.  By-reference values point into the tuple, so the tuple must stay
+ * pinned until the caller resets hasher->rowcxt.
+ */
+void
+logical_row_deform(LogicalRowHasher *hasher, HeapTuple tuple)
+{
+    heap_deform_tuple(tuple, hasher->tupdesc, hasher->values, hasher->nulls);
+}
+
+/*
+ * logical_row_hash_values - logical checksum of the row last deformed
+ *
+ * Whatever the encoding allocates goes into hasher->rowcxt, which the caller
+ * resets once it is done with the row.
+ */
+uint64
+logical_row_hash_values(LogicalRowHasher *hasher, ChecksumAlgo algo)
+{
     TupleDesc   tupdesc = hasher->tupdesc;
     uint64      checksum = algo == CHECKSUM_ALGO_FNV32 ? FNV_BASIS_32 : FNV_BASIS_64;
     MemoryContext oldcontext;
     int         c;
 
     oldcontext = MemoryContextSwitchTo(hasher->rowcxt);
-
-    heap_deform_tuple(tuple, tupdesc, hasher->values, hasher->nulls);
 
     for (c = 0; c < hasher->ncols; c++)
     {
@@ -548,7 +578,6 @@ logical_row_hash(LogicalRowHasher *hasher, HeapTuple tuple, ChecksumAlgo algo)
     }
 
     MemoryContextSwitchTo(oldcontext);
-    MemoryContextReset(hasher->rowcxt);
 
     if (algo == CHECKSUM_ALGO_FNV32)
     {

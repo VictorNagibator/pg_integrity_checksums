@@ -218,6 +218,7 @@ The implementation is split into a small set of translation units:
 | `checksum_parallel.c` | dynamic shared-memory parallel execution |
 | `checksum_database.c` | database enumeration and database SQL entry points |
 | `checksum_utility.c` | generic data/text checksum helpers |
+| `checksum_diff.c` | key bucket, row and block range checksums for locating differing rows |
 | `checksum_internal.h` | internal interfaces and state shared by the modules |
 
 The split is a maintainability refactor, not a behavioral change.

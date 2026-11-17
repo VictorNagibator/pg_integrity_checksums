@@ -144,6 +144,44 @@ my ($cell_a, $cell_b) = logical_pair(
        FROM cross_t WHERE id = 1");
 is($cell_a, $cell_b, 'cell logical checksum matches across databases');
 
+# Bucket assignment and key hashes do not depend on OIDs either: the key
+# columns below have an enum, a composite and a domain type, whose OIDs
+# differ between the two databases.
+foreach my $args ("'cross_t', 4, '{mood,pair,dom}'", "'cross_t', 4, '{}'",
+                  "'cross_nopk', 2", "'cross_part', 3", "'cross_toast', 8")
+{
+    my ($a, $b) = logical_pair(
+        "SELECT string_agg(bucket || ':' || row_count || ':' ||
+                           encode(checksum, 'hex'), ',' ORDER BY bucket)
+           FROM pg_table_bucket_checksums($args)");
+    is($a, $b, "bucket checksums match across databases ($args)");
+}
+
+my ($rows_a, $rows_b) = logical_pair(
+    "SELECT string_agg(encode(key_hash, 'hex') || ':' ||
+                       encode(row_checksum, 'hex'), ',' ORDER BY key_hash)
+       FROM pg_table_row_checksums('cross_t', 4, NULL, '{mood,pair,dom}')");
+is($rows_a, $rows_b, 'row checksums and key hashes match across databases');
+
+# A changed row is found through its bucket.
+$node->safe_psql('cross_b', "UPDATE cross_toast SET v = 'changed' WHERE id = 17");
+my $bucket_sql = "SELECT bucket || ':' || encode(checksum, 'hex')
+                    FROM pg_table_bucket_checksums('cross_toast', 8, '{id}')
+                   ORDER BY bucket";
+my %buckets_a = map { split /:/ } split /\n/, $node->safe_psql('cross_a', $bucket_sql);
+my %buckets_b = map { split /:/ } split /\n/, $node->safe_psql('cross_b', $bucket_sql);
+my @differing = sort { $a <=> $b }
+  grep { $buckets_a{$_} ne $buckets_b{$_} } keys %buckets_a;
+is(scalar(@differing), 1, 'one bucket differs after changing one row');
+
+my $rows_sql = "SELECT key || ':' || encode(row_checksum, 'hex')
+                  FROM pg_table_row_checksums('cross_toast', 8,
+                                              '{$differing[0]}', '{id}')";
+my %rowmap_a = map { split /:/ } split /\n/, $node->safe_psql('cross_a', $rows_sql);
+my %rowmap_b = map { split /:/ } split /\n/, $node->safe_psql('cross_b', $rows_sql);
+my @changed = grep { $rowmap_a{$_} ne $rowmap_b{$_} } keys %rowmap_a;
+is_deeply(\@changed, ['(17)'], 'the changed row is found in that bucket');
+
 # Physical checksums include relation/storage identity and must differ.
 my $phys_table_a = $node->safe_psql('cross_a',
     "SELECT pg_table_physical_checksum('cross_t'::regclass, false)");

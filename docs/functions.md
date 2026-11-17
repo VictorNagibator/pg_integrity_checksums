@@ -19,10 +19,15 @@ New to the extension? Read [Getting started](getting-started.md) and
 | Database logical | `pg_database_logical_checksum(boolean, boolean, text)` | `pg_database_logical_checksum(boolean, boolean)` |
 | Database, per relation | `pg_database_physical_checksums(boolean, boolean, regclass[], text)` / `pg_database_logical_checksums(boolean, boolean, regclass[], text)` | same functions (`algorithm` defaults to `fnv32`) |
 | Data/text | `pg_data_checksum(bytea, bigint, text)` / `pg_text_checksum(text, bigint, text)` | `pg_data_checksum(bytea, integer)` / `pg_text_checksum(text, integer)` |
+| Key buckets (logical) | `pg_table_bucket_checksums(regclass, integer, text[], text)` | — |
+| Rows of buckets (logical) | `pg_table_row_checksums(regclass, integer, integer[], text[], text)` | — |
+| Block ranges (logical) | `pg_table_block_checksums(regclass, integer, text)` | — |
 
 The generic API returns `bytea` and accepts `fnv32` or `fnv64`.  The default
 32-bit API returns `integer`/`bigint` and is the simplest choice for most
-users.
+users.  The bucket, row and block range functions (see
+[Finding differing rows](#finding-differing-rows)) return sets and default to
+`fnv64`.
 
 Privileges, NULL handling and object-level behavior are the same for the two
 forms.  For per-function details, read the corresponding 32-bit function
@@ -427,6 +432,104 @@ SELECT pg_checksum_bigint(pg_table_logical_checksum('orders'::regclass, 'fnv64')
 PostgreSQL's built-in 16-bit page checksum.
 
 ---
+
+## Finding differing rows
+
+A table checksum tells *that* two copies of a table differ.  These three
+set-returning functions (since 2.8) split the same logical checksum into
+pieces, so the differing rows can be found without moving the table between
+servers.  All of them require `SELECT` on the table, reject tables with
+row-level security, see the statement's snapshot (only visible rows count)
+and accept `fnv32` or `fnv64` (the default) as `algorithm`.  They run in the
+calling backend and do not use `pg_integrity_checksums.workers`.
+
+The row checksums are the logical tuple checksums, and each bucket or range is
+aggregated like `pg_table_logical_checksum`: the checksum of one bucket that
+holds every row equals `pg_table_logical_checksum(relname, algorithm)`, and an
+empty bucket has the checksum of an empty table.
+
+**`pg_table_bucket_checksums(relname regclass, buckets integer, key_columns text[] DEFAULT NULL, algorithm text DEFAULT 'fnv64')`**
+**`-> TABLE(bucket integer, row_count bigint, checksum bytea)`**
+
+Hashes the key of every visible row and returns one logical checksum per
+bucket of the key hash space, in bucket order and including empty buckets.
+`buckets` is between 1 and 1048576.
+
+The key is
+
+- `key_columns` when given, in that order (column names, not quoted
+  identifiers);
+- the primary key when `key_columns` is `NULL`;
+- the whole row when `key_columns` is an empty array, or when it is `NULL`
+  and the table has no primary key.
+
+The key hash uses the canonical logical encoding, so a row lands in the same
+bucket on every server, after a dump and restore and on any byte order.  Use
+the same key on both sides: when only one side has a primary key, pass
+`key_columns` explicitly.  With the whole row as the key a changed row shows up
+as a missing and an extra row.
+
+Buckets are equal ranges of the 64-bit key hash: bucket `b` of `n` contains
+exactly the buckets `b*k` to `b*k+k-1` of `n*k`.  A comparison can therefore
+be refined by multiplying the number of buckets.  Pick `n` so that a bucket
+holds a few hundred to a few thousand rows.
+
+```sql
+SELECT bucket, row_count, checksum
+FROM pg_table_bucket_checksums('orders', 1024);
+
+-- Composite key in a chosen order, 32-bit checksums.
+SELECT * FROM pg_table_bucket_checksums('order_lines', 256,
+                                        '{order_id,line_no}', 'fnv32');
+```
+
+**`pg_table_row_checksums(relname regclass, buckets integer DEFAULT 1, only_buckets integer[] DEFAULT NULL, key_columns text[] DEFAULT NULL, algorithm text DEFAULT 'fnv64')`**
+**`-> TABLE(bucket integer, key_hash bytea, key text, row_checksum bytea, ctid tid, tableoid regclass)`**
+
+One row per visible row whose bucket is in `only_buckets` (every row when it
+is `NULL`), in physical order.  `buckets` and `key_columns` must be the values
+passed to `pg_table_bucket_checksums`.
+
+| Column | Meaning |
+|---|---|
+| `bucket` | the row's bucket |
+| `key_hash` | 64-bit canonical hash of the key; portable, compare rows by it |
+| `key` | the key as record text, for example `(42)` or `(7,abc)`; produced by the output functions, so it depends on settings such as `DateStyle` |
+| `row_checksum` | logical checksum of the row, as `pg_tuple_logical_checksum(relname, ctid, algorithm)` |
+| `ctid`, `tableoid` | where the row is, on this server and in this snapshot (`tableoid` names the partition) |
+
+A key hash that only one side has is a missing or extra row; a key hash with
+different row checksums is a changed row.  `key` can be compared with
+`ROW(...)::text` of the key columns: `WHERE ROW(id)::text = '(42)'`.
+
+```sql
+SELECT key, row_checksum
+FROM pg_table_row_checksums('orders', 1024, '{17,512}');
+```
+
+**`pg_table_block_checksums(relname regclass, blocks_per_range integer DEFAULT 1, algorithm text DEFAULT 'fnv64')`**
+**`-> TABLE(start_block bigint, end_block bigint, row_count bigint, checksum bytea)`**
+
+One logical checksum of the visible rows per range of heap blocks
+`[start_block, end_block)`.  `end_block` is always `start_block +
+blocks_per_range`, so ranges line up between servers whose table has a
+different number of blocks.  Block numbers only mean the same thing on a
+primary and its **physical** standbys, which store every row at the same TID:
+use this function to find where a standby diverges, and the key buckets for
+everything else (logical replicas, restored dumps, other clusters).  Not
+available for partitioned tables; call it for each partition.  To list the
+rows of a range, select `ctid` and `pg_tuple_logical_checksum` with a TID
+range condition:
+
+```sql
+SELECT * FROM pg_table_block_checksums('orders', 128);
+
+SELECT ctid, pg_tuple_logical_checksum('orders'::regclass, ctid, 'fnv64')
+FROM orders WHERE ctid >= '(1280,0)' AND ctid < '(1408,0)';
+```
+
+The complete procedure for comparing two servers is in
+[Locating differing rows](operations.md#7-locating-differing-rows-between-two-servers).
 
 ## Algorithm Details
 

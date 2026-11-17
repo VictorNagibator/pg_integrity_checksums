@@ -203,11 +203,16 @@ in:
 
    The CLI does this for you: `pg_integrity_checksums verify` reports each
    object that differs.
-4. **Find the rows.**  Within a table, compare row checksums by key:
+4. **Find the rows.**  Compare logical checksums per key bucket, then the rows
+   of the buckets that differ (see
+   [Locating differing rows](#7-locating-differing-rows-between-two-servers)):
 
    ```sql
-   SELECT id, pg_tuple_logical_checksum('orders'::regclass, ctid)
-   FROM orders ORDER BY id;
+   SELECT bucket, row_count, checksum
+   FROM pg_table_bucket_checksums('orders', 1024);
+
+   SELECT key, row_checksum
+   FROM pg_table_row_checksums('orders', 1024, '{17,512}');
    ```
 
 5. **If the data is identical but the storage is suspect**, verify the pages
@@ -422,3 +427,62 @@ architecture-dependent by design; use logical checksums for cross-platform
 comparisons.
 
 ---
+
+### 7. Locating differing rows between two servers
+
+Two copies of `orders` (a logical replica, a restored dump, a migration
+target) have different logical checksums.  Find the rows without copying the
+table, in two passes over each side.  The example uses
+[`dblink`](https://www.postgresql.org/docs/current/dblink.html) to query the
+other server from one session; running the queries on each side and comparing
+the results elsewhere works the same way.
+
+1. Compare the bucket checksums.  Use the same number of buckets and the same
+   key on both sides; aim for a few hundred to a few thousand rows per bucket.
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS dblink;
+
+    CREATE TEMP TABLE differing AS
+    SELECT l.bucket, l.row_count AS local_rows, r.row_count AS remote_rows
+    FROM pg_table_bucket_checksums('orders', 1024) l
+    JOIN dblink('host=replica dbname=app',
+                $$SELECT bucket, row_count, checksum
+                  FROM pg_table_bucket_checksums('orders', 1024)$$)
+         AS r(bucket integer, row_count bigint, checksum bytea)
+      USING (bucket)
+    WHERE l.checksum <> r.checksum;
+    ```
+
+2. Compare the rows of those buckets by key hash:
+
+    ```sql
+    WITH sel AS (SELECT array_agg(bucket) AS b FROM differing),
+    l AS (SELECT r.* FROM sel, pg_table_row_checksums('orders', 1024, sel.b) r),
+    r AS (SELECT x.* FROM sel, dblink('host=replica dbname=app',
+            format('SELECT key_hash, key, row_checksum
+                      FROM pg_table_row_checksums(%L, 1024, %L)',
+                   'orders', sel.b))
+            AS x(key_hash bytea, key text, row_checksum bytea))
+    SELECT coalesce(l.key, r.key) AS key,
+           CASE WHEN r.key IS NULL THEN 'only here'
+                WHEN l.key IS NULL THEN 'only on replica'
+                ELSE 'changed' END AS difference
+    FROM l FULL JOIN r USING (key_hash)
+    WHERE l.row_checksum IS DISTINCT FROM r.row_checksum
+    ORDER BY 1;
+    ```
+
+Every call reads the whole table, so this costs two scans per side whatever
+the number of buckets; more buckets only make the second pass return fewer
+rows.  Bucket `b` of 1024 is exactly buckets `16*b` to `16*b+15` of 16384, so
+results taken with different bucket counts (for example stored ones) can be
+related to each other.
+
+Each call sees its own snapshot.  On a table that is being written to, run the
+two passes on each side inside one `REPEATABLE READ` transaction, and expect
+rows changed by replication lag to show up as differences.
+
+For a **physical** standby, `pg_table_block_checksums` compares ranges of
+heap blocks instead, without a key; see the
+[function reference](functions.md#finding-differing-rows).

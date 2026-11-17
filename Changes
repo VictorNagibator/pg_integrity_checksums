@@ -1,6 +1,18 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.8.0   2026-11-17
+
+    - Feature: locate the rows that differ between two copies of a table,
+      not only the fact that they differ.  pg_table_bucket_checksums()
+      returns a logical checksum per bucket of the key hash space (key: the
+      primary key, chosen columns or the whole row); key hashes use the
+      canonical encoding, so buckets are comparable between servers.
+      pg_table_row_checksums() returns the key, key hash and row checksum of
+      the rows in chosen buckets.  pg_table_block_checksums() returns a
+      logical checksum per range of heap blocks, for comparing a primary with
+      its physical standbys.  With one bucket (or one range covering the
+      table) the checksum equals pg_table_logical_checksum.  New SQL
+      functions: run ALTER EXTENSION pg_integrity_checksums UPDATE.
 
     - New: pg_database_logical_checksums() and
       pg_database_physical_checksums() return the checksum of every relation

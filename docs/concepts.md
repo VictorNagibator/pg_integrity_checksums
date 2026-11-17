@@ -16,6 +16,10 @@ The extension works at six levels:
 | Index | yes | yes | Is the physical index intact, or does it contain the expected entries? |
 | Database | yes | yes | Did anything in the database change? |
 
+A logical table checksum can also be split by key bucket or block range to
+find *which* rows differ between two copies of a table; see
+[Finding differing rows](functions.md#finding-differing-rows).
+
 Page checksums are PostgreSQL’s built-in **16-bit** page checksum.  Page-level
 64-bit checksums do not exist in this extension; the other levels have both
 physical and logical forms.  `pg_page_checksum` calculates the checksum but does not

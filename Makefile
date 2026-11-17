@@ -21,7 +21,8 @@ OBJS = \
 	checksum_index.o \
 	checksum_database.o \
 	checksum_parallel.o \
-	checksum_utility.o
+	checksum_utility.o \
+	checksum_diff.o
 
 # The control file is the single source of truth for the extension version;
 # the distribution archive name derives from it.
@@ -60,7 +61,8 @@ REGRESS = \
 	checksum_security \
 	checksum_robustness \
 	checksum_visibility \
-	checksum_relations
+	checksum_relations \
+	checksum_diff
 
 REGRESS_OPTS = \
     --inputdir=./ \

@@ -50,6 +50,19 @@ The complete history is in
 [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 These notes cover what to check when upgrading.
 
+### 2.9.1
+
+2.9.1 makes scans faster on PostgreSQL 17 and later: table, index, bucket
+and database checksums read blocks through a read stream, like a sequential
+scan, so reads are issued ahead and combined (asynchronous on PostgreSQL 18).
+A serial scan of data on disk takes about half as long as in 2.9.0; see
+[Benchmarks](benchmarks.md#before-the-read-stream).
+There are no SQL changes and no checksum value changes.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.1';
+```
+
 ### 2.9
 
 2.9 adds `pg_relation_page_checksum_status()`, which verifies every page of a

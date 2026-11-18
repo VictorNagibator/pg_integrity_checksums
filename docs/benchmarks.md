@@ -10,8 +10,8 @@ ratio shows what hashing adds on top of the I/O.
 - AMD Ryzen 5 5600 (6 cores, 12 threads), Linux under WSL2 with 8 GB of
   memory, data on the WSL virtual disk on an NVMe SSD.
 - PostgreSQL 18.7 built from source, `shared_buffers = 2GB`,
-  `--data-checksums`; pg_integrity_checksums from `main` after 2.9.0, with
-  blocks read through a read stream (see
+  `--data-checksums`; pg_integrity_checksums 2.9.1, which
+  reads blocks through a read stream (see
   [Before the read stream](#before-the-read-stream) for 2.9.0).
 - Data: `pgbench -i`, table `pgbench_accounts` (an integer key, two integers
   and a `char(84)` column) with its primary key, frozen and analyzed.

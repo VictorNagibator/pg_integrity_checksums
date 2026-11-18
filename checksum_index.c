@@ -265,8 +265,10 @@ pg_index_physical_checksum_common(Oid indexoid, bool check_privileges,
     if (workers < 1)
     {
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+        ChecksumBlockSource src;
 
-        scan_index_blocks_physical(idxRel, 0, nblocks, is_brin, algo,
+        checksum_block_source_range(&src, 0, nblocks);
+        scan_index_blocks_physical(idxRel, &src, is_brin, algo,
                                    &acc32, &acc64, bstrategy);
         FreeAccessStrategy(bstrategy);
     }
@@ -677,21 +679,21 @@ index_logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 }
 
 /*
- * pg_index_logical_scan_blocks - hash index definitions over a heap
- * block range
+ * pg_index_logical_scan_blocks - hash index definitions over the heap
+ * blocks of a source
  *
  * Only the accumulator that matches "algo" is used.
  */
 void
 pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
-                                  BlockNumber start, BlockNumber end,
+                                  ChecksumBlockSource *src,
                                   ChecksumAlgo algo,
                                   ChecksumLogicalAccum *acc32,
                                   ChecksumLogicalAccum64 *acc64)
 {
     IndexLogicalVisitorState state = {scanstate, algo, acc32, acc64};
 
-    scan_visible_tuples(scanstate->heapRel, start, end, scanstate->snapshot,
+    scan_visible_tuples(scanstate->heapRel, src, scanstate->snapshot,
                         scanstate->bstrategy, false,
                         index_logical_tuple_visitor,
                         &state);
@@ -827,7 +829,10 @@ pg_index_logical_checksum_accum(Oid indexoid, bool check_privileges,
 
     if (workers < 1)
     {
-        pg_index_logical_scan_blocks(&scanstate, 0, nblocks, algo,
+        ChecksumBlockSource src;
+
+        checksum_block_source_range(&src, 0, nblocks);
+        pg_index_logical_scan_blocks(&scanstate, &src, algo,
                                           acc32, acc64);
         pg_index_logical_scan_end(&scanstate);
     }

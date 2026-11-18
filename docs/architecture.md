@@ -45,6 +45,12 @@ Index logical checksums evaluate the index definition on visible heap rows
 rather than reading index pages; index physical checksums read the index
 pages directly.
 
+Blocks are read through a buffer access strategy (`BAS_BULKREAD`), so a scan
+does not evict the rest of shared buffers.  On PostgreSQL 17 and later they
+come from a read stream, like a sequential scan: reads are issued ahead of
+the block being hashed, combined into larger I/Os, and asynchronous on
+PostgreSQL 18.  On older versions each block is read when it is needed.
+
 ## Canonical logical encoding
 
 The goal is a value that is independent of relation OIDs, heap TIDs, tuple
@@ -141,7 +147,9 @@ Parallel scans use PostgreSQL's dynamic shared-memory parallel context:
 
 - the leader publishes a `ChecksumParallelState` with the task type,
   relation OID, algorithm and an atomic work counter;
-- workers claim block ranges (or relations) atomically;
+- workers claim block ranges (or relations) atomically; each participant
+  reads all the ranges it claims through one read stream, so read-ahead
+  continues from one range to the next;
 - the snapshot is serialized once and restored by every worker;
 - each worker returns a fixed-size partial aggregate and count;
 - the leader merges partials with XOR (physical) or sum/count (logical).
@@ -219,7 +227,7 @@ The implementation is split into a small set of translation units:
 | `checksum_validation.c` | relation, page, line-pointer and tuple validation |
 | `checksum_page.c` | page checksum verification and canonical cell checksums |
 | `checksum_tuple.c` | physical and logical tuple checksums |
-| `checksum_scan.c` | serial block-range scans |
+| `checksum_scan.c` | block sources and readers (a read stream on PostgreSQL 17+), heap and index block scans |
 | `checksum_table.c` | table checksums and partition helpers |
 | `checksum_index.c` | physical/logical index checksums and index scans |
 | `checksum_parallel.c` | dynamic shared-memory parallel execution |

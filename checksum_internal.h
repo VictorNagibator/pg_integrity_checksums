@@ -258,6 +258,7 @@ typedef struct ChecksumParallelState
     bool        include_header;
     ChecksumAlgo         algo;
     uint32      nitems;
+    uint32      block_chunk;    /* blocks per claim, block scans only */
     uint32      snapshot_size;
     pg_atomic_uint32 next_item;
 
@@ -274,8 +275,59 @@ typedef struct ChecksumParallelState
 #define CHECKSUM_KEY_KEYNAMES    4  /* bucket scan: NUL-separated key names */
 #define CHECKSUM_KEY_BUCKETS     5  /* bucket scan: pg_atomic_uint64[2 * nbuckets] */
 
-/* Number of blocks claimed per atomic fetch during a parallel scan. */
+/*
+ * Blocks claimed per atomic fetch during a parallel scan: at least
+ * PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK, and for large relations enough that
+ * there are about PG_INTEGRITY_CHECKSUMS_NCHUNKS claims, as in a parallel
+ * sequential scan; see pg_integrity_checksums_block_chunk().
+ */
 #define PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK 64
+#define PG_INTEGRITY_CHECKSUMS_MAX_BLOCK_CHUNK 8192
+#define PG_INTEGRITY_CHECKSUMS_NCHUNKS 2048
+
+/*
+ * ChecksumBlockSource - the blocks one scan reads, in ascending order
+ *
+ * Either one fixed range [next, end), or the chunks this participant claims
+ * from the shared counter of a parallel scan (pstate != NULL).  A scan reads
+ * all of its blocks through one ChecksumBlockReader, so on PostgreSQL 17 and
+ * later the read stream keeps reading ahead across chunk boundaries.
+ */
+typedef struct ChecksumBlockSource
+{
+    BlockNumber next;           /* next block of the current range */
+    BlockNumber end;            /* end (exclusive) of the current range */
+    ChecksumParallelState *pstate;  /* claim more ranges here, or NULL */
+} ChecksumBlockSource;
+
+extern void checksum_block_source_range(ChecksumBlockSource *src,
+                                        BlockNumber start, BlockNumber end);
+extern void checksum_block_source_shared(ChecksumBlockSource *src,
+                                         ChecksumParallelState *pstate);
+
+/*
+ * ChecksumBlockReader - reads the blocks of a ChecksumBlockSource
+ *
+ * checksum_block_reader_next() returns the next block pinned (not locked),
+ * or InvalidBuffer when the source is exhausted.  On PostgreSQL 17 and later
+ * the blocks come from a read stream, which issues the reads ahead of time
+ * (and asynchronously from PostgreSQL 18); on older versions each block is
+ * read with ReadBufferExtended() when it is needed.
+ */
+typedef struct ChecksumBlockReader
+{
+    Relation    rel;
+    ChecksumBlockSource *src;
+    BufferAccessStrategy bstrategy;
+    struct ReadStream *stream;  /* NULL before PostgreSQL 17 */
+} ChecksumBlockReader;
+
+extern void checksum_block_reader_begin(ChecksumBlockReader *reader,
+                                        Relation rel,
+                                        ChecksumBlockSource *src,
+                                        BufferAccessStrategy bstrategy);
+extern Buffer checksum_block_reader_next(ChecksumBlockReader *reader);
+extern void checksum_block_reader_end(ChecksumBlockReader *reader);
 
 /* Parallel worker entry point (must be a globally visible symbol). */
 PGDLLEXPORT void
@@ -315,6 +367,7 @@ extern void pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_ty
                                                         ChecksumLogicalAccum *logical_acc,
                                                         ChecksumAccum64 *acc64,
                                                         ChecksumLogicalAccum64 *logical_acc64);
+extern uint32 pg_integrity_checksums_block_chunk(BlockNumber nblocks);
 extern bool pg_integrity_checksums_parallel_consume(ChecksumParallelState *state,
                                                    uint32 chunk,
                                                    uint32 *start, uint32 *end);
@@ -651,7 +704,7 @@ extern bool pg_index_oid_definition_parallel_safe(Oid indexoid);
 extern bool pg_index_logical_scan_init(Oid indexoid, Snapshot snapshot,
                                        IndexLogicalScanState *scanstate);
 extern void pg_index_logical_scan_blocks(IndexLogicalScanState *scanstate,
-                                         BlockNumber start, BlockNumber end,
+                                         ChecksumBlockSource *src,
                                          ChecksumAlgo algo,
                                          ChecksumLogicalAccum *acc32,
                                          ChecksumLogicalAccum64 *acc64);
@@ -815,9 +868,12 @@ typedef void (*TupleVisitor) (Relation rel, Page page, BlockNumber blkno,
                               OffsetNumber offnum, HeapTuple tuple,
                               void *arg);
 
-/* Serial block-range scans. */
-extern void scan_visible_tuples(Relation rel, BlockNumber start,
-                                BlockNumber end, Snapshot snapshot,
+/*
+ * Block scans.  Each reads the blocks of "src": one range for a serial scan,
+ * or the chunks claimed by this participant of a parallel scan.
+ */
+extern void scan_visible_tuples(Relation rel, ChecksumBlockSource *src,
+                                Snapshot snapshot,
                                 BufferAccessStrategy bstrategy,
                                 bool needs_lock,
                                 TupleVisitor visitor, void *arg);
@@ -827,21 +883,24 @@ extern void scan_visible_tuples(Relation rel, BlockNumber start,
  * "algo" (acc32 for 32-bit algorithms, acc64 otherwise); the other one is
  * not touched and may be NULL.
  */
-extern void scan_table_blocks_physical(Relation rel, BlockNumber start,
-                                       BlockNumber end, bool include_header,
+extern void scan_table_blocks_physical(Relation rel,
+                                       ChecksumBlockSource *src,
+                                       bool include_header,
                                        Snapshot snapshot, ChecksumAlgo algo,
                                        ChecksumAccum *acc32,
                                        ChecksumAccum64 *acc64,
                                        BufferAccessStrategy bstrategy);
-extern void scan_table_blocks_logical(Relation rel, BlockNumber start,
-                                      BlockNumber end, Snapshot snapshot,
+extern void scan_table_blocks_logical(Relation rel,
+                                      ChecksumBlockSource *src,
+                                      Snapshot snapshot,
                                       ChecksumAlgo algo,
                                       ChecksumLogicalAccum *acc32,
                                       ChecksumLogicalAccum64 *acc64,
                                       BufferAccessStrategy bstrategy,
                                       TupleDesc order_desc);
-extern void scan_index_blocks_physical(Relation idxRel, BlockNumber start,
-                                       BlockNumber end, bool is_brin,
+extern void scan_index_blocks_physical(Relation idxRel,
+                                       ChecksumBlockSource *src,
+                                       bool is_brin,
                                        ChecksumAlgo algo,
                                        ChecksumAccum *acc32,
                                        ChecksumAccum64 *acc64,

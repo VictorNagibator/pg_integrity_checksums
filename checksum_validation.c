@@ -444,17 +444,20 @@ scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
                         ChecksumAlgo algo, ChecksumAccum *acc32,
                         ChecksumAccum64 *acc64)
 {
-    BlockNumber blkno;
     BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+    ChecksumBlockSource src;
+    ChecksumBlockReader reader;
+    Buffer      buffer;
     PGAlignedBlock masked;
 
-    for (blkno = start; blkno < end; blkno++)
+    checksum_block_source_range(&src, start, end);
+    checksum_block_reader_begin(&reader, rel, &src, bstrategy);
+
+    while ((buffer = checksum_block_reader_next(&reader)) != InvalidBuffer)
     {
-        Buffer      buffer;
+        BlockNumber blkno = BufferGetBlockNumber(buffer);
         uint64      page_hash;
 
-        buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-                                    bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         pg_integrity_checksums_mask_page(BufferGetPage(buffer), masked.data,
                                          CHECKSUM_PAGE_HEAP, InvalidOid);
@@ -473,5 +476,6 @@ scan_relation_raw_pages(Relation rel, BlockNumber start, BlockNumber end,
             CHECK_FOR_INTERRUPTS();
     }
 
+    checksum_block_reader_end(&reader);
     FreeAccessStrategy(bstrategy);
 }

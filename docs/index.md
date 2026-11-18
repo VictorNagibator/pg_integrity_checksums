@@ -78,7 +78,8 @@ or 64-bit.
 - FNV-1a is **not cryptographic**; it is not tamper evidence.
 - Physical checksums are tied to one cluster and database.
 - Logical checksums describe content, not physical layout.
-- It does not replace backups, `pg_checksums` or `amcheck`.
+- It does not replace backups, `pg_checksums` or `amcheck`; see
+  [Compared with other tools](concepts.md#compared-with-other-tools).
 
 ## Documentation
 

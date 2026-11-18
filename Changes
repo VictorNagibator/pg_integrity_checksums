@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.9.1   2026-11-18
 
     - Performance: on PostgreSQL 17 and later, table, index, bucket and
       database scans read blocks through a read stream, like a sequential

@@ -92,6 +92,7 @@ or 64-bit.
 - [Operations](operations.md)
 - [Troubleshooting](troubleshooting.md)
 - [Architecture](architecture.md)
+- [Benchmarks](benchmarks.md)
 - [Testing and releases](testing.md)
 
 Source and issue tracker:

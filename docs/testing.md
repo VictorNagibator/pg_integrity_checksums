@@ -120,6 +120,10 @@ be identical; only `median_ms` may change.  Restart the server with `pg_ctl
 stop` and `pg_ctl start` from the other installation; `pg_ctl restart`
 reuses the `postgres` binary recorded in `postmaster.opts`.
 
+`bench/compare.sh` compares the checksums with a sequential scan and a
+hand-written SQL hash on pgbench data; its results are in
+[Benchmarks](benchmarks.md).
+
 ## Continuous integration
 
 Workflows are in `.github/workflows`.  Pull requests run a reduced

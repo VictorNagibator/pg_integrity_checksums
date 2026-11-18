@@ -88,6 +88,27 @@ pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 The CLI uses the 32-bit v1 baseline format by default.  Add
 `--hash fnv64` to `capture` when you explicitly need a 64-bit v2 baseline.
 
+## Use cases
+
+- **After a major-version upgrade or a migration.** Compute
+  `pg_database_logical_checksum` (or `capture` a baseline with the CLI)
+  before, and compare it with the value on the new cluster.  It holds across
+  `pg_upgrade`, `pg_dump`/restore and a move to another OS or CPU architecture.
+- **Logical replication and replicas.** Compare a table on the publisher and
+  the subscriber.  If they differ, split the checksum by key bucket to find the
+  rows, see [Finding differing rows](docs/functions.md#finding-differing-rows).
+- **Restored backups in CI.** Capture a baseline when the backup is taken, then
+  `verify` it against the restored database and fail the job on a mismatch; the
+  CLI writes JUnit reports and ships as a GitHub Action.
+- **Detecting corruption.** Physical checksums validate page and tuple
+  structure while they hash, so a damaged page fails the call instead of
+  producing a value.
+
+```sql
+-- on the source, then on the copy: the values must be equal
+SELECT pg_table_logical_checksum('public.orders'::regclass);
+```
+
 ## How is this different from pg_checksums, amcheck or pg_comparator?
 
 They answer different questions, and work well together:

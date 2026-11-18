@@ -567,6 +567,7 @@ compute_logical_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
     Relation    rel;
     Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
     BufferAccessStrategy bstrategy;
+    ChecksumBlockSource src;
     BlockNumber nblocks;
     ChecksumOwnerContext owner_ctx;
     int         i;
@@ -599,7 +600,8 @@ compute_logical_group(ChecksumRelationItem *items, int n, ChecksumAlgo algo,
 
     nblocks = RelationGetNumberOfBlocks(rel);
     bstrategy = GetAccessStrategy(BAS_BULKREAD);
-    scan_visible_tuples(rel, 0, nblocks, snapshot, bstrategy, false,
+    checksum_block_source_range(&src, 0, nblocks);
+    scan_visible_tuples(rel, &src, snapshot, bstrategy, false,
                         logical_group_visitor, &state);
     FreeAccessStrategy(bstrategy);
 

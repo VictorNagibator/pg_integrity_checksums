@@ -33,6 +33,28 @@
  */
 
 /*
+ * pg_integrity_checksums_block_chunk - blocks per claim of a parallel scan
+ *
+ * Small claims balance the work; large ones let each participant read long
+ * runs of consecutive blocks, which the read stream and the kernel can read
+ * ahead.  Like a parallel sequential scan, aim for about
+ * PG_INTEGRITY_CHECKSUMS_NCHUNKS claims, rounded up to a power of two and
+ * kept between PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK and
+ * PG_INTEGRITY_CHECKSUMS_MAX_BLOCK_CHUNK blocks.
+ */
+uint32
+pg_integrity_checksums_block_chunk(BlockNumber nblocks)
+{
+    uint32      chunk = PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK;
+
+    while (chunk < PG_INTEGRITY_CHECKSUMS_MAX_BLOCK_CHUNK &&
+           nblocks / chunk > PG_INTEGRITY_CHECKSUMS_NCHUNKS)
+        chunk *= 2;
+
+    return chunk;
+}
+
+/*
  * pg_integrity_checksums_parallel_consume - claim the next range of items
  *
  * Atomically advances the shared counter and returns the resulting range
@@ -98,8 +120,10 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                ScanAccums *accs)
 {
     ChecksumAlgo algo = state->algo;
-    uint32      start;
-    uint32      end;
+    ChecksumBlockSource src;
+
+    /* Every participant reads the chunks it claims as one stream. */
+    checksum_block_source_shared(&src, state);
 
     switch (state->task_type)
     {
@@ -109,23 +133,18 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                 Relation    rel = relation_open(state->reloid, AccessShareLock);
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_integrity_checksums_parallel_consume(state,
-                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                      &start, &end))
-                {
-                    if (state->task_type == CHECKSUM_TASK_TABLE_PHYSICAL)
-                        scan_table_blocks_physical(rel, start, end,
-                                                   state->include_header,
-                                                   snapshot, algo,
-                                                   &accs->physical32,
-                                                   &accs->physical64,
-                                                   bstrategy);
-                    else
-                        scan_table_blocks_logical(rel, start, end, snapshot,
-                                                  algo, &accs->logical32,
-                                                  &accs->logical64,
-                                                  bstrategy, NULL);
-                }
+                if (state->task_type == CHECKSUM_TASK_TABLE_PHYSICAL)
+                    scan_table_blocks_physical(rel, &src,
+                                               state->include_header,
+                                               snapshot, algo,
+                                               &accs->physical32,
+                                               &accs->physical64,
+                                               bstrategy);
+                else
+                    scan_table_blocks_logical(rel, &src, snapshot,
+                                              algo, &accs->logical32,
+                                              &accs->logical64,
+                                              bstrategy, NULL);
 
                 relation_close(rel, AccessShareLock);
                 FreeAccessStrategy(bstrategy);
@@ -137,14 +156,9 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                 bool        is_brin = (idxRel->rd_rel->relam == BRIN_AM_OID);
                 BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-                while (pg_integrity_checksums_parallel_consume(state,
-                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                      &start, &end))
-                {
-                    scan_index_blocks_physical(idxRel, start, end, is_brin,
-                                               algo, &accs->physical32,
-                                               &accs->physical64, bstrategy);
-                }
+                scan_index_blocks_physical(idxRel, &src, is_brin,
+                                           algo, &accs->physical32,
+                                           &accs->physical64, bstrategy);
 
                 index_close(idxRel, AccessShareLock);
                 FreeAccessStrategy(bstrategy);
@@ -160,12 +174,9 @@ run_block_task(ChecksumParallelState *state, Snapshot snapshot,
                     elog(ERROR, "could not initialize logical index scan for index %u",
                          state->reloid);
 
-                while (pg_integrity_checksums_parallel_consume(state,
-                                                      PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                      &start, &end))
-                    pg_index_logical_scan_blocks(&scanstate, start, end, algo,
-                                                 &accs->logical32,
-                                                 &accs->logical64);
+                pg_index_logical_scan_blocks(&scanstate, &src, algo,
+                                             &accs->logical32,
+                                             &accs->logical64);
 
                 pg_index_logical_scan_end(&scanstate);
                 break;
@@ -473,6 +484,7 @@ pg_integrity_checksums_parallel_scan_blocks(ChecksumTaskType task_type, Oid relo
         state->include_header = include_header;
         state->algo = algo;
         state->nitems = nblocks;
+        state->block_chunk = pg_integrity_checksums_block_chunk(nblocks);
         state->snapshot_size = snapshot_size;
         pg_atomic_init_u32(&state->next_item, 0);
 
@@ -607,6 +619,7 @@ pg_integrity_checksums_parallel_scan_database(bool physical,
         state->include_header = false;
         state->algo = algo;
         state->nitems = nitems;
+        state->block_chunk = 0;     /* claims whole relations */
         state->snapshot_size = snapshot_size;
         pg_atomic_init_u32(&state->next_item, 0);
 
@@ -754,6 +767,7 @@ pg_integrity_checksums_parallel_scan_buckets(Oid reloid, uint32 nblocks,
         state->include_header = false;
         state->algo = algo;
         state->nitems = nblocks;
+        state->block_chunk = pg_integrity_checksums_block_chunk(nblocks);
         state->snapshot_size = snapshot_size;
         state->nbuckets = nbuckets;
         state->nkeys = nkeys;

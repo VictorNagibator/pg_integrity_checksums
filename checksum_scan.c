@@ -18,12 +18,147 @@
 #include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/predicate.h"
+#if PG_VERSION_NUM >= 170000
+#include "storage/read_stream.h"
+#endif
 #include "utils/rel.h"
 
 #include "checksum_internal.h"
 
 /* Check for interrupts once per this many blocks (must be a power of two). */
 #define SCAN_INTERRUPT_INTERVAL 64
+
+/*-------------------------------------------------------------------------
+ * Block sources and readers
+ *-------------------------------------------------------------------------
+ */
+
+/*
+ * checksum_block_source_range - a source of the blocks [start, end)
+ */
+void
+checksum_block_source_range(ChecksumBlockSource *src, BlockNumber start,
+                            BlockNumber end)
+{
+    src->next = start;
+    src->end = end;
+    src->pstate = NULL;
+}
+
+/*
+ * checksum_block_source_shared - a source of the chunks of blocks this
+ * participant claims from the shared counter of a parallel scan
+ */
+void
+checksum_block_source_shared(ChecksumBlockSource *src,
+                             ChecksumParallelState *pstate)
+{
+    src->next = 0;
+    src->end = 0;
+    src->pstate = pstate;
+}
+
+/*
+ * block_source_next - the next block of a source, or InvalidBlockNumber
+ *
+ * Called from the read stream callback, so it must not block or error out;
+ * claiming a chunk is a single atomic fetch-and-add.
+ */
+static BlockNumber
+block_source_next(ChecksumBlockSource *src)
+{
+    if (src->next >= src->end)
+    {
+        uint32      start;
+        uint32      end;
+
+        if (src->pstate == NULL ||
+            !pg_integrity_checksums_parallel_consume(src->pstate,
+                                                     src->pstate->block_chunk,
+                                                     &start, &end))
+            return InvalidBlockNumber;
+
+        src->next = start;
+        src->end = end;
+    }
+
+    return src->next++;
+}
+
+#if PG_VERSION_NUM >= 170000
+static BlockNumber
+block_source_stream_cb(ReadStream *stream, void *callback_private_data,
+                       void *per_buffer_data)
+{
+    return block_source_next((ChecksumBlockSource *) callback_private_data);
+}
+#endif
+
+/*
+ * checksum_block_reader_begin - start reading the blocks of a source
+ *
+ * The caller keeps "src" and "bstrategy" alive until
+ * checksum_block_reader_end().
+ */
+void
+checksum_block_reader_begin(ChecksumBlockReader *reader, Relation rel,
+                            ChecksumBlockSource *src,
+                            BufferAccessStrategy bstrategy)
+{
+    reader->rel = rel;
+    reader->src = src;
+    reader->bstrategy = bstrategy;
+    reader->stream = NULL;
+
+#if PG_VERSION_NUM >= 170000
+    {
+        int         flags = READ_STREAM_SEQUENTIAL;
+
+#ifdef READ_STREAM_USE_BATCHING
+        /* The callback never blocks, as batch mode requires. */
+        flags |= READ_STREAM_USE_BATCHING;
+#endif
+        reader->stream = read_stream_begin_relation(flags, bstrategy, rel,
+                                                    MAIN_FORKNUM,
+                                                    block_source_stream_cb,
+                                                    src, 0);
+    }
+#endif
+}
+
+/*
+ * checksum_block_reader_next - the next block, pinned, or InvalidBuffer
+ */
+Buffer
+checksum_block_reader_next(ChecksumBlockReader *reader)
+{
+#if PG_VERSION_NUM >= 170000
+    return read_stream_next_buffer(reader->stream, NULL);
+#else
+    BlockNumber blkno = block_source_next(reader->src);
+
+    if (blkno == InvalidBlockNumber)
+        return InvalidBuffer;
+    return ReadBufferExtended(reader->rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
+                              reader->bstrategy);
+#endif
+}
+
+/*
+ * checksum_block_reader_end - release the reader
+ *
+ * Must only be called after checksum_block_reader_next() returned
+ * InvalidBuffer.  After an error the pins are released by the resource
+ * owner, like those of an aborted sequential scan.
+ */
+void
+checksum_block_reader_end(ChecksumBlockReader *reader)
+{
+#if PG_VERSION_NUM >= 170000
+    read_stream_end(reader->stream);
+    reader->stream = NULL;
+#endif
+}
 
 /*-------------------------------------------------------------------------
  * Heap scans
@@ -56,11 +191,12 @@ typedef struct VisibleTuple
 } VisibleTuple;
 
 void
-scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
+scan_visible_tuples(Relation rel, ChecksumBlockSource *src,
                     Snapshot snapshot, BufferAccessStrategy bstrategy,
                     bool needs_lock, TupleVisitor visitor, void *arg)
 {
-    BlockNumber blkno;
+    ChecksumBlockReader reader;
+    Buffer      buffer;
     VisibleTuple *visible = NULL;
 
     if (!needs_lock)
@@ -74,9 +210,11 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
      */
     PredicateLockRelation(rel, snapshot);
 
-    for (blkno = start; blkno < end; blkno++)
+    checksum_block_reader_begin(&reader, rel, src, bstrategy);
+
+    while ((buffer = checksum_block_reader_next(&reader)) != InvalidBuffer)
     {
-        Buffer      buffer;
+        BlockNumber blkno = BufferGetBlockNumber(buffer);
         Page        page;
         OffsetNumber maxoff;
         OffsetNumber offnum;
@@ -84,8 +222,6 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
         int         nvisible = 0;
         int         i;
 
-        buffer = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-                                    bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         page = BufferGetPage(buffer);
 
@@ -199,6 +335,8 @@ scan_visible_tuples(Relation rel, BlockNumber start, BlockNumber end,
             CHECK_FOR_INTERRUPTS();
     }
 
+    checksum_block_reader_end(&reader);
+
     if (visible != NULL)
         pfree(visible);
 }
@@ -235,10 +373,10 @@ physical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 }
 
 /*
- * scan_table_blocks_physical - physical checksum over a range of heap blocks
+ * scan_table_blocks_physical - physical checksum over heap blocks
  */
 void
-scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
+scan_table_blocks_physical(Relation rel, ChecksumBlockSource *src,
                            bool include_header, Snapshot snapshot,
                            ChecksumAlgo algo, ChecksumAccum *acc32,
                            ChecksumAccum64 *acc64,
@@ -247,7 +385,7 @@ scan_table_blocks_physical(Relation rel, BlockNumber start, BlockNumber end,
     PhysicalVisitorState state = {include_header, algo, acc32, acc64};
 
     /* Reads xmax and the infomask, which concurrent backends change. */
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy, true,
+    scan_visible_tuples(rel, src, snapshot, bstrategy, true,
                         physical_tuple_visitor, &state);
 }
 
@@ -276,10 +414,10 @@ logical_tuple_visitor(Relation rel, Page page, BlockNumber blkno,
 }
 
 /*
- * scan_table_blocks_logical - logical checksum over a range of heap blocks
+ * scan_table_blocks_logical - logical checksum over heap blocks
  */
 void
-scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
+scan_table_blocks_logical(Relation rel, ChecksumBlockSource *src,
                           Snapshot snapshot, ChecksumAlgo algo,
                           ChecksumLogicalAccum *acc32,
                           ChecksumLogicalAccum64 *acc64,
@@ -293,7 +431,7 @@ scan_table_blocks_logical(Relation rel, BlockNumber start, BlockNumber end,
     state.acc64 = acc64;
     logical_row_hasher_init(&state.hasher, RelationGetDescr(rel), order_desc);
 
-    scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
+    scan_visible_tuples(rel, src, snapshot, bstrategy, false,
                         logical_tuple_visitor, &state);
 
     logical_row_hasher_free(&state.hasher);
@@ -377,28 +515,29 @@ index_page_hash(const char *masked, BlockNumber blkno, bool is_brin,
 }
 
 /*
- * scan_index_blocks_physical - physical checksum over a range of index blocks
+ * scan_index_blocks_physical - physical checksum over index blocks
  *
  * Only the accumulator that matches "algo" is used.
  */
 void
-scan_index_blocks_physical(Relation idxRel, BlockNumber start,
-                           BlockNumber end, bool is_brin,
+scan_index_blocks_physical(Relation idxRel, ChecksumBlockSource *src,
+                           bool is_brin,
                            ChecksumAlgo algo, ChecksumAccum *acc32,
                            ChecksumAccum64 *acc64,
                            BufferAccessStrategy bstrategy)
 {
-    BlockNumber blkno;
+    ChecksumBlockReader reader;
+    Buffer      buffer;
     Oid         relam = idxRel->rd_rel->relam;
     PGAlignedBlock masked;
 
-    for (blkno = start; blkno < end; blkno++)
+    checksum_block_reader_begin(&reader, idxRel, src, bstrategy);
+
+    while ((buffer = checksum_block_reader_next(&reader)) != InvalidBuffer)
     {
-        Buffer      buffer;
+        BlockNumber blkno = BufferGetBlockNumber(buffer);
         uint64      page_hash;
 
-        buffer = ReadBufferExtended(idxRel, MAIN_FORKNUM, blkno,
-                                    RBM_NORMAL, bstrategy);
         LockBuffer(buffer, BUFFER_LOCK_SHARE);
         pg_integrity_checksums_mask_page(BufferGetPage(buffer), masked.data,
                                          CHECKSUM_PAGE_INDEX, relam);
@@ -414,4 +553,6 @@ scan_index_blocks_physical(Relation idxRel, BlockNumber start,
         if ((blkno & (SCAN_INTERRUPT_INTERVAL - 1)) == 0)
             CHECK_FOR_INTERRUPTS();
     }
+
+    checksum_block_reader_end(&reader);
 }

@@ -583,6 +583,7 @@ diff_scan_relation(Relation rel, TupleDesc order_desc, Snapshot snapshot,
 {
     TupleDesc   tupdesc = RelationGetDescr(rel);
     BufferAccessStrategy bstrategy;
+    ChecksumBlockSource src;
     BlockNumber nblocks;
     int         workers = 0;
 
@@ -641,7 +642,8 @@ diff_scan_relation(Relation rel, TupleDesc order_desc, Snapshot snapshot,
     diff_leaf_begin(rel, order_desc, state);
 
     bstrategy = GetAccessStrategy(BAS_BULKREAD);
-    scan_visible_tuples(rel, 0, nblocks, snapshot, bstrategy, false,
+    checksum_block_source_range(&src, 0, nblocks);
+    scan_visible_tuples(rel, &src, snapshot, bstrategy, false,
                         diff_tuple_visitor, state);
     FreeAccessStrategy(bstrategy);
 
@@ -665,8 +667,7 @@ pg_table_bucket_parallel_task(ChecksumParallelState *pstate, char **keynames,
     DiffScanState state;
     Relation    rel;
     BufferAccessStrategy bstrategy;
-    uint32      start;
-    uint32      end;
+    ChecksumBlockSource src;
     uint32      b;
 
     memset(&state, 0, sizeof(state));
@@ -685,11 +686,9 @@ pg_table_bucket_parallel_task(ChecksumParallelState *pstate, char **keynames,
     diff_leaf_begin(rel, NULL, &state);
     bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
-    while (pg_integrity_checksums_parallel_consume(pstate,
-                                                   PG_INTEGRITY_CHECKSUMS_BLOCK_CHUNK,
-                                                   &start, &end))
-        scan_visible_tuples(rel, start, end, snapshot, bstrategy, false,
-                            diff_tuple_visitor, &state);
+    checksum_block_source_shared(&src, pstate);
+    scan_visible_tuples(rel, &src, snapshot, bstrategy, false,
+                        diff_tuple_visitor, &state);
 
     FreeAccessStrategy(bstrategy);
     diff_leaf_end(&state);
@@ -934,6 +933,7 @@ pg_table_block_checksums(PG_FUNCTION_ARGS)
     Relation    rel;
     BlockRangeState state;
     BufferAccessStrategy bstrategy;
+    ChecksumBlockSource src;
     Snapshot    snapshot;
     BlockNumber nblocks;
     int32       per_range;
@@ -975,9 +975,9 @@ pg_table_block_checksums(PG_FUNCTION_ARGS)
         memset(&state.acc32, 0, sizeof(state.acc32));
         memset(&state.acc64, 0, sizeof(state.acc64));
 
-        scan_visible_tuples(rel, (BlockNumber) start,
-                            (BlockNumber) Min(end, (uint64) nblocks),
-                            snapshot, bstrategy, false,
+        checksum_block_source_range(&src, (BlockNumber) start,
+                                    (BlockNumber) Min(end, (uint64) nblocks));
+        scan_visible_tuples(rel, &src, snapshot, bstrategy, false,
                             block_range_visitor, &state);
 
         if (checksum_algo_is32(state.algo))

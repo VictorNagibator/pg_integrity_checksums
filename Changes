@@ -1,5 +1,17 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Performance: on PostgreSQL 17 and later, table, index, bucket and
+      database scans read blocks through a read stream, like a sequential
+      scan, instead of one ReadBufferExtended() call per block: reads are
+      issued ahead, combined into larger I/Os and, on PostgreSQL 18,
+      asynchronous.  A parallel scan reads all the block ranges a
+      participant claims through one stream, and large relations are handed
+      out in larger ranges (up to 8192 blocks, about 2048 ranges per
+      relation, as in a parallel sequential scan).  Checksum values do not
+      change.  PostgreSQL 12 to 16 read block by block as before.
+
 2.9.0   2026-11-17
 
     - Fix (changes values): pg_database_logical_checksum() and

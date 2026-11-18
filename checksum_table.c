@@ -308,8 +308,10 @@ pg_table_physical_checksum_common(Oid reloid, bool include_header,
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+        ChecksumBlockSource src;
 
-        scan_table_blocks_physical(rel, 0, nblocks, include_header,
+        checksum_block_source_range(&src, 0, nblocks);
+        scan_table_blocks_physical(rel, &src, include_header,
                                    snapshot, algo, &acc32, &acc64, bstrategy);
         FreeAccessStrategy(bstrategy);
     }
@@ -494,8 +496,10 @@ pg_table_logical_checksum_accum(Oid reloid, bool check_privileges,
     {
         Snapshot    snapshot = pg_integrity_checksums_get_snapshot();
         BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
+        ChecksumBlockSource src;
 
-        scan_table_blocks_logical(rel, 0, nblocks, snapshot, algo, acc32,
+        checksum_block_source_range(&src, 0, nblocks);
+        scan_table_blocks_logical(rel, &src, snapshot, algo, acc32,
                                   acc64, bstrategy, order_desc);
         FreeAccessStrategy(bstrategy);
     }

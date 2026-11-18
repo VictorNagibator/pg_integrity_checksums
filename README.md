@@ -55,15 +55,6 @@ A generic API with an explicit algorithm (FNV-1a 32/64-bit, CRC-32C or
 XXH3-64) returns raw `bytea` digests, for a wider or faster checksum.  It is described in the
 [function reference](docs/functions.md).
 
-## Errors and skipped relations
-
-Database-level checksums are **strict by default** (since 2.5): if a relation
-cannot be checksummed (an invalid index, a corrupt page, an unlogged table on a
-standby), the call fails and names the relation, instead of returning a value
-that silently leaves it out.  `SET pg_integrity_checksums.strict = off` skips
-such relations with a warning; do not use that value for monitoring.  See
-[Strict mode](docs/operations.md#strict-mode).
-
 ## Quick start
 
 ```sql
@@ -96,6 +87,32 @@ pg_integrity_checksums verify --db "$DATABASE_URL" --baseline baseline.json
 
 The CLI uses the 32-bit v1 baseline format by default.  Add
 `--hash fnv64` to `capture` when you explicitly need a 64-bit v2 baseline.
+
+## How is this different from pg_checksums, amcheck or pg_comparator?
+
+They answer different questions, and work well together:
+
+| | pg_integrity_checksums | `pg_checksums` / `data_checksums` | `amcheck` | `pg_comparator` |
+|---|---|---|---|---|
+| Answers | Do two copies hold the same data? | Is a page damaged on disk? | Are a table and its indexes structurally valid? | Which rows differ between two tables? |
+| Compares two databases | yes, live or against a saved baseline | no | no | yes, both online at once |
+| Unaffected by dump/restore, VACUUM FULL, CPU architecture | yes (logical mode) | — | — | yes |
+| Runs on a live server | yes, in one MVCC snapshot | `data_checksums` on read; the `pg_checksums` tool needs a stopped cluster | yes | yes |
+| Finds the differing rows | yes, by key buckets, no primary key needed | — | — | yes, needs a primary key, and can sync them |
+
+PostgreSQL's page checksums and `amcheck` catch corruption inside one cluster,
+but a restored backup that is missing rows, or a replica that diverged, passes
+both.  This extension catches that, and keeps the result as a value you can
+store and compare later.  See [Compared with other tools](docs/concepts.md#compared-with-other-tools).
+
+## Errors and skipped relations
+
+Database-level checksums are **strict by default** (since 2.5): if a relation
+cannot be checksummed (an invalid index, a corrupt page, an unlogged table on a
+standby), the call fails and names the relation, instead of returning a value
+that silently leaves it out.  `SET pg_integrity_checksums.strict = off` skips
+such relations with a warning; do not use that value for monitoring.  See
+[Strict mode](docs/operations.md#strict-mode).
 
 ## Documentation
 

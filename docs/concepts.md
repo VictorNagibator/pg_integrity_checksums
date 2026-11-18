@@ -231,7 +231,47 @@ See [CLI baseline formats](cli.md#baseline-formats).
   changes, not a malicious attacker who can recompute the hash.
 - Physical checksums are tied to one cluster and database.
 - Logical checksums describe content, not physical layout.
-- The extension does not replace backups, `pg_checksums` or `amcheck`.
+- The extension does not replace backups, `pg_checksums` or `amcheck`; see
+  [Compared with other tools](#compared-with-other-tools).
+
+## Compared with other tools
+
+| | pg_integrity_checksums | `pg_checksums` / `data_checksums` | `amcheck` | `pg_comparator` |
+|---|---|---|---|---|
+| Answers | Do two copies hold the same data? | Is a page damaged on disk? | Are a table and its indexes structurally valid? | Which rows differ between two tables? |
+| Compares two databases | yes, live or against a saved baseline | no | no | yes, both online at once |
+| Unaffected by dump/restore, VACUUM FULL, CPU architecture | yes (logical mode) | — | — | yes |
+| Runs on a live server | yes, in one MVCC snapshot | `data_checksums` on read; the `pg_checksums` tool needs a stopped cluster | yes | yes |
+| Finds the differing rows | yes, by key buckets, no primary key needed | — | — | yes, needs a primary key, and can sync them |
+
+**PostgreSQL data checksums** (`initdb --data-checksums`, or the `pg_checksums`
+tool on a stopped cluster) store a 16-bit checksum in every page and check it
+when the page is read.  They detect a page damaged by the storage after it was
+written.  They cannot detect a page that was never written, rows lost by a
+broken restore, or a replica that diverged: every page there is valid.
+`pg_relation_page_checksum_status` reports the same page check on a running
+server, per relation.
+
+**`amcheck`** (`bt_index_check`, `verify_heapam`, the `pg_amcheck` tool) checks
+structural invariants inside one cluster: B-tree ordering, heap tuple headers,
+index entries pointing to existing tuples.  It is the right tool for "is this
+cluster internally consistent".  Logical index checksums here are computed
+from the table rows, not from the index pages, so they do not find a corrupt
+index entry; `amcheck` does.
+
+**`pg_comparator`** connects to two databases at once and compares tables
+recursively by key, and it can synchronize them, including across DBMSs.
+pg_integrity_checksums compares PostgreSQL databases only and does not change
+data, but the two sides do not have to be online at the same time: a checksum
+or a CLI baseline taken today can be compared with a restored backup next month.
+
+**`pg_dump` and a diff** works for small databases, but the dump is as large as
+the data, row order is not guaranteed, and the output depends on
+`pg_dump` version and settings.
+
+Typical setup: `data_checksums = on` and periodic `amcheck` for corruption
+inside each cluster, and logical checksums for the question whether a replica,
+a restore or a migration has exactly the data of its source.
 
 ## Permissions and safety
 

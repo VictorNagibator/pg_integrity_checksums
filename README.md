@@ -16,6 +16,20 @@
 [![Docs](https://img.shields.io/badge/docs-online-blue)](https://victornagibator.github.io/pg_integrity_checksums/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+**Verify that a replica, a restored backup or a migrated database holds
+exactly the same data as the source, without relying on physical layout.**
+
+![The same table checksum on a database and its restored backup; after one value changes in the copy the checksum differs, and row checksums show the changed row](docs/assets/demo.gif)
+
+Logical checksums ignore how the data is stored: they stay the same after
+`pg_dump`/restore, VACUUM FULL, REINDEX, a logical replica or a move to a
+server with a different OS or CPU architecture.  When they do not match, row
+and key-bucket checksums narrow the difference down to the rows (for large
+tables compare buckets first, see
+[Finding differing rows](docs/functions.md#finding-differing-rows)), and the
+companion CLI automates all of it for CI.  The recording is reproducible, see
+[`demo/`](demo/README.md).
+
 ## Overview
 
 pg_integrity_checksums provides cell, tuple, table, index and database

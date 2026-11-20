@@ -70,6 +70,7 @@ or 64-bit.
 | Look up a function | [Function reference](functions.md) |
 | Use baselines in CI | [CLI reference](cli.md) |
 | Understand performance and correctness limits | [Operations](operations.md) |
+| Check a logical replica against its publisher | [Verifying a logical replica](logical-replica.md) |
 | Debug an error | [Troubleshooting](troubleshooting.md) |
 | Understand the internals | [Architecture](architecture.md) |
 
@@ -90,6 +91,7 @@ or 64-bit.
 - [Function reference](functions.md)
 - [CLI](cli.md)
 - [Operations](operations.md)
+- [Verifying a logical replica](logical-replica.md)
 - [Troubleshooting](troubleshooting.md)
 - [Architecture](architecture.md)
 - [Benchmarks](benchmarks.md)

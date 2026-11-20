@@ -140,3 +140,5 @@ exit-code contract is in the [CLI reference](cli.md#exit-codes).
 - [CLI](cli.md) — filters, reports, diff, update and CI integration.
 - [Operations](operations.md) — performance, permissions and production
   constraints.
+- [Verifying a logical replica](logical-replica.md) — compare a subscriber
+  with its publisher and find the rows that differ.

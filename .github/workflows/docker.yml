@@ -33,7 +33,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: [12, 13, 14, 15, 16, 17, 18]
+        pg: [12, 13, 14, 15, 16, 17, 18, 19]
 
     steps:
       - name: Checkout repository
@@ -81,16 +81,20 @@ jobs:
           tags: ${{ steps.tags.outputs.tags }}
 
   smoke:
-    name: Smoke test PostgreSQL 16 image
+    name: Smoke test PostgreSQL ${{ matrix.pg }} image
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [16, 19]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build local image
-        run: docker build --build-arg PG_MAJOR=16 -t pg-integrity-checksums:smoke .
+        run: docker build --build-arg PG_MAJOR=${{ matrix.pg }} -t pg-integrity-checksums:smoke .
 
       - name: Run image and verify extension
         run: |

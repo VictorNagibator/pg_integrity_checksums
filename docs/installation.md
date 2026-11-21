@@ -6,7 +6,7 @@
 |---|---|---|
 | **PGXN / source** | 12–19 | Always gets the latest release |
 | **PIG / APT / DNF** | 14–18 | Binary packages from the PIGSTY repository via [PGEXT.CLOUD](https://pgext.cloud/ext/pg_integrity_checksums) |
-| **Docker** | 12–18 | Prebuilt images with the extension enabled in the default database |
+| **Docker** | 12–19 | Prebuilt images with the extension enabled in the default database |
 
 The fastest way on a machine that already has PostgreSQL 14–18 and the PIGSTY
 repository configured:
@@ -33,7 +33,7 @@ Replace `16` with your PostgreSQL major version.  The package page is
 
 ## Docker
 
-Prebuilt images are published to GHCR for PostgreSQL 12–18.  The extension is
+Prebuilt images are published to GHCR for PostgreSQL 12–19.  The extension is
 created automatically in `POSTGRES_DB` on first initialization.
 
 ```bash
@@ -60,7 +60,7 @@ docker build --build-arg PG_MAJOR=17 -t pg-integrity-checksums:pg17 .
 
 Images are built by the
 [Docker workflow](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/.github/workflows/docker.yml); pull requests and releases are
-smoke-tested with PostgreSQL 16.
+smoke-tested with PostgreSQL 16 and 19.
 
 ## Prerequisites
 

@@ -145,7 +145,7 @@ files it tests change.
 | CLI | PRs, `main` | Go unit tests, `-race`, `go vet`, build, Codecov upload |
 | CLI Integration | PRs, `main` | CLI against a real server for each PostgreSQL version, plus the composite action |
 | CLI Docker | PRs, `main` | Builds and smoke-tests the CLI image |
-| Docker images | PRs (smoke test), `v*` tags | PostgreSQL 12–18 images with the extension, pushed to GHCR on a tag |
+| Docker images | PRs (smoke test), `v*` tags | PostgreSQL 12–19 images with the extension, pushed to GHCR on a tag |
 | Release | `v*` tags | Extension release: GitHub Release and PGXN upload |
 | CLI Release | `cli-v*` tags | CLI binaries, `SHA256SUMS`, Sigstore bundle and SBOM |
 | CLI Container | `cli-v*` tags | Signed multi-arch CLI image on GHCR |

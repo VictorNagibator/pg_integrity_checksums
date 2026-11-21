@@ -1,5 +1,14 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - Fix an assertion failure in pg_page_checksum_status() and
+      pg_relation_page_checksum_status() on a server built with
+      --enable-cassert when a block on disk has a corrupt header with
+      pd_upper = 0 but is not all zeroes.  The block was reported correctly
+      as a mismatch on production builds; the page checksum is now computed
+      without calling pg_checksum_page(), which asserts an initialized page.
+
 2.9.1   2026-11-18
 
     - Performance: on PostgreSQL 17 and later, table, index, bucket and

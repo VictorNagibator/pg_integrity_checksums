@@ -2,6 +2,9 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - License: the project is now distributed under the PostgreSQL
+      License instead of the MIT License.  Both are permissive; release 2.9.1
+      and earlier remain available under the MIT License.
     - Fix an assertion failure in pg_page_checksum_status() and
       pg_relation_page_checksum_status() on a server built with
       --enable-cassert when a block on disk has a corrupt header with

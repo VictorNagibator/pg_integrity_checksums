@@ -14,7 +14,7 @@
 [![Docker image](https://img.shields.io/badge/ghcr.io-pg__integrity__checksums-blue?logo=docker)](https://github.com/VictorNagibator/pg_integrity_checksums/pkgs/container/pg_integrity_checksums)
 [![PostgreSQL 12-19](https://img.shields.io/badge/PostgreSQL-12--19-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
 [![Docs](https://img.shields.io/badge/docs-online-blue)](https://victornagibator.github.io/pg_integrity_checksums/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: PostgreSQL](https://img.shields.io/badge/License-PostgreSQL-blue.svg)](LICENSE)
 
 **Verify that a replica, a restored backup or a migrated database holds
 exactly the same data as the source, without relying on physical layout.**

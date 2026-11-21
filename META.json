@@ -6,7 +6,7 @@
    "maintainer": [
       "Viktor Donskoi <vityadonskoy2004@gmail.com>"
    ],
-   "license": "mit",
+   "license": "postgresql",
    "provides": {
       "pg_integrity_checksums": {
          "abstract": "Checksum functions at page, cell, tuple, table, index and database level",

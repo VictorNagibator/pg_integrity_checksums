@@ -22,6 +22,18 @@
 
 #include "checksum_internal.h"
 
+/*
+ * checksum_impl.h holds the data checksum algorithm, so an extension can
+ * compute it without calling pg_checksum_page(), which asserts that the page
+ * is initialized (see page_checksum_compute()).  The header also defines
+ * pg_checksum_page() itself; rename that copy so it does not clash with the
+ * server's function.
+ */
+#define pg_checksum_page pg_integrity_checksums_impl_checksum_page
+extern uint16 pg_checksum_page(char *page, BlockNumber blkno);
+#include "storage/checksum_impl.h"
+#undef pg_checksum_page
+
 /*-------------------------------------------------------------------------
  * PAGE LEVEL FUNCTIONS (Physical only)
  *-------------------------------------------------------------------------
@@ -79,12 +91,38 @@ page_checksum_require_own_temp(Relation rel)
 }
 
 /*
+ * page_checksum_compute - data checksum of a page copy
+ *
+ * Same value as pg_checksum_page(), which asserts !PageIsNew() and so cannot
+ * be used on a corrupt header with pd_upper = 0 that is not an all-zero page:
+ * that page must be reported as a mismatch, not crash an assert-enabled
+ * server.  pd_checksum of the copy is zeroed during the computation and then
+ * restored.
+ */
+static uint16
+page_checksum_compute(char *page, BlockNumber blkno)
+{
+    PGChecksummablePage *cpage = (PGChecksummablePage *) page;
+    uint16      save_checksum;
+    uint32      checksum;
+
+    save_checksum = cpage->phdr.pd_checksum;
+    cpage->phdr.pd_checksum = 0;
+    checksum = pg_checksum_block(cpage);
+    cpage->phdr.pd_checksum = save_checksum;
+
+    checksum ^= blkno;
+
+    return (uint16) ((checksum % 65535) + 1);
+}
+
+/*
  * page_checksum_read_block - checksum one block of an open relation
  *
  * Returns the calculated 16-bit checksum and the checksum stored in the page
  * header.  *is_new is true for an uninitialized page; in that case both
  * checksum values are zero.  The stored value is captured before the page is
- * copied, because pg_checksum_page() zeroes pd_checksum in its input.
+ * copied, because page_checksum_compute() zeroes pd_checksum in its input.
  * pagecopy is a BLCKSZ buffer, I/O-aligned for the disk path.  The caller
  * holds a lock on the relation and has checked that the block exists.
  */
@@ -138,7 +176,7 @@ page_checksum_read_block(Relation rel, ForkNumber forknum, BlockNumber blkno,
             }
 
             *stored = ((PageHeader) pagecopy)->pd_checksum;
-            *calculated = pg_checksum_page(pagecopy, blkno);
+            *calculated = page_checksum_compute(pagecopy, blkno);
 
             if (*calculated == *stored || !DataChecksumsEnabled() ||
                 attempt >= PAGE_CHECKSUM_READ_ATTEMPTS)
@@ -165,7 +203,7 @@ page_checksum_read_block(Relation rel, ForkNumber forknum, BlockNumber blkno,
     *stored = ((PageHeader) page)->pd_checksum;
 
     /*
-     * pg_checksum_page() transiently zeroes pd_checksum.  It must not run on
+     * page_checksum_compute() transiently zeroes pd_checksum.  It must not run on
      * a page from the shared buffer pool: a concurrent caller could observe
      * the zeroed field, and an error between the two stores would leave the
      * page with a bogus checksum.  Copy the page and compute on the copy.
@@ -173,7 +211,7 @@ page_checksum_read_block(Relation rel, ForkNumber forknum, BlockNumber blkno,
     memcpy(pagecopy, page, BLCKSZ);
     UnlockReleaseBuffer(buffer);
 
-    *calculated = pg_checksum_page(pagecopy, blkno);
+    *calculated = page_checksum_compute(pagecopy, blkno);
 }
 
 /*

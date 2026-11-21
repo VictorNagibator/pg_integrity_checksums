@@ -1,5 +1,11 @@
 Revision history for pg_integrity_checksums CLI
 
+Unreleased
+
+    - License: the project is now distributed under the PostgreSQL
+      License instead of the MIT License.  Both are permissive; release 0.7.0
+      and earlier remain available under the MIT License.
+
 0.7.0   2026-11-17
 
     - Feature: the CLI warns on stderr when it connects to a remote host

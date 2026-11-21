@@ -1,5 +1,11 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
+Unreleased
+
+    - License: the project is now distributed under the PostgreSQL
+      License instead of the MIT License.  Both are permissive; release 2.9.1
+      and earlier remain available under the MIT License.
+
 2.9.1   2026-11-18
 
     - Performance: on PostgreSQL 17 and later, table, index, bucket and

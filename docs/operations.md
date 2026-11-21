@@ -300,6 +300,10 @@ SELECT
 
 ### 2. Replication Consistency Validation
 
+For a logical replica, the step-by-step procedure (prerequisites, waiting for
+the subscriber to catch up, finding the differing rows) is in
+[Verifying a logical replica](logical-replica.md).
+
 ```sql
 -- Compare source and replica logical content.
 -- Logical checksums exclude relation OIDs, heap TIDs and type OIDs, so they

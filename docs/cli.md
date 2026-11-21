@@ -443,6 +443,95 @@ tag and runs `verify`.  The job needs a reachable database with the extension
 The step fails with the CLI's [exit code](#exit-codes).  Pin the action to a
 release tag; `main` may contain unreleased changes.
 
+### Example: verify a restored backup
+
+A dump that restores without errors can still be incomplete or wrong.  This
+workflow restores a `pg_dump` archive into a fresh PostgreSQL service
+container and verifies it against a baseline captured from the source
+database when the dump was taken.  It runs every Monday and on demand, and
+keeps the JUnit report as an artifact.
+
+```yaml
+name: Verify restored backup
+
+on:
+  schedule:
+    - cron: "0 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same PostgreSQL major and extension version as the source.
+        image: ghcr.io/victornagibator/pg_integrity_checksums:pg16-v2.9.1
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app  # same name as the source database
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d app"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@v7
+
+      # Here the archive and its baseline are in the repository.  In a real
+      # setup, download the latest ones from your backup storage instead.
+      - name: Restore the backup
+        run: |
+          docker exec -i "${{ job.services.postgres.id }}" \
+            pg_restore -U postgres -d app --no-owner --no-acl --exit-on-error \
+            < backup/app.dump
+
+      - name: Verify against the baseline
+        uses: VictorNagibator/pg_integrity_checksums/cli@cli-v0.7.0
+        with:
+          baseline: backup/app.baseline.json
+          dsn: postgresql://postgres:postgres@localhost:5432/app
+          format: junit
+          output: pgics-report.xml
+
+      - name: Upload the report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: pgics-report
+          path: pgics-report.xml
+```
+
+- `pg_restore` runs inside the service container, so its version matches the
+  server.  The image has already created the extension in `POSTGRES_DB`; the
+  `CREATE EXTENSION IF NOT EXISTS` in the dump leaves it as it is.
+  `--no-owner --no-acl` skips the source's roles, which do not exist in the
+  container.
+- `verify` rejects a baseline from another PostgreSQL major (see
+  `--allow-version-mismatch`), and warns when the extension version or the
+  database name differ; pick the image tag and `POSTGRES_DB` to match the
+  source.
+- The report has one test case per table, index and sequence, and a
+  `<failure>` for each object whose data or definition changed, that is new
+  or that is missing, so any JUnit viewer shows what is wrong.  The step fails with exit code `1` in that
+  case, and the report is still uploaded.
+
+The archive and the baseline must describe the same state of the source.
+`pg_dump` and `capture` each read their own snapshot, so take both while
+nothing writes to the database, for example on a standby with replay paused:
+
+```bash
+psql -h standby -d app -c "SELECT pg_wal_replay_pause()"
+pg_dump -h standby -d app -Fc -f backup/app.dump
+pg_integrity_checksums capture --db "postgresql://standby/app" \
+  --hash fnv64 --output backup/app.baseline.json
+psql -h standby -d app -c "SELECT pg_wal_replay_resume()"
+```
+
 ## Exit codes
 
 | Code | Meaning |

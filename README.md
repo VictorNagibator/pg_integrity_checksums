@@ -146,6 +146,7 @@ such relations with a warning; do not use that value for monitoring.  See
 - [Architecture](docs/architecture.md)
 - [CLI documentation](docs/cli.md)
 - [Operations](docs/operations.md)
+- [Verifying a logical replica](docs/logical-replica.md)
 - [Benchmarks](docs/benchmarks.md)
 - [Testing and releases](docs/testing.md)
 - [Troubleshooting](docs/troubleshooting.md)

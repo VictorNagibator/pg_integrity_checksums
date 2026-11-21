@@ -7,6 +7,15 @@ Unreleased
       were needed; checksum values are unchanged.
     - Docker: publish a PostgreSQL 19 image (pg19) to GHCR, and smoke test
       the PostgreSQL 16 and 19 images on pull requests.
+    - License: the project is now distributed under the PostgreSQL
+      License instead of the MIT License.  Both are permissive; release 2.9.1
+      and earlier remain available under the MIT License.
+    - Fix an assertion failure in pg_page_checksum_status() and
+      pg_relation_page_checksum_status() on a server built with
+      --enable-cassert when a block on disk has a corrupt header with
+      pd_upper = 0 but is not all zeroes.  The block was reported correctly
+      as a mismatch on production builds; the page checksum is now computed
+      without calling pg_checksum_page(), which asserts an initialized page.
 
 2.9.1   2026-11-18
 

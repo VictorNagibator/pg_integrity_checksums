@@ -51,7 +51,7 @@ RUN apt-get update \
 LABEL org.opencontainers.image.title="pg_integrity_checksums"
 LABEL org.opencontainers.image.description="PostgreSQL with the pg_integrity_checksums extension"
 LABEL org.opencontainers.image.source="https://github.com/VictorNagibator/pg_integrity_checksums"
-LABEL org.opencontainers.image.licenses="MIT"
+LABEL org.opencontainers.image.licenses="PostgreSQL"
 
 COPY --from=build /stage/usr/lib/postgresql/${PG_MAJOR}/lib/pg_integrity_checksums.so \
                   /usr/lib/postgresql/${PG_MAJOR}/lib/

@@ -34,7 +34,9 @@ These limitations are documented rather than silently ignored.
   converts text, such as `json`) are hashed as stored, whatever the session's
   `client_encoding` is, so logical checksums do not depend on it.  They do
   depend on the server (database) encoding: the same text in databases with
-  different encodings hashes differently.
+  different encodings hashes differently.  An `xml` value is hashed without
+  an `encoding` attribute in its XML declaration, whatever the client and
+  server encodings are.
 * **Logical index checksums describe expected content, not stored pages.**
   They are derived from visible table rows and the index definition, so a
   missing or corrupt index entry is not detected by this value.  Use

@@ -2,6 +2,18 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix (changes values): in a database whose encoding is neither UTF8
+      nor SQL_ASCII, the logical checksum of an xml value depended on the
+      session's client_encoding.  xml_send() writes an XML declaration
+      naming the client encoding unless that is UTF8 or SQL_ASCII, and a
+      session whose client_encoding equalled the server encoding called it
+      directly, so it hashed '<?xml version="1.0" encoding="LATIN1"?><a/>'
+      where every other session hashed '<a/>'.  Every session now hashes
+      what xml_send() returns for client_encoding SQL_ASCII, which names no
+      encoding, as the other sessions did.  Logical checksums of tables,
+      indexes and databases with xml columns, computed in such a database by
+      a session with client_encoding equal to the server encoding, change.
+      UTF8 and SQL_ASCII databases are not affected.
     - PostgreSQL 19 is released: CI builds and tests against the REL_19_0
       tag instead of a pre-release commit on REL_19_STABLE.  No code changes
       were needed; checksum values are unchanged.

@@ -496,6 +496,13 @@ logical_value_prefix(LogicalTypeInfo *info, int attnum, ChecksumAlgo algo)
  * hashed in the server encoding, which is what the send functions return
  * while the client encoding is SQL_ASCII (pg_server_to_any() leaves the
  * string alone then).  Setting SQL_ASCII does not need any catalog access.
+ *
+ * A client encoding equal to the server encoding converts nothing either,
+ * but it is not the same: xml_send() writes an XML declaration naming the
+ * client encoding unless that is UTF8 or SQL_ASCII.  In a LATIN1 database a
+ * session with client_encoding LATIN1 hashed '<?xml version="1.0"
+ * encoding="LATIN1"?><a/>' where any other session hashed '<a/>'.  Only a
+ * UTF8 client encoding may therefore skip the switch.
  */
 static bytea *
 send_in_server_encoding(FmgrInfo *finfo, Datum value)
@@ -503,8 +510,8 @@ send_in_server_encoding(FmgrInfo *finfo, Datum value)
     int         saved_encoding = pg_get_client_encoding();
     bytea      *bytes;
 
-    if (saved_encoding == GetDatabaseEncoding() ||
-        saved_encoding == PG_SQL_ASCII)
+    if (saved_encoding == PG_SQL_ASCII ||
+        (saved_encoding == PG_UTF8 && GetDatabaseEncoding() == PG_UTF8))
         return SendFunctionCall(finfo, value);
 
     SetClientEncoding(PG_SQL_ASCII);

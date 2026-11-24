@@ -122,3 +122,48 @@ func TestIntegrationCompare(t *testing.T) {
 		t.Fatalf("--no-fail: code=%d err=%s", code, errOut)
 	}
 }
+
+// TestIntegrationCompareSearchPath compares a database with itself through
+// two sessions with different search_path settings.  format_type() spells a
+// type with its schema only when the type is not visible, so the column lists
+// used to differ ("mood" against "app.mood") and the table was reported as
+// schema_differs.
+func TestIntegrationCompareSearchPath(t *testing.T) {
+	dsn := os.Getenv("PGICS_TEST_DSN")
+	if dsn == "" {
+		t.Skip("PGICS_TEST_DSN is not set")
+	}
+	ctx := context.Background()
+	db, err := pgdb.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	schema := fmt.Sprintf("pgics_sp_%d", time.Now().UnixNano())
+	for _, q := range []string{
+		"CREATE SCHEMA " + schema,
+		"CREATE TYPE " + schema + ".mood AS ENUM ('sad', 'happy')",
+		"CREATE TABLE " + schema + ".t (id int PRIMARY KEY, m " + schema + ".mood)",
+		"INSERT INTO " + schema + ".t VALUES (1, 'sad'), (2, 'happy')",
+	} {
+		if _, err := db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	defer db.ExecContext(ctx, "DROP SCHEMA "+schema+" CASCADE")
+
+	cfg, err := pgx.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.RuntimeParams["search_path"] = schema + ", public"
+	sourceDSN := stdlib.RegisterConnConfig(cfg)
+	defer stdlib.UnregisterConnConfig(sourceDSN)
+
+	code, out, errOut := runCLI("compare", "--source", sourceDSN, "--target", dsn,
+		"--schema", schema, "--quiet")
+	if code != 0 || !strings.Contains(out, "no differences") {
+		t.Fatalf("compare: code=%d out=%s err=%s", code, out, errOut)
+	}
+}

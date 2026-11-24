@@ -123,6 +123,15 @@ func (s *CompareSide) Tables(ctx context.Context, scope baseline.Scope) ([]Compa
 	if err != nil {
 		return nil, err
 	}
+	// format_type() qualifies a type with its schema only when the type is
+	// not visible in search_path, and quotes every name when
+	// quote_all_identifiers is on.  Spell the columns with fixed settings, or
+	// two sides whose sessions have different settings (a role's
+	// search_path, say) report identical tables as schema_differs.
+	restoreSettings, err := pinSchemaHashSettings(ctx, s.tx)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]CompareTable, 0, len(candidates))
 	for _, c := range candidates {
 		if c.Kind != baseline.ObjectTable {
@@ -139,6 +148,9 @@ func (s *CompareSide) Tables(ctx context.Context, scope baseline.Scope) ([]Compa
 			return nil, fmt.Errorf("read row estimate of %s.%s: %w", c.Schema, c.Name, err)
 		}
 		out = append(out, t)
+	}
+	if err := restoreSettings(); err != nil {
+		return nil, err
 	}
 	return out, nil
 }

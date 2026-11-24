@@ -36,8 +36,8 @@ contains do not change.  Releases not listed here kept every value.
 
 | Release | Values that change | What to do |
 |---|---|---|
-| Unreleased | Logical checksums of `xml` values in databases whose encoding is neither UTF8 nor SQL_ASCII, when computed by a session whose `client_encoding` equals the server encoding | Recompute logical checksums of `xml` columns in such databases |
-| Unreleased | Physical checksums of BRIN indexes, of indexes upgraded with `pg_upgrade` from PostgreSQL 10 or older, and the database physical checksums that include them: the BRIN range map and pre-11 metapages are now hashed instead of cleared as unused space | Re-capture physical baselines |
+| 2.9.2 | Logical checksums of `xml` values in databases whose encoding is neither UTF8 nor SQL_ASCII, when computed by a session whose `client_encoding` equals the server encoding | Recompute logical checksums of `xml` columns in such databases |
+| 2.9.2 | Physical checksums of BRIN indexes, of indexes upgraded with `pg_upgrade` from PostgreSQL 10 or older, and the database physical checksums that include them: the BRIN range map and pre-11 metapages are now hashed instead of cleared as unused space | Re-capture physical baselines |
 | 2.9 | `pg_database_logical_checksum` and `pg_database_physical_checksum` with `include_system = false` (the default) in every database: `information_schema` tables are no longer included.  Table, index, sequence and per-relation checksums do not change | Recompute stored database checksums; CLI baselines are not affected (the CLI already left `information_schema` out) |
 | 2.8 | Logical checksums of tables with `reg*` columns (`regclass`, `regtype`, ..., and arrays of them); of partitioned tables whose partitions declare their columns in another order; of text values hashed with a `client_encoding` other than the server encoding; physical checksums of indexes and TOAST tables whose pages hold stale bytes between `pd_lower` and `pd_upper`.  The new per-relation, bucket, row and block range functions change no values | Recompute the affected values; re-capture affected baselines |
 | 2.7 | `pg_database_logical_checksum` (every database: relations are now identified by `schema.relname`); physical checksums of mapped catalogs (`pg_class`, `pg_type`, `pg_proc`, `pg_attribute`, shared catalogs) and of indexes with metapages or non-B-tree page layouts, and the database physical checksums that include them; table and index logical checksums do not change | Recompute stored database logical checksums; re-capture physical baselines |
@@ -51,6 +51,30 @@ contains do not change.  Releases not listed here kept every value.
 The complete history is in
 [Changes](https://github.com/VictorNagibator/pg_integrity_checksums/blob/main/Changes).
 These notes cover what to check when upgrading.
+
+### 2.9.2
+
+2.9.2 fixes two checksums that missed data, so some stored values change
+(see [Which upgrades change checksum values](#which-upgrades-change-checksum-values)):
+
+- **xml, logical.**  In a database whose encoding is neither UTF8 nor
+  SQL_ASCII, the logical checksum of an `xml` value depended on the session's
+  `client_encoding`.  Recompute logical checksums of tables, indexes and
+  databases with `xml` columns in such databases.  UTF8 and SQL_ASCII
+  databases are not affected.
+- **BRIN and old indexes, physical.**  Physical index checksums ignored the
+  BRIN range map and, on indexes upgraded with `pg_upgrade` from PostgreSQL
+  10 or older, the metapage contents.  Re-capture physical baselines that
+  include such indexes.  Logical checksums do not change.
+
+It also fixes an assertion failure in `pg_page_checksum_status()` and
+`pg_relation_page_checksum_status()` on corrupt page headers (only on
+servers built with `--enable-cassert`), and the project is now distributed
+under the PostgreSQL License.  There are no SQL changes.  Upgrade with:
+
+```sql
+ALTER EXTENSION pg_integrity_checksums UPDATE TO '2.9.2';
+```
 
 ### 2.9.1
 

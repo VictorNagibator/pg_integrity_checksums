@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums (formerly pg_checksums)
 
-Unreleased
+2.9.2   2026-11-24
 
     - Fix (changes values): in a database whose encoding is neither UTF8
       nor SQL_ASCII, the logical checksum of an xml value depended on the

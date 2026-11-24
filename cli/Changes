@@ -1,6 +1,6 @@
 Revision history for pg_integrity_checksums CLI
 
-Unreleased
+0.7.1   2026-11-24
 
     - Fix: compare reported a table as schema_differs when the two sessions
       had different search_path settings (for example a role's default):

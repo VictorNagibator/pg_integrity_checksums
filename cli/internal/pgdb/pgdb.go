@@ -697,7 +697,7 @@ func matchesTable(patterns []string, schema, table string) bool {
 
 // candidateKey mirrors baseline.Object.Key for a discovered relation.
 func candidateKey(c Candidate) string {
-	return c.Kind + ":" + c.Schema + "." + c.Name
+	return baseline.ObjectKey(c.Kind, c.Schema, c.Name)
 }
 
 // readTableStats reads the cumulative tuple counters and relfilenode of every
@@ -817,7 +817,7 @@ func reusableObject(c Candidate, current baseline.Object, prior map[string]basel
 			return baseline.Object{}, false
 		}
 	case baseline.ObjectIndex:
-		tableKey := "table:" + c.TableSchema + "." + c.TableName
+		tableKey := baseline.ObjectKey(baseline.ObjectTable, c.TableSchema, c.TableName)
 		pt, ok := prior[tableKey]
 		if !ok || pt.SchemaHash == "" || pt.SchemaHash != hashes[tableKey] {
 			return baseline.Object{}, false

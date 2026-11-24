@@ -44,6 +44,12 @@ func (k keyMap) Set(value string) error {
 	return nil
 }
 
+// tableName identifies a table of a compare.
+type tableName struct {
+	schema string
+	name   string
+}
+
 // compareTable is the result for one table.
 type compareTable struct {
 	Schema           string              `json:"schema"`
@@ -194,15 +200,17 @@ func runCompare(ctx context.Context, args []string, stdout, stderr io.Writer) in
 			source.ExtensionVersion, target.ExtensionVersion)
 	}
 
-	targetByName := make(map[string]pgdb.CompareTable, len(targetTables))
+	// Tables are matched by (schema, name): joined with a dot, "a.b"."c" and
+	// "a"."b.c" would be taken for the same table.
+	targetByName := make(map[tableName]pgdb.CompareTable, len(targetTables))
 	for _, t := range targetTables {
-		targetByName[t.Schema+"."+t.Name] = t
+		targetByName[tableName{t.Schema, t.Name}] = t
 	}
-	sourceNames := make(map[string]bool, len(sourceTables))
+	sourceNames := make(map[tableName]bool, len(sourceTables))
 	for _, s := range sourceTables {
 		name := s.Schema + "." + s.Name
-		sourceNames[name] = true
-		t, ok := targetByName[name]
+		sourceNames[tableName{s.Schema, s.Name}] = true
+		t, ok := targetByName[tableName{s.Schema, s.Name}]
 		if !ok {
 			report.Tables = append(report.Tables, compareTable{Schema: s.Schema, Name: s.Name, Status: compareOnlyInSource})
 			continue
@@ -214,7 +222,7 @@ func runCompare(ctx context.Context, args []string, stdout, stderr io.Writer) in
 		report.Tables = append(report.Tables, compareOne(ctx, source, target, s, t, key, explicit, *buckets, *maxRows, stderr, *quiet))
 	}
 	for _, t := range targetTables {
-		if !sourceNames[t.Schema+"."+t.Name] {
+		if !sourceNames[tableName{t.Schema, t.Name}] {
 			report.Tables = append(report.Tables, compareTable{Schema: t.Schema, Name: t.Name, Status: compareOnlyInTarget})
 		}
 	}

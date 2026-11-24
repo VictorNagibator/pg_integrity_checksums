@@ -8,7 +8,12 @@ Unreleased
       type with its schema only when it is not visible, so "mood" and
       "app.mood" did not match.  The columns are now read with search_path
       pinned to pg_catalog, as schema hashes already were.
-
+    - Fix: objects were told apart by "kind:schema.name", so table "a.b"."c"
+      and table "a"."b.c" were the same object.  capture wrote a baseline
+      holding both that verify, diff, show and update then rejected as
+      invalid ("duplicate object"), and compare matched each of the two
+      tables with the other one.  Objects are now matched by kind, schema
+      and name separately.  The baseline format does not change.
     - License: the project is now distributed under the PostgreSQL
       License instead of the MIT License.  Both are permissive; release 0.7.0
       and earlier remain available under the MIT License.

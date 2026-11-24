@@ -406,3 +406,37 @@ func TestHashMinExtension(t *testing.T) {
 		}
 	}
 }
+
+// Names joined with a dot are ambiguous: table "a.b"."c" and table "a"."b.c"
+// must stay two objects, in a baseline and in a comparison.
+func TestDottedNamesAreDistinct(t *testing.T) {
+	objects := []Object{
+		{Kind: ObjectTable, Schema: "a.b", Name: "c", Status: StatusOK, Checksum: "1"},
+		{Kind: ObjectTable, Schema: "a", Name: "b.c", Status: StatusOK, Checksum: "2"},
+	}
+	if objects[0].Key() == objects[1].Key() {
+		t.Fatalf("keys collide: %q", objects[0].Key())
+	}
+	b := New("0.1.0", KindLogical, "2.1.0", 160009, "app", testScope(), objects)
+	if err := b.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+
+	changed := []Object{objects[0], objects[1]}
+	changed[1].Checksum = "3"
+	changes, summary := Compare(objects, changed)
+	if len(changes) != 2 || summary.OK != 1 || summary.Changed != 1 {
+		t.Fatalf("compare: %+v %+v", summary, changes)
+	}
+}
+
+func TestValidateRejectsDuplicateObject(t *testing.T) {
+	b := New("0.1.0", KindLogical, "2.1.0", 160009, "app", testScope(), []Object{
+		{Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "1"},
+		{Kind: ObjectTable, Schema: "public", Name: "t", Status: StatusOK, Checksum: "2"},
+	})
+	err := b.Validate()
+	if err == nil || !strings.Contains(err.Error(), `duplicate table "public"."t"`) {
+		t.Fatalf("got %v", err)
+	}
+}

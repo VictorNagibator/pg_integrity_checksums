@@ -189,10 +189,19 @@ func normalizeScope(s Scope) Scope {
 	return s
 }
 
-// Key is the stable map key used by Compare. Kind is included because a table
-// and an index can legally have the same schema-qualified name.
+// ObjectKey is the stable map key of an object. Kind is included because a
+// table and an index can legally have the same schema-qualified name. The
+// parts are separated by NUL, which PostgreSQL identifiers cannot contain:
+// joined with dots, table "a.b"."c" and table "a"."b.c" got the same key, so
+// one of them was lost from a comparison and a baseline holding both was
+// rejected as having a duplicate object.
+func ObjectKey(kind, schema, name string) string {
+	return kind + "\x00" + schema + "\x00" + name
+}
+
+// Key is the stable map key used by Compare; see ObjectKey.
 func (o Object) Key() string {
-	return o.Kind + ":" + o.Schema + "." + o.Name
+	return ObjectKey(o.Kind, o.Schema, o.Name)
 }
 
 // Identity is the human-readable name used in reports.
@@ -353,7 +362,7 @@ func (b *Baseline) Validate() error {
 			}
 		}
 		if seen[o.Key()] {
-			return fmt.Errorf("duplicate object %s", o.Key())
+			return fmt.Errorf("duplicate %s %q.%q", o.Kind, o.Schema, o.Name)
 		}
 		seen[o.Key()] = true
 	}

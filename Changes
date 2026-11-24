@@ -2,6 +2,18 @@ Revision history for pg_integrity_checksums (formerly pg_checksums)
 
 Unreleased
 
+    - Fix (changes values): physical index checksums cleared the space
+      between pd_lower and pd_upper of every index page before hashing it,
+      as unused space.  A BRIN range map page keeps its array of TIDs there,
+      and so does every metapage (B-tree, hash, GIN, SP-GiST, BRIN) and hash
+      bitmap page written before PostgreSQL 11, which did not set pd_lower
+      (pg_upgrade keeps them), and every GIN posting tree page written before
+      9.4: any change to that data, including its corruption, left the
+      physical checksum unchanged.  That space is now hashed on those pages.
+      Physical checksums of BRIN indexes change, as do those of indexes
+      upgraded from PostgreSQL 10 or older and the database physical
+      checksums that include them; re-capture physical baselines.  Logical
+      checksums do not change.
     - PostgreSQL 19 is released: CI builds and tests against the REL_19_0
       tag instead of a pre-release commit on REL_19_STABLE.  No code changes
       were needed; checksum values are unchanged.

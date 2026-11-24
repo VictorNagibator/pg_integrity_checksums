@@ -468,7 +468,7 @@ jobs:
     services:
       postgres:
         # Same PostgreSQL major and extension version as the source.
-        image: ghcr.io/victornagibator/pg_integrity_checksums:pg16-v2.9.1
+        image: ghcr.io/victornagibator/pg_integrity_checksums:pg16-v2.9.2
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: app  # same name as the source database

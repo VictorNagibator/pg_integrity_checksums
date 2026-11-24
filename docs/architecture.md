@@ -113,7 +113,12 @@ to the stored data:
   `pd_checksum`, `pd_prune_xid` and the `pd_flags` hint bits are cleared, as
   are the hints index scans set under a share lock (`LP_DEAD` line pointers,
   the B-tree `BTP_HAS_GARBAGE`, hash `LH_PAGE_HAS_DEAD_TUPLES` and GiST
-  `F_HAS_GARBAGE` flags) and the infomask hint bits of TOAST tuples.
+  `F_HAS_GARBAGE` flags) and the infomask hint bits of TOAST tuples.  The
+  unused space between `pd_lower` and `pd_upper` is cleared too: compaction
+  leaves stale bytes there and crash recovery zeroes them.  Pages that keep
+  their data in that space are hashed as they are: BRIN range map pages, and
+  metapages (and hash bitmap and GIN posting tree pages) written by old
+  releases that did not set `pd_lower`.
 
 The in-buffer `pd_checksum` matters even when nothing is modified:
 PostgreSQL sets the checksum on the copy of the page it writes out, so the

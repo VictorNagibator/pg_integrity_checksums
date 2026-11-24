@@ -6,11 +6,14 @@
  *-------------------------------------------------------------------------
  */
 #include "postgres.h"
+#include "access/brin_page.h"
+#include "access/ginblock.h"
 #include "access/gist.h"
 #include "access/hash.h"
 #include "access/heapam.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/spgist_private.h"
 #include "catalog/pg_am.h"
 #include "access/tableam.h"
 #include "catalog/index.h"
@@ -357,6 +360,66 @@ mask_index_hints(Page page, Oid relam)
 }
 
 /*
+ * index_hole_has_content - does an index page keep its data between pd_lower
+ * and pd_upper?
+ *
+ * Most index pages are arrays of line pointers and tuples, and the space
+ * between pd_lower and pd_upper is unused.  A few pages store their content
+ * right after the page header without advancing pd_lower, so that space is
+ * their data and must be hashed, not cleared:
+ *
+ * - BRIN range map ("revmap") pages, always: their array of TIDs is the map
+ *   from heap ranges to summary tuples.  Clearing it hid any change to the
+ *   map, including its corruption, from the physical checksum;
+ * - metapages (B-tree, hash, GIN, SP-GiST, BRIN) and hash bitmap pages that
+ *   were written before PostgreSQL 11, and GIN posting tree pages written
+ *   before 9.4, which did not set pd_lower; a cluster upgraded with
+ *   pg_upgrade still has them.  Pages that set pd_lower have a header-sized
+ *   pd_lower only when they are empty.
+ *
+ * PostgreSQL's own page masking for WAL consistency checks makes a similar
+ * distinction (brin_mask(), gin_mask(), spg_mask()).
+ */
+static bool
+index_hole_has_content(Page page, Oid relam)
+{
+    Size        special_size = PageGetSpecialSize(page);
+    bool        lower_unset = ((PageHeader) page)->pd_lower <= SizeOfPageHeaderData;
+
+    switch (relam)
+    {
+        case BRIN_AM_OID:
+            if (special_size != MAXALIGN(sizeof(BrinSpecialSpace)))
+                return false;
+            return BRIN_IS_REVMAP_PAGE(page) ||
+                (BRIN_IS_META_PAGE(page) && lower_unset);
+        case BTREE_AM_OID:
+            if (special_size != MAXALIGN(sizeof(BTPageOpaqueData)))
+                return false;
+            return lower_unset &&
+                (((BTPageOpaque) PageGetSpecialPointer(page))->btpo_flags & BTP_META) != 0;
+        case HASH_AM_OID:
+            if (special_size != MAXALIGN(sizeof(HashPageOpaqueData)))
+                return false;
+            return lower_unset &&
+                (((HashPageOpaque) PageGetSpecialPointer(page))->hasho_flag &
+                 (LH_META_PAGE | LH_BITMAP_PAGE)) != 0;
+        case GIN_AM_OID:
+            if (special_size != MAXALIGN(sizeof(GinPageOpaqueData)))
+                return false;
+            return lower_unset &&
+                (GinPageIsData(page) ||
+                 (GinPageGetOpaque(page)->flags & GIN_META) != 0);
+        case SPGIST_AM_OID:
+            if (special_size != MAXALIGN(sizeof(SpGistPageOpaqueData)))
+                return false;
+            return lower_unset && SpGistPageIsMeta(page);
+        default:
+            return false;
+    }
+}
+
+/*
  * pg_integrity_checksums_mask_page - copy a page without its unstable state
  *
  * A page in shared buffers carries state that changes although nothing about
@@ -375,7 +438,8 @@ mask_index_hints(Page page, Oid relam)
  * - the unused space between pd_lower and pd_upper is not guaranteed to be
  *   zero: page compaction (e.g. B-tree deletion, heap pruning) leaves stale
  *   bytes there, while replaying a full-page image after crash recovery
- *   (which removes the "hole") zeroes it.
+ *   (which removes the "hole") zeroes it.  Index pages that keep their data
+ *   in that space are the exception; see index_hole_has_content().
  *
  * Copy BLCKSZ bytes of "page" into "dst" and clear that state in the copy.
  * Bits outside PD_VALID_FLAG_BITS are kept, so a corrupt header still changes
@@ -403,14 +467,17 @@ pg_integrity_checksums_mask_page(Page page, char *dst, ChecksumPageKind kind,
     if (!pg_integrity_checksums_page_header_sane(page))
         return;
 
-    /* The hole between pd_lower and pd_upper has no defined content. */
-    memset(dst + phdr->pd_lower, 0, phdr->pd_upper - phdr->pd_lower);
-
     if (kind == CHECKSUM_PAGE_INDEX)
     {
+        /* Unused space has no defined content; see the header comment. */
+        if (!index_hole_has_content((Page) dst, relam))
+            memset(dst + phdr->pd_lower, 0, phdr->pd_upper - phdr->pd_lower);
         mask_index_hints((Page) dst, relam);
         return;
     }
+
+    /* The hole between pd_lower and pd_upper has no defined content. */
+    memset(dst + phdr->pd_lower, 0, phdr->pd_upper - phdr->pd_lower);
 
     maxoff = PageGetMaxOffsetNumber((Page) dst);
 
